@@ -2,27 +2,53 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0b0e11">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <link rel="manifest" href="/manifest.json">
   <title>K线训练与盲盒回放工具 (TradingView Lightweight Charts)</title>
   <!-- 引入 TradingView 开源 lightweight-charts -->
   <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
   <style>
+    html,
+    body {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      overscroll-behavior: none;
+      -webkit-user-select: none;
+      user-select: none;
+    }
+    * {
+      -webkit-user-select: none;
+      user-select: none;
+    }
     body {
       background-color: #0b0e11;
       color: #cccccc;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
       margin: 0;
-      padding: 20px;
+      padding: clamp(8px, 2vw, 16px);
+      box-sizing: border-box;
     }
     .container {
-      width: 1100px;
+      width: min(1100px, 100%);
+      max-width: 100%;
+      min-width: 0;
       margin: 0 auto;
-    }
-    .toolbar {
-      margin-bottom: 15px;
+      height: calc(100dvh - clamp(16px, 4vw, 32px));
       display: flex;
-      gap: 10px;
-      align-items: center;
-      flex-wrap: wrap;
+      flex-direction: column;
+    }
+    .workspace {
+      min-height: 0;
+      min-width: 0;
+      flex: 1;
+      display: grid;
+      grid-template-rows: 14.2857% minmax(0, 85.7143%);
+      gap: 0;
     }
     input {
       background: #1e2329;
@@ -31,6 +57,8 @@
       padding: 6px 10px;
       border-radius: 4px;
       font-size: 14px;
+      max-width: 100%;
+      box-sizing: border-box;
     }
     select {
       background: #1e2329;
@@ -39,6 +67,8 @@
       padding: 6px 10px;
       border-radius: 4px;
       font-size: 14px;
+      max-width: 100%;
+      box-sizing: border-box;
     }
     button {
       background: #1e2329;
@@ -56,6 +86,22 @@
       color: #666;
       cursor: not-allowed;
     }
+    #buyButton {
+      background: #d9363e;
+      color: #fff;
+      border-color: #d9363e;
+    }
+    #buyButton:hover:not(:disabled) {
+      background: #b52b33;
+    }
+    #nextCaseButton {
+      background: #1f9d55;
+      color: #fff;
+      border-color: #1f9d55;
+    }
+    #nextCaseButton:hover:not(:disabled) {
+      background: #187a43;
+    }
     .info-board {
       margin-left: auto;
       font-size: 14px;
@@ -67,85 +113,169 @@
       font-size: 13px;
       margin-bottom: 8px;
       font-family: monospace;
+      overflow-x: hidden;
+      white-space: nowrap;
+      padding-bottom: 2px;
+    }
+    .chart-area {
+      min-height: 0;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+    }
+    .chart-area .legend {
+      flex: 0 0 auto;
     }
     .test-panel {
+      min-height: 0;
+      min-width: 0;
       display: grid;
-      grid-template-columns: auto auto auto auto auto 1fr;
+      grid-template-columns: minmax(180px, 1.5fr) repeat(4, minmax(70px, 1fr)) minmax(180px, 2fr) auto;
       gap: 10px;
       align-items: center;
-      flex-wrap: wrap;
-      margin-bottom: 12px;
       padding: 10px;
       border: 1px solid #2b2f36;
       background: #111419;
+      overflow: hidden;
     }
     .test-actions {
-      grid-column: 1 / -1;
       display: flex;
       gap: 10px;
       align-items: center;
-      flex-wrap: wrap;
-      min-height: 34px;
+      min-width: 0;
     }
     .test-status { color: #f0b90b; font-family: monospace; }
     .result-board { color: #aeb8c5; font-family: monospace; }
-    .favorite-group { width: 110px; }
     .ma5-color { color: #ffb000; }
     .ma10-color { color: #00a0e9; }
     .ma20-color { color: #e4007f; }
     #chartContainer {
-      width: 1100px;
-      height: 580px;
+      width: 100%;
+      max-width: 100%;
+      flex: 1 1 auto;
+      min-height: 0;
       border: 1px solid #2b2f36;
       position: relative;
+      box-sizing: border-box;
+      overflow: hidden;
+      touch-action: none;
+    }
+    @media (max-width: 700px) {
+      .test-panel {
+        grid-template-columns: minmax(150px, 2fr) repeat(3, minmax(55px, 1fr));
+        gap: 8px;
+        padding: 6px;
+      }
+      .workspace {
+        gap: 0;
+      }
+      .test-panel > label {
+        grid-column: 1;
+        min-width: 0;
+      }
+      .test-panel > span {
+        display: none;
+      }
+      .test-panel select {
+        width: 100%;
+        min-height: 38px;
+      }
+      .test-actions {
+        grid-column: 2 / -1;
+        justify-content: stretch;
+      }
+      .test-actions button {
+        flex: 1;
+        min-height: 38px;
+      }
+      .test-status {
+        grid-column: 1 / -1;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+    }
+    @media (max-width: 900px) and (orientation: landscape) {
+      body {
+        padding: 8px;
+      }
+      .test-panel {
+        display: grid;
+        grid-template-columns: minmax(145px, 2.2fr) repeat(4, minmax(42px, .8fr)) minmax(175px, 2.5fr);
+        gap: 6px;
+        padding: 6px;
+        font-size: 12px;
+      }
+      .test-panel > label {
+        grid-column: 1;
+      }
+      .test-panel > span {
+        display: block;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .test-panel > #stockNameVal,
+      .test-panel > #testStatus {
+        display: none;
+      }
+      .test-panel select {
+        min-height: 32px;
+        max-width: 100%;
+        font-size: 12px;
+      }
+      .test-actions {
+        grid-column: 6;
+        grid-row: 1;
+        gap: 6px;
+        width: 100%;
+      }
+      .test-actions button {
+        flex: 1 1 0;
+        min-width: 0;
+        min-height: 32px;
+        padding: 4px 6px;
+        font-size: 12px;
+        white-space: nowrap;
+      }
     }
   </style>
 </head>
 <body>
 
 <div class="container">
-  <h2>K 线复盘工具 (TradingView 引擎)</h2>
-  
-  <div class="toolbar">
-    <label>代码: <input type="text" id="stockCode" value="600198" style="width:70px;"></label>
-    <label>回放起始日期: <input type="date" id="cutoffDate" value="2026-08-16"></label>
-    <label>默认显示根数: <input type="number" id="visibleBarCount" value="240" style="width:60px;"></label>
-    <button onclick="loadStockData()">加载数据</button>
-    <button onclick="resetReplay()">重置步数</button>
-    <button onclick="nextStep()">下一根 K 线 (空格键)</button>
-    <div class="info-board">回放进度: <span id="countText">0</span> / <span id="totalText">0</span> 根</div>
-  </div>
+  <div class="workspace">
+    <div class="test-panel">
+      <label>
+        <select id="testCaseFile" onchange="loadTestCaseFile()">
+          <option value="">请选择 XLSX</option>
+        </select>
+      </label>
+      <span id="stockNameVal" style="color:#f0b90b;">股票名称: --</span>
+      <span class="result-board">成功: <span id="successCount">0</span></span>
+      <span class="result-board">失败: <span id="failureCount">0</span></span>
+      <span class="result-board">已测试: <span id="testedCount">0</span></span>
+      <span class="result-board">总数: <span id="totalCount">0</span></span>
+      <span id="testStatus" class="test-status">请先选择 xlsx</span>
+      <div class="test-actions">
+        <button onclick="nextStep()">快进</button>
+        <button id="buyButton" onclick="buyAtCurrentCandle()" disabled>买入</button>
+        <button id="nextCaseButton" onclick="nextTestCase()" disabled>空仓</button>
+      </div>
+    </div>
 
-  <div class="test-panel">
-    <label>测试表格:
-      <select id="testCaseFile" onchange="loadTestCaseFile()">
-        <option value="">请选择 test-cases 文件夹中的 xlsx</option>
-      </select>
-    </label>
-    <span id="stockNameVal" style="color:#f0b90b;">股票名称: --</span>
-    <span class="result-board">测试用例: <span id="caseProgress">0 / 0</span></span>
-    <span class="result-board">成功: <span id="successCount">0</span></span>
-    <span class="result-board">失败: <span id="failureCount">0</span></span>
-    <span class="result-board">成功率: <span id="successRate">--</span></span>
-    <span id="testStatus" class="test-status">请把 xlsx 放入 test-cases 文件夹</span>
-    <div class="test-actions">
-      <button id="buyButton" onclick="buyAtCurrentCandle()" disabled>买入</button>
-      <button id="nextCaseButton" onclick="nextTestCase()" disabled>下一个</button>
-      <input id="favoriteGroup" class="favorite-group" type="text" placeholder="收藏分组">
-      <button id="favoriteButton" onclick="saveCurrentFavorite()" disabled>收藏</button>
+    <div class="chart-area">
+      <div class="legend">
+        <span id="dateVal" style="color: #fff;">日期: --</span>
+        <span id="amountVal" style="color: #b0b8c4;">成交金额: --</span>
+        <span class="ma5-color" id="ma5Val">MA5: --</span>
+        <span class="ma10-color" id="ma10Val">MA10: --</span>
+        <span class="ma20-color" id="ma20Val">MA20: --</span>
+      </div>
+      <div id="chartContainer"></div>
     </div>
   </div>
-
-  <div class="legend">
-    <span id="dateVal" style="color: #fff;">日期: --</span>
-    <span id="amountVal" style="color: #b0b8c4;">成交金额: --</span>
-    <span class="ma5-color" id="ma5Val">MA5: --</span>
-    <span class="ma10-color" id="ma10Val">MA10: --</span>
-    <span class="ma20-color" id="ma20Val">MA20: --</span>
-  </div>
-
-  <!-- 图表容器 -->
-  <div id="chartContainer"></div>
 </div>
 
 <script>
@@ -186,15 +316,13 @@
   function setTestButtons(enabled) {
     document.getElementById('buyButton').disabled = !enabled;
     document.getElementById('nextCaseButton').disabled = !activeCase || (!enabled && !caseResolved);
-    document.getElementById('favoriteButton').disabled = !activeCase;
   }
 
   function updateTestProgress() {
-    document.getElementById('caseProgress').innerText = `${casePosition} / ${shuffledCases.length}`;
     document.getElementById('successCount').innerText = successCount;
     document.getElementById('failureCount').innerText = failureCount;
-    const finished = successCount + failureCount;
-    document.getElementById('successRate').innerText = finished ? `${(successCount / finished * 100).toFixed(2)}%` : '--';
+    document.getElementById('testedCount').innerText = successCount + failureCount;
+    document.getElementById('totalCount').innerText = shuffledCases.length;
   }
 
   function clearTradeDrawing() {
@@ -246,8 +374,8 @@
     const container = document.getElementById('chartContainer');
     
     chart = LightweightCharts.createChart(container, {
-      width: 1100,
-      height: 580,
+      width: container.clientWidth,
+      height: container.clientHeight,
       layout: {
         background: { type: 'solid', color: '#111419' },
         textColor: '#818998',
@@ -266,7 +394,25 @@
         borderColor: '#2b2f36',
         timeVisible: false,
       },
+      handleScroll: {
+        mouseWheel: true,
+        pressedMouseMove: true,
+        horzTouchDrag: true,
+        vertTouchDrag: false,
+      },
+      handleScale: {
+        mouseWheel: true,
+        pinch: true,
+        axisPressedMouseMove: true,
+        axisDoubleClickReset: false,
+      },
     });
+
+    const resizeChart = () => chart.resize(container.clientWidth, container.clientHeight);
+    window.addEventListener('resize', resizeChart);
+    if (window.ResizeObserver) {
+      new ResizeObserver(resizeChart).observe(container);
+    }
 
     // 1. K 线主图层
     candlestickSeries = chart.addSeries(LightweightCharts.CandlestickSeries, {
@@ -326,35 +472,10 @@
     });
   }
 
-  // 从后端请求数据
-  function loadStockData() {
-    const code = document.getElementById('stockCode').value;
-    const cutoffDate = document.getElementById('cutoffDate').value;
-
-    fetch(`/api/kline?code=${code}&cutoffDate=${cutoffDate}`)
-      .then(res => res.json())
-      .then(res => {
-        if (res.status_code === 0 && res.data.length > 0) {
-          fullData = res.data;
-          document.getElementById('totalText').innerText = fullData.length;
-
-          // 选择日期作为回放起点；周末或节假日则取之后的第一个交易日
-          const startDate = cutoffDate || fullData[0].date;
-          const startIndex = fullData.findIndex(item => item.date >= startDate);
-          currentIndex = startIndex >= 0 ? startIndex + 1 : fullData.length;
-          updateChartData();
-        } else {
-          alert("暂无数据，请检查代码或市场类型");
-        }
-      });
-  }
-
   // 核心更新逻辑：将数据写入各个 Series
   function updateChartData() {
     const displayData = fullData.slice(0, currentIndex);
-    const visibleCount = parseInt(document.getElementById('visibleBarCount').value) || 60;
-
-    document.getElementById('countText').innerText = displayData.length;
+    const visibleCount = 100;
 
     if (displayData.length === 0) return;
 
@@ -434,22 +555,31 @@
   }
 
   function loadTestCaseFiles() {
-    fetch('/api/test-cases')
-      .then(res => res.json())
+    const select = document.getElementById('testCaseFile');
+    const status = document.getElementById('testStatus');
+    fetch(`/api/test-cases?ts=${Date.now()}`, { cache: 'no-store' })
+      .then(response => {
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        return response.json();
+      })
       .then(res => {
-        const select = document.getElementById('testCaseFile');
+        if (res.status_code !== 0 || !Array.isArray(res.files)) {
+          throw new Error(res.msg || '测试表格接口返回格式错误');
+        }
+        select.options.length = 1;
         res.files.forEach(file => {
           const option = document.createElement('option');
-          option.value = file;
-          option.innerText = file;
+          const fileName = String(file).trim();
+          option.value = fileName;
+          option.textContent = fileName;
           select.appendChild(option);
         });
         if (!res.files.length) {
-          document.getElementById('testStatus').innerText = '请把符合格式的 xlsx 放入 test-cases 文件夹';
+          status.innerText = '请把符合格式的 xlsx 放入 test-cases 文件夹';
         }
       })
-      .catch(() => {
-        document.getElementById('testStatus').innerText = '无法读取 test-cases 文件夹';
+      .catch(error => {
+        status.innerText = `无法读取测试表格: ${error.message}`;
       });
   }
 
@@ -479,6 +609,7 @@
     clearTradeDrawing();
     activeTrade = null;
     caseResolved = false;
+    document.getElementById('nextCaseButton').innerText = '空仓';
     if (casePosition >= shuffledCases.length) {
       setTestButtons(false);
       document.getElementById('stockNameVal').innerText = '股票名称: --';
@@ -491,8 +622,6 @@
     document.getElementById('stockNameVal').innerText = '股票名称: --';
     document.getElementById('stockNameVal').style.visibility = 'hidden';
     document.getElementById('testStatus').innerText = `正在回放 ${activeCase.marketCode} ${activeCase.date}`;
-    document.getElementById('stockCode').value = activeCase.code;
-    document.getElementById('cutoffDate').value = activeCase.date;
     setTestButtons(false);
 
     fetch(`/api/kline?code=${activeCase.code}&cutoffDate=${activeCase.date}`)
@@ -525,6 +654,7 @@
     caseResolved = true;
     document.getElementById('buyButton').disabled = true;
     document.getElementById('nextCaseButton').disabled = false;
+    document.getElementById('nextCaseButton').innerText = '继续';
     updateTestProgress();
   }
 
@@ -560,10 +690,14 @@
   function nextTestCase() {
     if (!activeCase) return;
     if (!caseResolved) {
+      const buyIndex = currentIndex - 1;
+      const entryIndex = buyIndex + 1;
+      currentIndex = Math.min(entryIndex + 8, fullData.length);
+      updateChartData();
       caseResolved = true;
-      document.getElementById('testStatus').innerText = '已跳过本用例，再次点击“下一个”进入下一题';
       document.getElementById('buyButton').disabled = true;
-      updateTestProgress();
+      document.getElementById('nextCaseButton').innerText = '继续';
+      document.getElementById('testStatus').innerText = '空仓：已展示后续 K 线，再次点击进入下一题';
       return;
     }
     clearTradeDrawing();
@@ -571,22 +705,6 @@
     casePosition++;
     updateTestProgress();
     startNextCase();
-  }
-
-  function saveCurrentFavorite() {
-    if (!activeCase) return;
-    const group = document.getElementById('favoriteGroup').value.trim() || '默认';
-    fetch('/api/favorites', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ group, item: activeCase }),
-    })
-      .then(res => res.json())
-      .then(res => {
-        document.getElementById('testStatus').innerText = res.status_code === 0
-          ? `已收藏到 ${group}`
-          : (res.msg || '收藏失败');
-      });
   }
 
   // 快捷键推进
@@ -597,6 +715,14 @@
     }
   });
 
+  function requestLandscape() {
+    if (screen.orientation && screen.orientation.lock) {
+      screen.orientation.lock('landscape').catch(() => {});
+    }
+  }
+
+  window.addEventListener('pointerdown', requestLandscape, { once: true });
+
   function nextStep() {
     if (currentIndex < fullData.length) {
       currentIndex++;
@@ -604,17 +730,10 @@
     }
   }
 
-  function resetReplay() {
-    const startDate = document.getElementById('cutoffDate').value;
-    const startIndex = fullData.findIndex(item => item.date >= startDate);
-    currentIndex = startIndex >= 0 ? startIndex + 1 : fullData.length;
-    updateChartData();
-  }
-
   window.onload = () => {
     initChart();
     loadTestCaseFiles();
-    loadStockData();
+    requestLandscape();
   };
 </script>
 
