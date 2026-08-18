@@ -102,6 +102,14 @@
     #nextCaseButton:hover:not(:disabled) {
       background: #187a43;
     }
+    #nextStepButton {
+      background: #1677ff;
+      color: #fff;
+      border-color: #1677ff;
+    }
+    #nextStepButton:hover:not(:disabled) {
+      background: #0d5dcc;
+    }
     .info-board {
       margin-left: auto;
       font-size: 14px;
@@ -130,7 +138,7 @@
       min-height: 0;
       min-width: 0;
       display: grid;
-      grid-template-columns: minmax(180px, 1.5fr) repeat(4, minmax(70px, 1fr)) minmax(180px, 2fr) auto;
+      grid-template-columns: minmax(120px, 1fr) minmax(180px, 1.5fr) minmax(150px, 1fr) minmax(150px, 1fr) minmax(180px, 2fr) auto;
       gap: 10px;
       align-items: center;
       padding: 10px;
@@ -144,11 +152,24 @@
       align-items: center;
       min-width: 0;
     }
+    .favorite-controls {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+      min-width: 0;
+    }
+    .favorite-controls input,
+    .favorite-controls select {
+      flex: 1 1 0;
+      min-width: 0;
+      width: 100%;
+    }
+    .favorite-controls button {
+      flex: 0 0 auto;
+      white-space: nowrap;
+    }
     .test-status { color: #f0b90b; font-family: monospace; }
     .result-board { color: #aeb8c5; font-family: monospace; }
-    .ma5-color { color: #ffb000; }
-    .ma10-color { color: #00a0e9; }
-    .ma20-color { color: #e4007f; }
     #chartContainer {
       width: 100%;
       max-width: 100%;
@@ -162,15 +183,19 @@
     }
     @media (max-width: 700px) {
       .test-panel {
-        grid-template-columns: minmax(150px, 2fr) repeat(3, minmax(55px, 1fr));
+        grid-template-columns: minmax(120px, 1fr) minmax(150px, 1.5fr);
         gap: 8px;
         padding: 6px;
       }
       .workspace {
         gap: 0;
       }
-      .test-panel > label {
+      .test-panel > label:first-child {
         grid-column: 1;
+        min-width: 0;
+      }
+      .test-panel > label:nth-child(2) {
+        grid-column: 2;
         min-width: 0;
       }
       .test-panel > span {
@@ -179,6 +204,9 @@
       .test-panel select {
         width: 100%;
         min-height: 38px;
+      }
+      .favorite-controls {
+        grid-column: 1 / -1;
       }
       .test-actions {
         grid-column: 2 / -1;
@@ -201,13 +229,16 @@
       }
       .test-panel {
         display: grid;
-        grid-template-columns: minmax(145px, 2.2fr) repeat(4, minmax(42px, .8fr)) minmax(175px, 2.5fr);
+        grid-template-columns: minmax(110px, 1fr) minmax(150px, 1.5fr) minmax(170px, 1.5fr) minmax(175px, 2fr);
         gap: 6px;
         padding: 6px;
         font-size: 12px;
       }
-      .test-panel > label {
+      .test-panel > label:first-child {
         grid-column: 1;
+      }
+      .test-panel > label:nth-child(2) {
+        grid-column: 2;
       }
       .test-panel > span {
         display: block;
@@ -226,7 +257,7 @@
         font-size: 12px;
       }
       .test-actions {
-        grid-column: 6;
+        grid-column: 4;
         grid-row: 1;
         gap: 6px;
         width: 100%;
@@ -239,6 +270,10 @@
         font-size: 12px;
         white-space: nowrap;
       }
+      .favorite-controls {
+        grid-column: 3;
+        grid-row: 1;
+      }
     }
   </style>
 </head>
@@ -248,30 +283,38 @@
   <div class="workspace">
     <div class="test-panel">
       <label>
+        <select id="dataSource" onchange="switchDataSource()">
+          <option value="testcases">测试用例 JSON</option>
+          <option value="favorites">收藏 JSON</option>
+        </select>
+      </label>
+      <label>
         <select id="testCaseFile" onchange="loadTestCaseFile()">
-          <option value="">请选择 XLSX</option>
+          <option value="">请选择测试用例</option>
         </select>
       </label>
       <span id="stockNameVal" style="color:#f0b90b;">股票名称: --</span>
-      <span class="result-board">成功: <span id="successCount">0</span></span>
-      <span class="result-board">失败: <span id="failureCount">0</span></span>
-      <span class="result-board">已测试: <span id="testedCount">0</span></span>
-      <span class="result-board">总数: <span id="totalCount">0</span></span>
-      <span id="testStatus" class="test-status">请先选择 xlsx</span>
+      <span id="testStatus" class="test-status">请选择测试用例 JSON 或收藏分组</span>
+      <div class="favorite-controls">
+        <select id="favoriteGroup" aria-label="收藏分组"></select>
+        <input id="newFavoriteGroup" type="text" placeholder="新建分组">
+        <button onclick="saveCurrentFavorite()">收藏</button>
+      </div>
       <div class="test-actions">
-        <button onclick="nextStep()">快进</button>
         <button id="buyButton" onclick="buyAtCurrentCandle()" disabled>买入</button>
+        <button id="nextStepButton" onclick="nextStep()">快进</button>
         <button id="nextCaseButton" onclick="nextTestCase()" disabled>空仓</button>
       </div>
     </div>
 
     <div class="chart-area">
       <div class="legend">
+        <span id="codeVal" style="color: #f0b90b;">股票代码: --</span>
         <span id="dateVal" style="color: #fff;">日期: --</span>
         <span id="amountVal" style="color: #b0b8c4;">成交金额: --</span>
-        <span class="ma5-color" id="ma5Val">MA5: --</span>
-        <span class="ma10-color" id="ma10Val">MA10: --</span>
-        <span class="ma20-color" id="ma20Val">MA20: --</span>
+        <span class="result-board">成功: <span id="successCount">0</span></span>
+        <span class="result-board">失败: <span id="failureCount">0</span></span>
+        <span class="result-board">总数: <span id="totalCount">0</span></span>
       </div>
       <div id="chartContainer"></div>
     </div>
@@ -282,13 +325,14 @@
   let fullData = [];
   let currentIndex = 0; // 当前推演到的索引位置
   
-  let chart, candlestickSeries, volumeSeries, ma5Series, ma10Series, ma20Series;
+  let chart, candlestickSeries, volumeSeries;
   let priceLine = null;
   let candleMarkers = [];
   let markerController = null;
   let testCases = [];
   let shuffledCases = [];
   let casePosition = 0;
+  let favoriteGroups = {};
   let activeCase = null;
   let activeTrade = null;
   let caseResolved = false;
@@ -321,7 +365,6 @@
   function updateTestProgress() {
     document.getElementById('successCount').innerText = successCount;
     document.getElementById('failureCount').innerText = failureCount;
-    document.getElementById('testedCount').innerText = successCount + failureCount;
     document.getElementById('totalCount').innerText = shuffledCases.length;
   }
 
@@ -431,12 +474,7 @@
       },
     });
 
-    // 2. 均线图层
-    ma5Series = chart.addSeries(LightweightCharts.LineSeries, { color: '#ffb000', lineWidth: 1, priceLineVisible: false , lastValueVisible: false});
-    ma10Series = chart.addSeries(LightweightCharts.LineSeries, { color: '#00a0e9', lineWidth: 1, priceLineVisible: false , lastValueVisible: false});
-    ma20Series = chart.addSeries(LightweightCharts.LineSeries, { color: '#e4007f', lineWidth: 1, priceLineVisible: false , lastValueVisible: false});
-
-    // 3. 成交量图层 (给它单独指定 priceScaleId: 'volume')
+    // 2. 成交量图层 (给它单独指定 priceScaleId: 'volume')
     volumeSeries = chart.addSeries(LightweightCharts.HistogramSeries, {
       priceFormat: { type: 'volume' },
       priceScaleId: 'volume', // 指定独立 Y 轴
@@ -457,15 +495,10 @@
     chart.subscribeCrosshairMove(param => {
       if (!param.time || !param.seriesData) return;
       const candle = param.seriesData.get(candlestickSeries);
-      const ma5 = param.seriesData.get(ma5Series);
-      const ma10 = param.seriesData.get(ma10Series);
-      const ma20 = param.seriesData.get(ma20Series);
 
       if (candle) {
+        document.getElementById('codeVal').innerText = `股票代码: ${activeCase?.marketCode || activeCase?.code || '--'}`;
         document.getElementById('dateVal').innerText = `日期: ${param.time}`;
-        document.getElementById('ma5Val').innerText = `MA5: ${ma5?.value ?? '--'}`;
-        document.getElementById('ma10Val').innerText = `MA10: ${ma10?.value ?? '--'}`;
-        document.getElementById('ma20Val').innerText = `MA20: ${ma20?.value ?? '--'}`;
         const hoveredData = fullData.find(item => item.date === param.time);
         document.getElementById('amountVal').innerText = formatAmount(hoveredData?.amount);
       }
@@ -482,9 +515,6 @@
     // 格式化 TradingView 所需数据结构（确保 date 格式为字符串 "YYYY-MM-DD"）
     const candles = [];
     const volumes = [];
-    const ma5Data = [];
-    const ma10Data = [];
-    const ma20Data = [];
 
     displayData.forEach(d => {
       // 提取纯 YYYY-MM-DD 日期
@@ -515,23 +545,11 @@
         color: `${candleColor}80`
       });
 
-      if (d.ma5 !== null && d.ma5 !== undefined) {
-        ma5Data.push({ time: timeStr, value: Number(d.ma5) });
-      }
-      if (d.ma10 !== null && d.ma10 !== undefined) {
-        ma10Data.push({ time: timeStr, value: Number(d.ma10) });
-      }
-      if (d.ma20 !== null && d.ma20 !== undefined) {
-        ma20Data.push({ time: timeStr, value: Number(d.ma20) });
-      }
     });
 
     // 写入数据到序列
     candlestickSeries.setData(candles);
     volumeSeries.setData(volumes);
-    ma5Series.setData(ma5Data);
-    ma10Series.setData(ma10Data);
-    ma20Series.setData(ma20Data);
     if (activeTrade) drawTradeMarker();
 
     // 【修正缩放】：使用 setVisibleRange 代替 Range index
@@ -546,16 +564,54 @@
     // 更新 Legend
     const last = displayData[displayData.length - 1];
     if (last) {
+      document.getElementById('codeVal').innerText = `股票代码: ${activeCase?.marketCode || activeCase?.code || '--'}`;
       document.getElementById('dateVal').innerText = `日期: ${last.date}`;
       document.getElementById('amountVal').innerText = formatAmount(last.amount);
-      document.getElementById('ma5Val').innerText = `MA5: ${last.ma5 ?? '--'}`;
-      document.getElementById('ma10Val').innerText = `MA10: ${last.ma10 ?? '--'}`;
-      document.getElementById('ma20Val').innerText = `MA20: ${last.ma20 ?? '--'}`;
+    }
+  }
+
+  function updateFavoriteGroups() {
+    const select = document.getElementById('favoriteGroup');
+    const current = select.value;
+    select.options.length = 0;
+    Object.keys(favoriteGroups).forEach(group => {
+      const option = document.createElement('option');
+      option.value = group;
+      option.textContent = group;
+      select.appendChild(option);
+    });
+    if (current && favoriteGroups[current]) select.value = current;
+    if (!select.options.length) {
+      const option = document.createElement('option');
+      option.value = '默认';
+      option.textContent = '默认';
+      select.appendChild(option);
+    }
+  }
+
+  function updateDataSourceOptions(files) {
+    const select = document.getElementById('testCaseFile');
+    const source = document.getElementById('dataSource').value;
+    select.options.length = 1;
+    select.options[0].textContent = source === 'favorites' ? '请选择收藏分组' : '请选择测试用例 JSON';
+    files.forEach(file => {
+      const option = document.createElement('option');
+      option.value = file;
+      option.textContent = file;
+      select.appendChild(option);
+    });
+  }
+
+  function switchDataSource() {
+    const source = document.getElementById('dataSource').value;
+    if (source === 'favorites') {
+      updateDataSourceOptions(Object.keys(favoriteGroups));
+    } else {
+      loadTestCaseFiles();
     }
   }
 
   function loadTestCaseFiles() {
-    const select = document.getElementById('testCaseFile');
     const status = document.getElementById('testStatus');
     fetch(`/api/test-cases?ts=${Date.now()}`, { cache: 'no-store' })
       .then(response => {
@@ -564,30 +620,27 @@
       })
       .then(res => {
         if (res.status_code !== 0 || !Array.isArray(res.files)) {
-          throw new Error(res.msg || '测试表格接口返回格式错误');
+          throw new Error(res.msg || '测试用例接口返回格式错误');
         }
-        select.options.length = 1;
-        res.files.forEach(file => {
-          const option = document.createElement('option');
-          const fileName = String(file).trim();
-          option.value = fileName;
-          option.textContent = fileName;
-          select.appendChild(option);
-        });
-        if (!res.files.length) {
-          status.innerText = '请把符合格式的 xlsx 放入 test-cases 文件夹';
-        }
+        updateDataSourceOptions(res.files);
+        if (!res.files.length) status.innerText = 'test-cases 文件夹中没有 JSON 测试用例';
       })
       .catch(error => {
-        status.innerText = `无法读取测试表格: ${error.message}`;
+        status.innerText = `无法读取测试用例: ${error.message}`;
       });
   }
 
   function loadTestCaseFile() {
     const fileName = document.getElementById('testCaseFile').value;
     if (!fileName) return;
-    fetch(`/api/test-cases/${encodeURIComponent(fileName)}`)
-      .then(res => res.json())
+    const source = document.getElementById('dataSource').value;
+    const request = source === 'favorites'
+      ? fetch('/api/favorites').then(res => res.json()).then(res => ({
+        status_code: res.status_code,
+        data: res.data?.groups?.[fileName] || [],
+      }))
+      : fetch(`/api/test-cases/${encodeURIComponent(fileName)}`).then(res => res.json());
+    request
       .then(res => {
         if (res.status_code !== 0 || !res.data.length) {
           alert(res.msg || 'xlsx 中没有有效测试用例');
@@ -602,7 +655,31 @@
         updateTestProgress();
         startNextCase();
       })
-      .catch(() => alert('读取 xlsx 失败'));
+      .catch(() => alert('读取测试用例失败'));
+  }
+
+  function saveCurrentFavorite() {
+    if (!activeCase) {
+      alert('请先加载一个测试用例');
+      return;
+    }
+    const inputGroup = document.getElementById('newFavoriteGroup').value.trim();
+    const group = inputGroup || document.getElementById('favoriteGroup').value || '默认';
+    fetch('/api/favorites', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ group, item: activeCase }),
+    })
+      .then(res => res.json())
+      .then(res => {
+        if (res.status_code !== 0) throw new Error(res.msg || '收藏失败');
+        favoriteGroups = res.data.groups || {};
+        updateFavoriteGroups();
+        document.getElementById('favoriteGroup').value = group;
+        document.getElementById('newFavoriteGroup').value = '';
+        document.getElementById('testStatus').innerText = `已收藏到「${group}」`;
+      })
+      .catch(error => alert(error.message));
   }
 
   function startNextCase() {
@@ -613,6 +690,7 @@
     if (casePosition >= shuffledCases.length) {
       setTestButtons(false);
       document.getElementById('stockNameVal').innerText = '股票名称: --';
+      document.getElementById('codeVal').innerText = '股票代码: --';
       document.getElementById('testStatus').innerText = `回测结束，成功率 ${(successCount / (successCount + failureCount || 1) * 100).toFixed(2)}%`;
       alert(`回测结束\n成功：${successCount}\n失败：${failureCount}\n成功率：${(successCount / (successCount + failureCount || 1) * 100).toFixed(2)}%`);
       return;
@@ -733,6 +811,13 @@
   window.onload = () => {
     initChart();
     loadTestCaseFiles();
+    fetch('/api/favorites')
+      .then(res => res.json())
+      .then(res => {
+        favoriteGroups = res.data?.groups || {};
+        updateFavoriteGroups();
+      })
+      .catch(() => updateFavoriteGroups());
     requestLandscape();
   };
 </script>

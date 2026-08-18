@@ -24,12 +24,12 @@ function readFavorites() {
 
 function safeTestCasePath(fileName) {
   const safeName = path.basename(fileName || '');
-  if (!safeName.toLowerCase().endsWith('.xlsx')) return null;
+  if (!/\.(xlsx|json)$/i.test(safeName)) return null;
   const filePath = path.join(TEST_CASE_DIR, safeName);
   return filePath.startsWith(TEST_CASE_DIR) ? filePath : null;
 }
 
-function parseTestCases(fileName) {
+function parseXlsxTestCases(fileName) {
   const filePath = safeTestCasePath(fileName);
   if (!filePath || !fs.existsSync(filePath)) throw new Error('测试表格不存在');
 
@@ -54,9 +54,35 @@ function parseTestCases(fileName) {
   }).filter(Boolean);
 }
 
-app.get('/api/test-cases', (req, res) => {
-  const files = fs.readdirSync(TEST_CASE_DIR, { withFileTypes: true })
+function syncJsonTestCases() {
+  const xlsxFiles = fs.readdirSync(TEST_CASE_DIR, { withFileTypes: true })
     .filter(entry => entry.isFile() && entry.name.toLowerCase().endsWith('.xlsx'))
+    .map(entry => entry.name);
+
+  xlsxFiles.forEach(xlsxFile => {
+    const jsonFile = `${path.basename(xlsxFile, path.extname(xlsxFile))}.json`;
+    const xlsxPath = path.join(TEST_CASE_DIR, xlsxFile);
+    const jsonPath = path.join(TEST_CASE_DIR, jsonFile);
+    if (!fs.existsSync(jsonPath) || fs.statSync(xlsxPath).mtimeMs > fs.statSync(jsonPath).mtimeMs) {
+      fs.writeFileSync(jsonPath, JSON.stringify(parseXlsxTestCases(xlsxFile), null, 2), 'utf8');
+    }
+  });
+}
+
+function parseTestCases(fileName) {
+  const filePath = safeTestCasePath(fileName);
+  if (!filePath || !fs.existsSync(filePath)) throw new Error('测试用例文件不存在');
+  if (fileName.toLowerCase().endsWith('.xlsx')) return parseXlsxTestCases(fileName);
+
+  const data = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+  if (!Array.isArray(data)) throw new Error('JSON 测试用例格式错误');
+  return data;
+}
+
+app.get('/api/test-cases', (req, res) => {
+  syncJsonTestCases();
+  const files = fs.readdirSync(TEST_CASE_DIR, { withFileTypes: true })
+    .filter(entry => entry.isFile() && entry.name.toLowerCase().endsWith('.json'))
     .map(entry => entry.name);
   res.json({ status_code: 0, files });
 });
