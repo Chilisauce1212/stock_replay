@@ -1,0 +1,622 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>K线训练与盲盒回放工具 (TradingView Lightweight Charts)</title>
+  <!-- 引入 TradingView 开源 lightweight-charts -->
+  <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
+  <style>
+    body {
+      background-color: #0b0e11;
+      color: #cccccc;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      margin: 0;
+      padding: 20px;
+    }
+    .container {
+      width: 1100px;
+      margin: 0 auto;
+    }
+    .toolbar {
+      margin-bottom: 15px;
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    input {
+      background: #1e2329;
+      color: #fff;
+      border: 1px solid #474d57;
+      padding: 6px 10px;
+      border-radius: 4px;
+      font-size: 14px;
+    }
+    select {
+      background: #1e2329;
+      color: #fff;
+      border: 1px solid #474d57;
+      padding: 6px 10px;
+      border-radius: 4px;
+      font-size: 14px;
+    }
+    button {
+      background: #1e2329;
+      color: #f0b90b;
+      border: 1px solid #474d57;
+      padding: 6px 14px;
+      cursor: pointer;
+      border-radius: 4px;
+      font-weight: bold;
+    }
+    button:hover {
+      background: #2b313a;
+    }
+    button:disabled {
+      color: #666;
+      cursor: not-allowed;
+    }
+    .info-board {
+      margin-left: auto;
+      font-size: 14px;
+      font-family: monospace;
+    }
+    .legend {
+      display: flex;
+      gap: 15px;
+      font-size: 13px;
+      margin-bottom: 8px;
+      font-family: monospace;
+    }
+    .test-panel {
+      display: grid;
+      grid-template-columns: auto auto auto auto auto 1fr;
+      gap: 10px;
+      align-items: center;
+      flex-wrap: wrap;
+      margin-bottom: 12px;
+      padding: 10px;
+      border: 1px solid #2b2f36;
+      background: #111419;
+    }
+    .test-actions {
+      grid-column: 1 / -1;
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      flex-wrap: wrap;
+      min-height: 34px;
+    }
+    .test-status { color: #f0b90b; font-family: monospace; }
+    .result-board { color: #aeb8c5; font-family: monospace; }
+    .favorite-group { width: 110px; }
+    .ma5-color { color: #ffb000; }
+    .ma10-color { color: #00a0e9; }
+    .ma20-color { color: #e4007f; }
+    #chartContainer {
+      width: 1100px;
+      height: 580px;
+      border: 1px solid #2b2f36;
+      position: relative;
+    }
+  </style>
+</head>
+<body>
+
+<div class="container">
+  <h2>K 线复盘工具 (TradingView 引擎)</h2>
+  
+  <div class="toolbar">
+    <label>代码: <input type="text" id="stockCode" value="600198" style="width:70px;"></label>
+    <label>回放起始日期: <input type="date" id="cutoffDate" value="2026-08-16"></label>
+    <label>默认显示根数: <input type="number" id="visibleBarCount" value="240" style="width:60px;"></label>
+    <button onclick="loadStockData()">加载数据</button>
+    <button onclick="resetReplay()">重置步数</button>
+    <button onclick="nextStep()">下一根 K 线 (空格键)</button>
+    <div class="info-board">回放进度: <span id="countText">0</span> / <span id="totalText">0</span> 根</div>
+  </div>
+
+  <div class="test-panel">
+    <label>测试表格:
+      <select id="testCaseFile" onchange="loadTestCaseFile()">
+        <option value="">请选择 test-cases 文件夹中的 xlsx</option>
+      </select>
+    </label>
+    <span id="stockNameVal" style="color:#f0b90b;">股票名称: --</span>
+    <span class="result-board">测试用例: <span id="caseProgress">0 / 0</span></span>
+    <span class="result-board">成功: <span id="successCount">0</span></span>
+    <span class="result-board">失败: <span id="failureCount">0</span></span>
+    <span class="result-board">成功率: <span id="successRate">--</span></span>
+    <span id="testStatus" class="test-status">请把 xlsx 放入 test-cases 文件夹</span>
+    <div class="test-actions">
+      <button id="buyButton" onclick="buyAtCurrentCandle()" disabled>买入</button>
+      <button id="nextCaseButton" onclick="nextTestCase()" disabled>下一个</button>
+      <input id="favoriteGroup" class="favorite-group" type="text" placeholder="收藏分组">
+      <button id="favoriteButton" onclick="saveCurrentFavorite()" disabled>收藏</button>
+    </div>
+  </div>
+
+  <div class="legend">
+    <span id="dateVal" style="color: #fff;">日期: --</span>
+    <span id="amountVal" style="color: #b0b8c4;">成交金额: --</span>
+    <span class="ma5-color" id="ma5Val">MA5: --</span>
+    <span class="ma10-color" id="ma10Val">MA10: --</span>
+    <span class="ma20-color" id="ma20Val">MA20: --</span>
+  </div>
+
+  <!-- 图表容器 -->
+  <div id="chartContainer"></div>
+</div>
+
+<script>
+  let fullData = [];
+  let currentIndex = 0; // 当前推演到的索引位置
+  
+  let chart, candlestickSeries, volumeSeries, ma5Series, ma10Series, ma20Series;
+  let priceLine = null;
+  let candleMarkers = [];
+  let markerController = null;
+  let testCases = [];
+  let shuffledCases = [];
+  let casePosition = 0;
+  let activeCase = null;
+  let activeTrade = null;
+  let caseResolved = false;
+  let successCount = 0;
+  let failureCount = 0;
+
+  function formatAmount(amount) {
+    const value = Number(amount);
+    if (!Number.isFinite(value)) return '成交金额: --';
+    if (Math.abs(value) < 1e8) {
+      return `成交金额: ${(value / 1e7).toFixed(2)}千万`;
+    }
+    return `成交金额: ${(value / 1e8).toFixed(2)}亿`;
+  }
+
+  function shuffle(items) {
+    const result = [...items];
+    for (let i = result.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [result[i], result[j]] = [result[j], result[i]];
+    }
+    return result;
+  }
+
+  function setTestButtons(enabled) {
+    document.getElementById('buyButton').disabled = !enabled;
+    document.getElementById('nextCaseButton').disabled = !activeCase || (!enabled && !caseResolved);
+    document.getElementById('favoriteButton').disabled = !activeCase;
+  }
+
+  function updateTestProgress() {
+    document.getElementById('caseProgress').innerText = `${casePosition} / ${shuffledCases.length}`;
+    document.getElementById('successCount').innerText = successCount;
+    document.getElementById('failureCount').innerText = failureCount;
+    const finished = successCount + failureCount;
+    document.getElementById('successRate').innerText = finished ? `${(successCount / finished * 100).toFixed(2)}%` : '--';
+  }
+
+  function clearTradeDrawing() {
+    if (priceLine && candlestickSeries) {
+      candlestickSeries.removePriceLine(priceLine);
+    }
+    priceLine = null;
+    candleMarkers = [];
+    if (candlestickSeries) setCandleMarkers(candleMarkers);
+  }
+
+  function setCandleMarkers(markers) {
+    if (typeof candlestickSeries.setMarkers === 'function') {
+      candlestickSeries.setMarkers(markers);
+      return;
+    }
+    if (!markerController && LightweightCharts.createSeriesMarkers) {
+      markerController = LightweightCharts.createSeriesMarkers(candlestickSeries, markers);
+    } else if (markerController) {
+      markerController.setMarkers(markers);
+    }
+  }
+
+  function drawTradeMarker() {
+    if (!activeTrade) return;
+    if (priceLine && candlestickSeries) {
+      candlestickSeries.removePriceLine(priceLine);
+      priceLine = null;
+    }
+    candleMarkers = [{
+      time: activeTrade.buyDate,
+      position: 'belowBar',
+      color: '#f0b90b',
+      shape: 'arrowUp',
+      text: 'B',
+    }];
+    setCandleMarkers(candleMarkers);
+    priceLine = candlestickSeries.createPriceLine({
+      price: activeTrade.buyPrice,
+      color: '#f0b90b',
+      lineWidth: 2,
+      lineStyle: 2,
+      axisLabelVisible: true,
+      title: '买入',
+    });
+  }
+
+  function initChart() {
+    const container = document.getElementById('chartContainer');
+    
+    chart = LightweightCharts.createChart(container, {
+      width: 1100,
+      height: 580,
+      layout: {
+        background: { type: 'solid', color: '#111419' },
+        textColor: '#818998',
+      },
+      grid: {
+        vertLines: { color: '#1e232a' },
+        horzLines: { color: '#1e232a' },
+      },
+      crosshair: {
+        mode: LightweightCharts.CrosshairMode.Normal,
+      },
+      rightPriceScale: {
+        borderColor: '#2b2f36',
+      },
+      timeScale: {
+        borderColor: '#2b2f36',
+        timeVisible: false,
+      },
+    });
+
+    // 1. K 线主图层
+    candlestickSeries = chart.addSeries(LightweightCharts.CandlestickSeries, {
+      upColor: '#ff3333',
+      downColor: '#00b050',
+      borderVisible: false,
+      wickUpColor: '#ff3333',
+      wickDownColor: '#00b050',
+    });
+
+    // 【关键配置 1】：设置 K 线主 Y 轴 (right)，底部留出 30% 的空间给成交量
+    chart.priceScale('right').applyOptions({
+      scaleMargins: {
+        top: 0.05,   // 顶部留白 5%
+        bottom: 0.3, // 底部留白 30%（K线不会落入底部30%的成交量区域）
+      },
+    });
+
+    // 2. 均线图层
+    ma5Series = chart.addSeries(LightweightCharts.LineSeries, { color: '#ffb000', lineWidth: 1, priceLineVisible: false , lastValueVisible: false});
+    ma10Series = chart.addSeries(LightweightCharts.LineSeries, { color: '#00a0e9', lineWidth: 1, priceLineVisible: false , lastValueVisible: false});
+    ma20Series = chart.addSeries(LightweightCharts.LineSeries, { color: '#e4007f', lineWidth: 1, priceLineVisible: false , lastValueVisible: false});
+
+    // 3. 成交量图层 (给它单独指定 priceScaleId: 'volume')
+    volumeSeries = chart.addSeries(LightweightCharts.HistogramSeries, {
+      priceFormat: { type: 'volume' },
+      priceScaleId: 'volume', // 指定独立 Y 轴
+      priceLineVisible: false , 
+      lastValueVisible: false
+    });
+
+    // 【关键配置 2】：设置成交量专属 Y 轴的高度比例与隐藏数字
+    chart.priceScale('volume').applyOptions({
+      scaleMargins: {
+        top: 0.8,   // 顶部留白 80% -> 即成交量最高只占底部 20% 高度
+        bottom: 0,
+      },
+      visible: true, // 隐藏成交量 Y 轴右侧的数字，避免和 K 线价格重叠
+    });
+
+    // 十字光标移动监听
+    chart.subscribeCrosshairMove(param => {
+      if (!param.time || !param.seriesData) return;
+      const candle = param.seriesData.get(candlestickSeries);
+      const ma5 = param.seriesData.get(ma5Series);
+      const ma10 = param.seriesData.get(ma10Series);
+      const ma20 = param.seriesData.get(ma20Series);
+
+      if (candle) {
+        document.getElementById('dateVal').innerText = `日期: ${param.time}`;
+        document.getElementById('ma5Val').innerText = `MA5: ${ma5?.value ?? '--'}`;
+        document.getElementById('ma10Val').innerText = `MA10: ${ma10?.value ?? '--'}`;
+        document.getElementById('ma20Val').innerText = `MA20: ${ma20?.value ?? '--'}`;
+        const hoveredData = fullData.find(item => item.date === param.time);
+        document.getElementById('amountVal').innerText = formatAmount(hoveredData?.amount);
+      }
+    });
+  }
+
+  // 从后端请求数据
+  function loadStockData() {
+    const code = document.getElementById('stockCode').value;
+    const cutoffDate = document.getElementById('cutoffDate').value;
+
+    fetch(`/api/kline?code=${code}&cutoffDate=${cutoffDate}`)
+      .then(res => res.json())
+      .then(res => {
+        if (res.status_code === 0 && res.data.length > 0) {
+          fullData = res.data;
+          document.getElementById('totalText').innerText = fullData.length;
+
+          // 选择日期作为回放起点；周末或节假日则取之后的第一个交易日
+          const startDate = cutoffDate || fullData[0].date;
+          const startIndex = fullData.findIndex(item => item.date >= startDate);
+          currentIndex = startIndex >= 0 ? startIndex + 1 : fullData.length;
+          updateChartData();
+        } else {
+          alert("暂无数据，请检查代码或市场类型");
+        }
+      });
+  }
+
+  // 核心更新逻辑：将数据写入各个 Series
+  function updateChartData() {
+    const displayData = fullData.slice(0, currentIndex);
+    const visibleCount = parseInt(document.getElementById('visibleBarCount').value) || 60;
+
+    document.getElementById('countText').innerText = displayData.length;
+
+    if (displayData.length === 0) return;
+
+    // 格式化 TradingView 所需数据结构（确保 date 格式为字符串 "YYYY-MM-DD"）
+    const candles = [];
+    const volumes = [];
+    const ma5Data = [];
+    const ma10Data = [];
+    const ma20Data = [];
+
+    displayData.forEach(d => {
+      // 提取纯 YYYY-MM-DD 日期
+      const timeStr = typeof d.date === 'string' ? d.date.split('T')[0] : d.date;
+      const candleColor = {
+        'limit-up': '#f0b90b',
+        'touch-limit-up-up': '#ff69b4',
+        'touch-limit-up-down': '#c2185b',
+        'limit-down': '#8e44ad',
+        up: '#ff3333',
+        down: '#00b050',
+      }[d.limitStatus] || (Number(d.close) >= Number(d.open) ? '#ff3333' : '#00b050');
+
+      candles.push({
+        time: timeStr,
+        open: Number(d.open),
+        high: Number(d.high),
+        low: Number(d.low),
+        close: Number(d.close),
+        color: candleColor,
+        borderColor: candleColor,
+        wickColor: candleColor
+      });
+
+      volumes.push({
+        time: timeStr,
+        value: Number(d.volume),
+        color: `${candleColor}80`
+      });
+
+      if (d.ma5 !== null && d.ma5 !== undefined) {
+        ma5Data.push({ time: timeStr, value: Number(d.ma5) });
+      }
+      if (d.ma10 !== null && d.ma10 !== undefined) {
+        ma10Data.push({ time: timeStr, value: Number(d.ma10) });
+      }
+      if (d.ma20 !== null && d.ma20 !== undefined) {
+        ma20Data.push({ time: timeStr, value: Number(d.ma20) });
+      }
+    });
+
+    // 写入数据到序列
+    candlestickSeries.setData(candles);
+    volumeSeries.setData(volumes);
+    ma5Series.setData(ma5Data);
+    ma10Series.setData(ma10Data);
+    ma20Series.setData(ma20Data);
+    if (activeTrade) drawTradeMarker();
+
+    // 【修正缩放】：使用 setVisibleRange 代替 Range index
+    if (candles.length > 0) {
+      const startIndex = Math.max(0, candles.length - visibleCount);
+      chart.timeScale().setVisibleRange({
+        from: candles[startIndex].time,
+        to: candles[candles.length - 1].time,
+      });
+    }
+
+    // 更新 Legend
+    const last = displayData[displayData.length - 1];
+    if (last) {
+      document.getElementById('dateVal').innerText = `日期: ${last.date}`;
+      document.getElementById('amountVal').innerText = formatAmount(last.amount);
+      document.getElementById('ma5Val').innerText = `MA5: ${last.ma5 ?? '--'}`;
+      document.getElementById('ma10Val').innerText = `MA10: ${last.ma10 ?? '--'}`;
+      document.getElementById('ma20Val').innerText = `MA20: ${last.ma20 ?? '--'}`;
+    }
+  }
+
+  function loadTestCaseFiles() {
+    fetch('/api/test-cases')
+      .then(res => res.json())
+      .then(res => {
+        const select = document.getElementById('testCaseFile');
+        res.files.forEach(file => {
+          const option = document.createElement('option');
+          option.value = file;
+          option.innerText = file;
+          select.appendChild(option);
+        });
+        if (!res.files.length) {
+          document.getElementById('testStatus').innerText = '请把符合格式的 xlsx 放入 test-cases 文件夹';
+        }
+      })
+      .catch(() => {
+        document.getElementById('testStatus').innerText = '无法读取 test-cases 文件夹';
+      });
+  }
+
+  function loadTestCaseFile() {
+    const fileName = document.getElementById('testCaseFile').value;
+    if (!fileName) return;
+    fetch(`/api/test-cases/${encodeURIComponent(fileName)}`)
+      .then(res => res.json())
+      .then(res => {
+        if (res.status_code !== 0 || !res.data.length) {
+          alert(res.msg || 'xlsx 中没有有效测试用例');
+          return;
+        }
+        testCases = res.data;
+        shuffledCases = shuffle(testCases);
+        casePosition = 0;
+        successCount = 0;
+        failureCount = 0;
+        activeTrade = null;
+        updateTestProgress();
+        startNextCase();
+      })
+      .catch(() => alert('读取 xlsx 失败'));
+  }
+
+  function startNextCase() {
+    clearTradeDrawing();
+    activeTrade = null;
+    caseResolved = false;
+    if (casePosition >= shuffledCases.length) {
+      setTestButtons(false);
+      document.getElementById('stockNameVal').innerText = '股票名称: --';
+      document.getElementById('testStatus').innerText = `回测结束，成功率 ${(successCount / (successCount + failureCount || 1) * 100).toFixed(2)}%`;
+      alert(`回测结束\n成功：${successCount}\n失败：${failureCount}\n成功率：${(successCount / (successCount + failureCount || 1) * 100).toFixed(2)}%`);
+      return;
+    }
+
+    activeCase = shuffledCases[casePosition];
+    document.getElementById('stockNameVal').innerText = '股票名称: --';
+    document.getElementById('stockNameVal').style.visibility = 'hidden';
+    document.getElementById('testStatus').innerText = `正在回放 ${activeCase.marketCode} ${activeCase.date}`;
+    document.getElementById('stockCode').value = activeCase.code;
+    document.getElementById('cutoffDate').value = activeCase.date;
+    setTestButtons(false);
+
+    fetch(`/api/kline?code=${activeCase.code}&cutoffDate=${activeCase.date}`)
+      .then(res => res.json())
+      .then(res => {
+        if (res.status_code !== 0 || !res.data.length) {
+          document.getElementById('testStatus').innerText = '该用例没有 K 线数据，自动跳过';
+          casePosition++;
+          updateTestProgress();
+          startNextCase();
+          return;
+        }
+        fullData = res.data;
+        const startIndex = fullData.findIndex(item => item.date >= activeCase.date);
+        if (startIndex < 0 || startIndex + 1 >= fullData.length) {
+          casePosition++;
+          updateTestProgress();
+          startNextCase();
+          return;
+        }
+        currentIndex = startIndex + 1;
+        updateTestProgress();
+        updateChartData();
+        setTestButtons(true);
+      });
+  }
+
+  function finishCurrentCase(message) {
+    document.getElementById('testStatus').innerText = message;
+    caseResolved = true;
+    document.getElementById('buyButton').disabled = true;
+    document.getElementById('nextCaseButton').disabled = false;
+    updateTestProgress();
+  }
+
+  function buyAtCurrentCandle() {
+    if (!activeCase || activeTrade || currentIndex === 0) return;
+    const buyIndex = currentIndex - 1;
+    const entryIndex = buyIndex + 1;
+    const resultIndex = buyIndex + 2;
+    const entryCandle = fullData[entryIndex];
+    const resultCandle = fullData[resultIndex];
+    if (!entryCandle || !resultCandle) {
+      finishCurrentCase('没有下一根 K 线，跳过本用例');
+      return;
+    }
+
+    activeTrade = {
+      buyDate: entryCandle.date,
+      buyPrice: Number(entryCandle.close),
+    };
+    // 展示 B 点以及其后的 7 根 K 线
+    currentIndex = Math.min(entryIndex + 8, fullData.length);
+    updateChartData();
+
+    if (resultCandle.limitStatus === 'limit-up') {
+      successCount++;
+      finishCurrentCase(`成功：${resultCandle.date} 为 B 点后的第二根 K 线并收盘涨停`);
+    } else {
+      failureCount++;
+      finishCurrentCase(`失败：${resultCandle.date} 为 B 点后的第二根 K 线但未收盘涨停`);
+    }
+  }
+
+  function nextTestCase() {
+    if (!activeCase) return;
+    if (!caseResolved) {
+      caseResolved = true;
+      document.getElementById('testStatus').innerText = '已跳过本用例，再次点击“下一个”进入下一题';
+      document.getElementById('buyButton').disabled = true;
+      updateTestProgress();
+      return;
+    }
+    clearTradeDrawing();
+    activeTrade = null;
+    casePosition++;
+    updateTestProgress();
+    startNextCase();
+  }
+
+  function saveCurrentFavorite() {
+    if (!activeCase) return;
+    const group = document.getElementById('favoriteGroup').value.trim() || '默认';
+    fetch('/api/favorites', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ group, item: activeCase }),
+    })
+      .then(res => res.json())
+      .then(res => {
+        document.getElementById('testStatus').innerText = res.status_code === 0
+          ? `已收藏到 ${group}`
+          : (res.msg || '收藏失败');
+      });
+  }
+
+  // 快捷键推进
+  window.addEventListener('keydown', (e) => {
+    if (e.code === 'Space') {
+      e.preventDefault();
+      nextStep();
+    }
+  });
+
+  function nextStep() {
+    if (currentIndex < fullData.length) {
+      currentIndex++;
+      updateChartData();
+    }
+  }
+
+  function resetReplay() {
+    const startDate = document.getElementById('cutoffDate').value;
+    const startIndex = fullData.findIndex(item => item.date >= startDate);
+    currentIndex = startIndex >= 0 ? startIndex + 1 : fullData.length;
+    updateChartData();
+  }
+
+  window.onload = () => {
+    initChart();
+    loadTestCaseFiles();
+    loadStockData();
+  };
+</script>
+
+</body>
+</html>
