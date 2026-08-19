@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
   <meta name="theme-color" content="#0b0e11">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -20,6 +20,8 @@
       overscroll-behavior: none;
       -webkit-user-select: none;
       user-select: none;
+      -webkit-text-size-adjust: 100%;
+      touch-action: manipulation;
     }
     * {
       -webkit-user-select: none;
@@ -334,7 +336,7 @@
   let fullData = [];
   let currentIndex = 0; // 当前推演到的索引位置
   
-  let chart, candlestickSeries, volumeSeries;
+  let chart, candlestickSeries, volumeSeries, ma5Series, ma10Series, ma20Series;
   let priceLine = null;
   let candleMarkers = [];
   let markerController = null;
@@ -457,7 +459,7 @@
         mouseWheel: true,
         pinch: true,
         axisPressedMouseMove: true,
-        axisDoubleClickReset: false,
+        axisDoubleClickReset: true,
       },
     });
 
@@ -482,6 +484,25 @@
         top: 0.05,   // 顶部留白 5%
         bottom: 0.3, // 底部留白 30%（K线不会落入底部30%的成交量区域）
       },
+    });
+
+    ma5Series = chart.addSeries(LightweightCharts.LineSeries, {
+      color: '#ffb000',
+      lineWidth: 1,
+      priceLineVisible: false,
+      lastValueVisible: false,
+    });
+    ma10Series = chart.addSeries(LightweightCharts.LineSeries, {
+      color: '#00a0e9',
+      lineWidth: 1,
+      priceLineVisible: false,
+      lastValueVisible: false,
+    });
+    ma20Series = chart.addSeries(LightweightCharts.LineSeries, {
+      color: '#e4007f',
+      lineWidth: 1,
+      priceLineVisible: false,
+      lastValueVisible: false,
     });
 
     // 2. 成交量图层 (给它单独指定 priceScaleId: 'volume')
@@ -525,6 +546,9 @@
     // 格式化 TradingView 所需数据结构（确保 date 格式为字符串 "YYYY-MM-DD"）
     const candles = [];
     const volumes = [];
+    const ma5Data = [];
+    const ma10Data = [];
+    const ma20Data = [];
 
     displayData.forEach(d => {
       // 提取纯 YYYY-MM-DD 日期
@@ -555,11 +579,24 @@
         color: `${candleColor}80`
       });
 
+      if (d.ma5 !== null && d.ma5 !== undefined) {
+        ma5Data.push({ time: timeStr, value: Number(d.ma5) });
+      }
+      if (d.ma10 !== null && d.ma10 !== undefined) {
+        ma10Data.push({ time: timeStr, value: Number(d.ma10) });
+      }
+      if (d.ma20 !== null && d.ma20 !== undefined) {
+        ma20Data.push({ time: timeStr, value: Number(d.ma20) });
+      }
+
     });
 
     // 写入数据到序列
     candlestickSeries.setData(candles);
     volumeSeries.setData(volumes);
+    ma5Series.setData(ma5Data);
+    ma10Series.setData(ma10Data);
+    ma20Series.setData(ma20Data);
     if (activeTrade) drawTradeMarker();
 
     // 【修正缩放】：使用 setVisibleRange 代替 Range index
