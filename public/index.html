@@ -166,7 +166,16 @@
     }
     .favorite-controls button {
       flex: 0 0 auto;
+      width: 38px;
+      height: 34px;
+      padding: 0;
+      font-size: 22px;
+      line-height: 1;
+      color: #f0b90b;
       white-space: nowrap;
+    }
+    .favorite-controls button.is-saved {
+      color: #f0b90b;
     }
     .test-status { color: #f0b90b; font-family: monospace; }
     .result-board { color: #aeb8c5; font-family: monospace; }
@@ -296,9 +305,9 @@
       <span id="stockNameVal" style="color:#f0b90b;">股票名称: --</span>
       <span id="testStatus" class="test-status">请选择测试用例 JSON 或收藏分组</span>
       <div class="favorite-controls">
-        <select id="favoriteGroup" aria-label="收藏分组"></select>
+        <select id="favoriteGroup" aria-label="收藏分组" onchange="updateFavoriteButton()"></select>
         <input id="newFavoriteGroup" type="text" placeholder="新建分组">
-        <button onclick="saveCurrentFavorite()">收藏</button>
+        <button id="favoriteButton" type="button" onclick="toggleFavorite()" aria-label="添加收藏" title="添加收藏">☆</button>
       </div>
       <div class="test-actions">
         <button id="buyButton" onclick="buyAtCurrentCandle()" disabled>买入</button>
@@ -338,6 +347,7 @@
   let caseResolved = false;
   let successCount = 0;
   let failureCount = 0;
+  let favoriteSaved = false;
 
   function formatAmount(amount) {
     const value = Number(amount);
@@ -587,6 +597,22 @@
       option.textContent = '默认';
       select.appendChild(option);
     }
+    updateFavoriteButton();
+  }
+
+  function updateFavoriteButton() {
+    const button = document.getElementById('favoriteButton');
+    if (!button) return;
+    const group = document.getElementById('favoriteGroup').value || '默认';
+    const saved = Boolean(activeCase && favoriteGroups[group]?.some(item => (
+      item.code === activeCase.code && item.date === activeCase.date
+    )));
+    favoriteSaved = saved;
+    button.textContent = saved ? '★' : '☆';
+    button.classList.toggle('is-saved', saved);
+    button.disabled = !activeCase;
+    button.setAttribute('aria-label', saved ? '取消收藏' : '添加收藏');
+    button.title = saved ? '取消收藏' : '添加收藏';
   }
 
   function updateDataSourceOptions(files) {
@@ -658,13 +684,35 @@
       .catch(() => alert('读取测试用例失败'));
   }
 
-  function saveCurrentFavorite() {
+  function toggleFavorite() {
     if (!activeCase) {
       alert('请先加载一个测试用例');
       return;
     }
     const inputGroup = document.getElementById('newFavoriteGroup').value.trim();
     const group = inputGroup || document.getElementById('favoriteGroup').value || '默认';
+    const saved = favoriteGroups[group]?.some(item => (
+      item.code === activeCase.code && item.date === activeCase.date
+    ));
+    if (saved) {
+      removeCurrentFavorite(group);
+      return;
+    }
+    saveCurrentFavorite(group);
+  }
+
+  function saveCurrentFavorite(group) {
+    if (!activeCase) {
+      alert('请先加载一个测试用例');
+      return;
+    }
+    if (favoriteGroups[group]?.some(item => (
+      item.code === activeCase.code && item.date === activeCase.date
+    ))) {
+      favoriteSaved = true;
+      updateFavoriteButton();
+      return;
+    }
     fetch('/api/favorites', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -677,7 +725,32 @@
         updateFavoriteGroups();
         document.getElementById('favoriteGroup').value = group;
         document.getElementById('newFavoriteGroup').value = '';
-        document.getElementById('testStatus').innerText = `已收藏到「${group}」`;
+        favoriteGroups = res.data.groups || {};
+        favoriteSaved = true;
+        updateFavoriteButton();
+        document.getElementById('testStatus').innerText = `股票代码 ${activeCase.marketCode || activeCase.code} 股票名称 ${activeCase.stockName || '--'} 时间 ${activeCase.date} 添加收藏夹成功`;
+      })
+      .catch(error => alert(error.message));
+  }
+
+  function removeCurrentFavorite(group) {
+    fetch('/api/favorites', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        group,
+        code: activeCase.code,
+        date: activeCase.date,
+      }),
+    })
+      .then(res => res.json())
+      .then(res => {
+        if (res.status_code !== 0) throw new Error(res.msg || '取消收藏失败');
+        favoriteGroups = res.data.groups || {};
+        updateFavoriteGroups();
+        favoriteSaved = false;
+        updateFavoriteButton();
+        document.getElementById('testStatus').innerText = `股票代码 ${activeCase.marketCode || activeCase.code} 股票名称 ${activeCase.stockName || '--'} 时间 ${activeCase.date} 取消收藏成功`;
       })
       .catch(error => alert(error.message));
   }
@@ -686,6 +759,8 @@
     clearTradeDrawing();
     activeTrade = null;
     caseResolved = false;
+    favoriteSaved = false;
+    updateFavoriteButton();
     document.getElementById('nextCaseButton').innerText = '空仓';
     if (casePosition >= shuffledCases.length) {
       setTestButtons(false);
@@ -697,6 +772,7 @@
     }
 
     activeCase = shuffledCases[casePosition];
+    updateFavoriteButton();
     document.getElementById('stockNameVal').innerText = '股票名称: --';
     document.getElementById('stockNameVal').style.visibility = 'hidden';
     document.getElementById('testStatus').innerText = `正在回放 ${activeCase.marketCode} ${activeCase.date}`;

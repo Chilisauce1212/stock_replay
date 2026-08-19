@@ -108,7 +108,8 @@ app.post('/api/favorites', (req, res) => {
   }
   const favorites = readFavorites();
   favorites.groups[group] = favorites.groups[group] || [];
-  if (!favorites.groups[group].some(saved => saved.code === item.code && saved.date === item.date)) {
+  const alreadySaved = favorites.groups[group].some(saved => saved.code === item.code && saved.date === item.date);
+  if (!alreadySaved) {
     favorites.groups[group].push({
       code: item.code,
       marketCode: item.marketCode,
@@ -117,6 +118,22 @@ app.post('/api/favorites', (req, res) => {
       savedAt: new Date().toISOString(),
     });
   }
+  fs.writeFileSync(FAVORITES_FILE, JSON.stringify(favorites, null, 2), 'utf8');
+  res.json({ status_code: 0, data: favorites, alreadySaved });
+});
+
+app.delete('/api/favorites', (req, res) => {
+  const group = String(req.body.group || '').trim();
+  const code = String(req.body.code || '').trim();
+  const date = String(req.body.date || '').trim();
+  if (!group || !code || !date) {
+    return res.status(400).json({ status_code: -1, msg: '收藏分组、股票代码和日期不能为空' });
+  }
+
+  const favorites = readFavorites();
+  const groupItems = favorites.groups[group] || [];
+  favorites.groups[group] = groupItems.filter(item => !(item.code === code && item.date === date));
+  if (!favorites.groups[group].length) delete favorites.groups[group];
   fs.writeFileSync(FAVORITES_FILE, JSON.stringify(favorites, null, 2), 'utf8');
   res.json({ status_code: 0, data: favorites });
 });
