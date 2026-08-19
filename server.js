@@ -3,6 +3,7 @@ const axios = require('axios');
 const path = require('path');
 const fs = require('fs');
 const XLSX = require('xlsx');
+const { S3Client, GetObjectCommand, PutObjectCommand } = require('@aws-sdk/client-s3');
 const app = express();
 const PORT = process.env.PORT || 3000;
 const TEST_CASE_DIR = path.join(__dirname, 'test-cases');
@@ -10,16 +11,65 @@ const FAVORITES_FILE = path.join(__dirname, 'favorites.json');
 const REPLAY_BEFORE_COUNT = 240;
 const REPLAY_AFTER_COUNT = 20;
 const HISTORY_REQUEST_COUNT = 600;
+const R2_BUCKET = process.env.R2_BUCKET || 'favorites';
+const R2_OBJECT_KEY = process.env.R2_OBJECT_KEY || 'favorites.json';
+const R2_ENDPOINT = process.env.R2_ENDPOINT || (process.env.R2_ACCOUNT_ID
+  ? `https://${process.env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`
+  : '');
+const r2Client = R2_ENDPOINT && process.env.R2_ACCESS_KEY_ID && process.env.R2_SECRET_ACCESS_KEY
+  ? new S3Client({
+    endpoint: R2_ENDPOINT,
+    region: 'auto',
+    credentials: {
+      accessKeyId: process.env.R2_ACCESS_KEY_ID,
+      secretAccessKey: process.env.R2_SECRET_ACCESS_KEY,
+    },
+  })
+  : null;
 
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
-function readFavorites() {
+function readLocalFavorites() {
   try {
     return JSON.parse(fs.readFileSync(FAVORITES_FILE, 'utf8'));
   } catch {
     return { groups: {} };
   }
+}
+
+function writeLocalFavorites(favorites) {
+  fs.writeFileSync(FAVORITES_FILE, JSON.stringify(favorites, null, 2), 'utf8');
+}
+
+async function readFavorites() {
+  if (!r2Client) return readLocalFavorites();
+
+  try {
+    const response = await r2Client.send(new GetObjectCommand({
+      Bucket: R2_BUCKET,
+      Key: R2_OBJECT_KEY,
+    }));
+    const bytes = await response.Body.transformToByteArray();
+    return JSON.parse(Buffer.from(bytes).toString('utf8'));
+  } catch (error) {
+    if (error.name !== 'NoSuchKey' && error.$metadata?.httpStatusCode !== 404) throw error;
+    const localFavorites = readLocalFavorites();
+    if (Object.keys(localFavorites.groups || {}).length) await writeFavorites(localFavorites);
+    return localFavorites;
+  }
+}
+
+async function writeFavorites(favorites) {
+  writeLocalFavorites(favorites);
+  if (!r2Client) return;
+
+  await r2Client.send(new PutObjectCommand({
+    Bucket: R2_BUCKET,
+    Key: R2_OBJECT_KEY,
+    Body: JSON.stringify(favorites, null, 2),
+    ContentType: 'application/json; charset=utf-8',
+  }));
 }
 
 function safeTestCasePath(fileName) {
@@ -96,17 +146,22 @@ app.get('/api/test-cases/:fileName', (req, res) => {
   }
 });
 
-app.get('/api/favorites', (req, res) => {
-  res.json({ status_code: 0, data: readFavorites() });
+app.get('/api/favorites', async (req, res) => {
+  try {
+    res.json({ status_code: 0, data: await readFavorites() });
+  } catch (error) {
+    console.error('读取 R2 收藏失败:', error.message);
+    res.status(500).json({ status_code: -1, msg: '读取收藏失败' });
+  }
 });
 
-app.post('/api/favorites', (req, res) => {
+app.post('/api/favorites', async (req, res) => {
   const group = String(req.body.group || '').trim();
   const item = req.body.item;
   if (!group || !item || !item.code || !item.date) {
     return res.status(400).json({ status_code: -1, msg: '收藏分组和股票信息不能为空' });
   }
-  const favorites = readFavorites();
+  const favorites = await readFavorites();
   favorites.groups[group] = favorites.groups[group] || [];
   const alreadySaved = favorites.groups[group].some(saved => saved.code === item.code && saved.date === item.date);
   if (!alreadySaved) {
@@ -118,11 +173,16 @@ app.post('/api/favorites', (req, res) => {
       savedAt: new Date().toISOString(),
     });
   }
-  fs.writeFileSync(FAVORITES_FILE, JSON.stringify(favorites, null, 2), 'utf8');
-  res.json({ status_code: 0, data: favorites, alreadySaved });
+  try {
+    await writeFavorites(favorites);
+    res.json({ status_code: 0, data: favorites, alreadySaved });
+  } catch (error) {
+    console.error('写入 R2 收藏失败:', error.message);
+    res.status(500).json({ status_code: -1, msg: '保存收藏失败，请检查 R2 配置' });
+  }
 });
 
-app.delete('/api/favorites', (req, res) => {
+app.delete('/api/favorites', async (req, res) => {
   const group = String(req.body.group || '').trim();
   const code = String(req.body.code || '').trim();
   const date = String(req.body.date || '').trim();
@@ -130,12 +190,17 @@ app.delete('/api/favorites', (req, res) => {
     return res.status(400).json({ status_code: -1, msg: '收藏分组、股票代码和日期不能为空' });
   }
 
-  const favorites = readFavorites();
+  const favorites = await readFavorites();
   const groupItems = favorites.groups[group] || [];
   favorites.groups[group] = groupItems.filter(item => !(item.code === code && item.date === date));
   if (!favorites.groups[group].length) delete favorites.groups[group];
-  fs.writeFileSync(FAVORITES_FILE, JSON.stringify(favorites, null, 2), 'utf8');
-  res.json({ status_code: 0, data: favorites });
+  try {
+    await writeFavorites(favorites);
+    res.json({ status_code: 0, data: favorites });
+  } catch (error) {
+    console.error('写入 R2 收藏失败:', error.message);
+    res.status(500).json({ status_code: -1, msg: '取消收藏失败，请检查 R2 配置' });
+  }
 });
 
 /**
