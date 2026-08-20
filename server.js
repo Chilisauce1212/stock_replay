@@ -8,9 +8,9 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const TEST_CASE_DIR = path.join(__dirname, 'test-cases');
 const FAVORITES_FILE = path.join(__dirname, 'favorites.json');
-const REPLAY_BEFORE_COUNT = 240;
-const REPLAY_AFTER_COUNT = 20;
-const HISTORY_REQUEST_COUNT = 600;
+const REPLAY_BEFORE_COUNT = 300;
+const REPLAY_AFTER_COUNT = 30;
+const HISTORY_REQUEST_COUNT = 300;
 const R2_BUCKET = process.env.R2_BUCKET || 'favorites';
 const R2_OBJECT_KEY = process.env.R2_OBJECT_KEY || 'favorites.json';
 const R2_ENDPOINT = process.env.R2_ENDPOINT || (process.env.R2_ACCOUNT_ID
@@ -126,7 +126,12 @@ function parseTestCases(fileName) {
 
   const data = JSON.parse(fs.readFileSync(filePath, 'utf8'));
   if (!Array.isArray(data)) throw new Error('JSON 测试用例格式错误');
-  return data;
+  return data.map(item => {
+    const date = String(item.date || '').trim();
+    return /^\d{8}$/.test(date)
+      ? { ...item, date: `${date.slice(0, 4)}-${date.slice(4, 6)}-${date.slice(6, 8)}` }
+      : item;
+  });
 }
 
 app.get('/api/test-cases', (req, res) => {
@@ -216,20 +221,35 @@ function getMarketCode(code) {
   return "33"; // 默认 33
 }
 
-async function fetchThsKlineData(code = "000620") {
+async function fetchThsKlineData(code = "000620", cutoffDate) {
   const url = 'https://quota-h.10jqka.com.cn/fuyao/common_hq_aggr/quote/v1/single_kline';
   
   // 动态获取市场代码
   const market = getMarketCode(code);
 
+  let endTime = 0;
+  if (cutoffDate) {
+    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(cutoffDate);
+    if (match) {
+      const year = Number(match[1]);
+      const month = Number(match[2]);
+      const day = Number(match[3]);
+      const nextMonth = month === 12 ? 1 : month + 1;
+      const nextMonthYear = month === 12 ? year + 1 : year;
+      const lastDay = new Date(Date.UTC(nextMonthYear, nextMonth, 0)).getUTCDate();
+      endTime = Date.UTC(nextMonthYear, nextMonth - 1, Math.min(day, lastDay));
+    }
+  }
+
   const payload = {
     code_list: [{ codes: [code], market: market }],
     trade_class: "intraday",
     time_period: "day_1",
+    // trade_date=-1 表示使用当前数据，end_time 使用回测日期后一个月的时间戳。
     trade_date: -1,
-    // 请求足够长的历史，才能覆盖较早的回放日期及其前 240 根 K 线
-    begin_time: -HISTORY_REQUEST_COUNT,
-    end_time: 0,
+    // 预留额外缓冲，避免接口按自身交易日规则返回时前置数据不足。
+    begin_time: -(HISTORY_REQUEST_COUNT + 50),
+    end_time: endTime,
     adjust_type: "forward",
     gpid: 1
   };
@@ -351,10 +371,13 @@ function processThsValues(rawValues) {
  */
 app.get('/api/kline', async (req, res) => {
   const code = req.query.code || '000620';
-  const cutoffDate = req.query.cutoffDate; // 例如 "2025-03-12"
+  const rawCutoffDate = String(req.query.cutoffDate || '').trim();
+  const cutoffDate = /^\d{8}$/.test(rawCutoffDate)
+    ? `${rawCutoffDate.slice(0, 4)}-${rawCutoffDate.slice(4, 6)}-${rawCutoffDate.slice(6, 8)}`
+    : rawCutoffDate || undefined;
 
   try {
-    const rawValues = await fetchThsKlineData(code);
+    const rawValues = await fetchThsKlineData(code, cutoffDate);
     const allProcessedData = processThsValues(rawValues);
     let processedData = allProcessedData;
 
