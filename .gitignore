@@ -2,3 +2,7 @@ node_modules/
 .env
 .env.*
 !.env.example
+
+# R2 下载的本地副本
+test-cases/
+favorites.json

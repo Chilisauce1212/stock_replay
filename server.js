@@ -1,9 +1,12 @@
+require('dotenv').config();
+
 const express = require('express');
 const axios = require('axios');
 const path = require('path');
 const fs = require('fs');
 const XLSX = require('xlsx');
 const { S3Client, GetObjectCommand, PutObjectCommand } = require('@aws-sdk/client-s3');
+const { r2Client: sharedR2Client, R2_BUCKET: sharedR2Bucket, readJson, writeJson, listJsonKeys } = require('./r2-storage');
 const app = express();
 const PORT = process.env.PORT || 3000;
 const TEST_CASE_DIR = path.join(__dirname, 'test-cases');
@@ -11,12 +14,12 @@ const FAVORITES_FILE = path.join(__dirname, 'favorites.json');
 const REPLAY_BEFORE_COUNT = 300;
 const REPLAY_AFTER_COUNT = 30;
 const HISTORY_REQUEST_COUNT = 300;
-const R2_BUCKET = process.env.R2_BUCKET || 'favorites';
+const R2_BUCKET = sharedR2Bucket;
 const R2_OBJECT_KEY = process.env.R2_OBJECT_KEY || 'favorites.json';
 const R2_ENDPOINT = process.env.R2_ENDPOINT || (process.env.R2_ACCOUNT_ID
   ? `https://${process.env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`
   : '');
-const r2Client = R2_ENDPOINT && process.env.R2_ACCESS_KEY_ID && process.env.R2_SECRET_ACCESS_KEY
+const r2Client = sharedR2Client || (R2_ENDPOINT && process.env.R2_ACCESS_KEY_ID && process.env.R2_SECRET_ACCESS_KEY
   ? new S3Client({
     endpoint: R2_ENDPOINT,
     region: 'auto',
@@ -25,7 +28,7 @@ const r2Client = R2_ENDPOINT && process.env.R2_ACCESS_KEY_ID && process.env.R2_S
       secretAccessKey: process.env.R2_SECRET_ACCESS_KEY,
     },
   })
-  : null;
+  : null);
 
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
@@ -79,6 +82,11 @@ function safeTestCasePath(fileName) {
   return filePath.startsWith(TEST_CASE_DIR) ? filePath : null;
 }
 
+function safeTestCaseKey(fileName) {
+  const safeName = path.basename(fileName || '');
+  return /\.json$/i.test(safeName) ? `test-cases/${safeName}` : null;
+}
+
 function parseXlsxTestCases(fileName) {
   const filePath = safeTestCasePath(fileName);
   if (!filePath || !fs.existsSync(filePath)) throw new Error('测试表格不存在');
@@ -119,7 +127,19 @@ function syncJsonTestCases() {
   });
 }
 
-function parseTestCases(fileName) {
+async function parseTestCases(fileName) {
+  if (sharedR2Client && fileName.toLowerCase().endsWith('.json')) {
+    const key = safeTestCaseKey(fileName);
+    if (!key) throw new Error('测试用例文件名不合法');
+    const data = await readJson(key);
+    if (!Array.isArray(data)) throw new Error('测试用例 JSON 格式错误');
+    return data.map(item => {
+      const date = String(item.date || '').trim();
+      return /^\d{8}$/.test(date)
+        ? { ...item, date: `${date.slice(0, 4)}-${date.slice(4, 6)}-${date.slice(6, 8)}` }
+        : item;
+    });
+  }
   const filePath = safeTestCasePath(fileName);
   if (!filePath || !fs.existsSync(filePath)) throw new Error('测试用例文件不存在');
   if (fileName.toLowerCase().endsWith('.xlsx')) return parseXlsxTestCases(fileName);
@@ -134,17 +154,27 @@ function parseTestCases(fileName) {
   });
 }
 
-app.get('/api/test-cases', (req, res) => {
-  syncJsonTestCases();
-  const files = fs.readdirSync(TEST_CASE_DIR, { withFileTypes: true })
-    .filter(entry => entry.isFile() && entry.name.toLowerCase().endsWith('.json'))
-    .map(entry => entry.name);
-  res.json({ status_code: 0, files });
+app.get('/api/test-cases', async (req, res) => {
+  try {
+    let files;
+    if (sharedR2Client) {
+      const keys = await listJsonKeys('test-cases/');
+      files = keys.map(key => key.slice('test-cases/'.length));
+    } else {
+      syncJsonTestCases();
+      files = fs.readdirSync(TEST_CASE_DIR, { withFileTypes: true })
+        .filter(entry => entry.isFile() && entry.name.toLowerCase().endsWith('.json'))
+        .map(entry => entry.name);
+    }
+    res.json({ status_code: 0, files });
+  } catch (error) {
+    res.status(500).json({ status_code: -1, msg: `读取 R2 测试用例失败: ${error.message}` });
+  }
 });
 
-app.get('/api/test-cases/:fileName', (req, res) => {
+app.get('/api/test-cases/:fileName', async (req, res) => {
   try {
-    const cases = parseTestCases(req.params.fileName);
+    const cases = await parseTestCases(req.params.fileName);
     res.json({ status_code: 0, total: cases.length, data: cases });
   } catch (error) {
     res.status(400).json({ status_code: -1, msg: error.message });

@@ -1,8 +1,11 @@
+require('dotenv').config();
+
 const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
 const axios = require('axios');
 const { chromium } = require('playwright');
+const { r2Client, readJson, writeJson } = require('./r2-storage');
 
 const TEST_CASE_DIR = __dirname;
 const sleep = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
@@ -35,9 +38,27 @@ function today() {
   return new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
 }
 
+function beijingNow() {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', hour12: false,
+  }).formatToParts(new Date());
+  return Object.fromEntries(parts.filter(part => part.type !== 'literal').map(part => [part.type, part.value]));
+}
+
+function beijingDateString() {
+  const now = beijingNow();
+  return `${now.year}${now.month}${now.day}`;
+}
+
+function isTodayGenerationWindow() {
+  const hour = Number(beijingNow().hour);
+  return hour >= 15 && hour < 24;
+}
+
 async function ensureChromeDebugging() {
   const debugUrl = 'http://127.0.0.1:9222/json/version';
-  const chromePath = 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
+  const chromePath = process.env.CHROME_PATH || 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
   const userDataDir = 'C:\\chrome_temp';
   try {
     const response = await axios.get(debugUrl, { timeout: 1000 });
@@ -127,14 +148,28 @@ function convertToRecords(rows, dateString, startIndex) {
   return records;
 }
 
-function loadJson(filename) {
-  if (!fs.existsSync(filename)) return [];
-  const data = JSON.parse(fs.readFileSync(filename, 'utf8'));
+async function loadJson(filename) {
+  let data;
+  if (r2Client) {
+    try {
+      data = await readJson(`test-cases/${path.basename(filename)}`);
+    } catch (error) {
+      if (error.name !== 'NoSuchKey' && error.$metadata?.httpStatusCode !== 404) throw error;
+      return [];
+    }
+  } else {
+    if (!fs.existsSync(filename)) return [];
+    data = JSON.parse(fs.readFileSync(filename, 'utf8'));
+  }
   if (!Array.isArray(data)) throw new Error('JSON 根节点必须是数组');
   return data;
 }
 
-function saveJson(records, filename) {
+async function saveJson(records, filename) {
+  if (r2Client) {
+    await writeJson(`test-cases/${path.basename(filename)}`, records);
+    return;
+  }
   const temporary = `${filename}.tmp`;
   fs.writeFileSync(temporary, `${JSON.stringify(records, null, 2)}\n`, 'utf8');
   fs.renameSync(temporary, filename);
@@ -151,7 +186,7 @@ async function run(startArgument, endArgument) {
     endDate = currentDate;
   }
   const filename = path.join(TEST_CASE_DIR, `一进二回测_${startText}_${endText}.json`);
-  let records = loadJson(filename);
+  let records = await loadJson(filename);
   if (records.length) {
     const dates = records.filter(item => item.date).map(item => new Date(`${item.date}T00:00:00Z`));
     const lastDate = new Date(Math.max(...dates));
@@ -171,7 +206,7 @@ async function run(startArgument, endArgument) {
       const calendar = await getMarketCalendar(dateString);
       if (!calendar.isTrade) { console.log(`跳过: ${dateString} (非交易日)`); continue; }
       const year = `${dateString.slice(0, 4)}年`;
-      const question = `${year}${calendar.tMinus1Chs}收盘涨停,${year}${calendar.tMinus2Chs}收盘未涨停,${year}${calendar.tChs}10点30前达到过涨停价,${year}${calendar.tChs}涨幅>9%,${year}${calendar.tChs}最低价<${year}${calendar.tChs}涨停价,主板`;
+      const question = `${year}${calendar.tMinus1Chs}收盘涨停,${year}${calendar.tMinus2Chs}收盘未涨停,${year}${calendar.tChs}10点30前达到过涨停价,${year}${calendar.tChs}涨幅>9%,${year}${calendar.tChs}最低价<${year}${calendar.tChs}涨停价,主板,非st`;
       const targetUrl = `https://www.iwencai.com/unifiedwap/result?w=${encodeURIComponent(question)}`;
       process.stdout.write(`正在查询: ${dateString} ... `);
       const batch = [];
@@ -196,7 +231,7 @@ async function run(startArgument, endArgument) {
       const newRecords = convertToRecords(normalizeData(batch, calendar), calendar.tMinus1Raw, records.length)
         .filter(item => !records.some(existing => existing.date === item.date && existing.marketCode === item.marketCode));
       records.push(...newRecords);
-      saveJson(records, filename);
+      await saveJson(records, filename);
       console.log(`成功获取 ${newRecords.length} 条，已保存 JSON`);
       await sleep(3000 + Math.floor(Math.random() * 3001));
     }
@@ -204,8 +239,75 @@ async function run(startArgument, endArgument) {
   console.log(`\n>>> 全部完成！请查看文件: ${filename}`);
 }
 
+async function runTodayFirstBoard() {
+  if (!isTodayGenerationWindow()) {
+    console.log('北京时间 15:00 前不生成今日首板.json。');
+    return;
+  }
+
+  const dateString = beijingDateString();
+  const filename = path.join(TEST_CASE_DIR, '今日首板.json');
+  const records = await loadJson(filename);
+  const hasTodayRecords = records.some(item => String(item.date || '').replaceAll('-', '') === dateString);
+  if (hasTodayRecords) {
+    console.log(`已存在 ${dateString} 的今日首板数据，不重复生成。`);
+    return;
+  }
+
+  const calendar = await getMarketCalendar(dateString);
+  if (!calendar.isTrade) {
+    console.log(`${dateString} 不是交易日，不生成今日首板.json。`);
+    return;
+  }
+
+  const year = `${dateString.slice(0, 4)}年`;
+  const question = `${year}${calendar.tChs}收盘涨停,${year}${calendar.tMinus1Chs}收盘未涨停,${year}${calendar.tChs}涨幅>9%,主板,非st`;
+  const targetUrl = `https://www.iwencai.com/unifiedwap/result?w=${encodeURIComponent(question)}`;
+  console.log(`>>> 正在生成今日首板: ${question}`);
+
+  // 使用本机原生 Chrome，并通过调试端口连接，不启动 Playwright 自带 Chromium。
+  await ensureChromeDebugging();
+  const browser = await chromium.connectOverCDP('http://127.0.0.1:9222');
+  const context = browser.contexts()[0];
+  const page = await context.newPage();
+  const batch = [];
+  const responseTasks = [];
+  const handleResponse = response => {
+    if (!response.url().includes('get-robot-data') || response.status() !== 200) return;
+    responseTasks.push((async () => {
+      try {
+        const body = await response.json();
+        const data = body?.data?.answer?.[0]?.txt?.[0]?.content?.components?.[0]?.data;
+        if (data?.datas) batch.push(...data.datas);
+      } catch { /* 忽略非目标响应 */ }
+    })());
+  };
+
+  page.on('response', handleResponse);
+  try {
+    await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+    try { await page.waitForSelector('.iwc-table-body', { timeout: 15000 }); } catch { /* 继续等待接口响应 */ }
+    await sleep(3000);
+    await Promise.all(responseTasks);
+  } finally {
+    page.off('response', handleResponse);
+    await page.close();
+  }
+
+  const newRecords = convertToRecords(normalizeData(batch, calendar), dateString, records.length)
+    .filter(item => !records.some(existing => existing.date === item.date && existing.marketCode === item.marketCode));
+  await saveJson([...records, ...newRecords], filename);
+  console.log(`>>> 今日首板生成完成：${newRecords.length} 条，文件: ${filename}`);
+}
+
 const [, , start, end] = process.argv;
-if (!start || !end) {
-  console.error('用法: node test-cases/turnover_json.js YYYYMMDD YYYYMMDD');
+if (process.argv.includes('--today')) {
+  runTodayFirstBoard().catch(error => {
+    console.error(`今日首板生成失败: ${error.message}`);
+    process.exitCode = 1;
+  });
+} else if (!start || !end) {
+  console.error('用法: node turnover_json.js YYYYMMDD YYYYMMDD');
+  console.error('今日首板: node turnover_json.js --today');
   process.exitCode = 1;
 } else run(start, end).catch(error => { console.error(`输入或执行失败: ${error.message}`); process.exitCode = 1; });
