@@ -181,6 +181,7 @@
     }
     .test-status { color: #f0b90b; font-family: monospace; }
     .result-board { color: #aeb8c5; font-family: monospace; }
+    #dailyRecordStatus { color: #d9363e; }
     #chartContainer {
       width: 100%;
       max-width: 100%;
@@ -295,6 +296,7 @@
     <div class="test-panel">
       <label>
         <select id="dataSource" onchange="switchDataSource()">
+          <option value="dailyReview">每日复盘 JSON</option>
           <option value="testcases">测试用例 JSON</option>
           <option value="favorites">收藏 JSON</option>
         </select>
@@ -323,9 +325,9 @@
         <span id="codeVal" style="color: #f0b90b;">股票代码: --</span>
         <span id="dateVal" style="color: #fff;">日期: --</span>
         <span id="amountVal" style="color: #b0b8c4;">成交金额: --</span>
-        <span class="result-board">成功: <span id="successCount">0</span></span>
-        <span class="result-board">失败: <span id="failureCount">0</span></span>
-        <span class="result-board">总数: <span id="totalCount">0</span></span>
+        <span id="successBoard" class="result-board">成功: <span id="successCount">0</span></span>
+        <span id="failureBoard" class="result-board">失败: <span id="failureCount">0</span></span>
+        <span id="totalBoard" class="result-board">总数: <span id="totalCount">0</span><span id="dailyRecordStatus"></span></span>
       </div>
       <div id="chartContainer"></div>
     </div>
@@ -350,6 +352,41 @@
   let successCount = 0;
   let failureCount = 0;
   let favoriteSaved = false;
+  let boughtStockNames = [];
+  let currentCaseHasFutureData = true;
+  let currentCaseBought = false;
+
+  function isDailyReviewSource() {
+    return document.getElementById('dataSource').value === 'dailyReview';
+  }
+
+  function loadFilesForSource() {
+    const source = document.getElementById('dataSource').value;
+    if (source === 'dailyReview') return loadDailyReviewFiles();
+    if (source === 'testcases') return loadTestCaseFiles();
+  }
+
+  function updateSourceMode() {
+    const dailyReview = isDailyReviewSource();
+    document.querySelector('.test-panel').classList.toggle('daily-review-mode', dailyReview);
+    document.getElementById('successBoard').style.display = dailyReview ? 'none' : '';
+    document.getElementById('failureBoard').style.display = dailyReview ? 'none' : '';
+    document.getElementById('totalBoard').style.display = '';
+    document.getElementById('favoriteGroup').disabled = dailyReview;
+    document.getElementById('newFavoriteGroup').disabled = dailyReview;
+    document.getElementById('favoriteButton').disabled = dailyReview || !activeCase;
+  }
+
+  function displayCodeLabel() {
+    const code = activeCase?.marketCode || activeCase?.code || '--';
+    return isDailyReviewSource() && activeCase?.stockName
+      ? `股票名称: ${activeCase.stockName} 股票代码: ${code}`
+      : `股票代码: ${code}`;
+  }
+
+  function setDailyReviewButtons() {
+    document.getElementById('nextStepButton').disabled = isDailyReviewSource() && !currentCaseHasFutureData;
+  }
 
   function formatAmount(amount) {
     const value = Number(amount);
@@ -378,6 +415,7 @@
     document.getElementById('successCount').innerText = successCount;
     document.getElementById('failureCount').innerText = failureCount;
     document.getElementById('totalCount').innerText = `${Math.min(casePosition + 1, shuffledCases.length)}/${shuffledCases.length}`;
+    document.getElementById('dailyRecordStatus').innerText = currentCaseBought ? ' 已加入记录' : '';
   }
 
   function clearTradeDrawing() {
@@ -528,7 +566,7 @@
       const candle = param.seriesData.get(candlestickSeries);
 
       if (candle) {
-        document.getElementById('codeVal').innerText = `股票代码: ${activeCase?.marketCode || activeCase?.code || '--'}`;
+        document.getElementById('codeVal').innerText = displayCodeLabel();
         document.getElementById('dateVal').innerText = `日期: ${param.time}`;
         const hoveredData = fullData.find(item => item.date === param.time);
         document.getElementById('amountVal').innerText = formatAmount(hoveredData?.amount);
@@ -611,7 +649,7 @@
     // 更新 Legend
     const last = displayData[displayData.length - 1];
     if (last) {
-      document.getElementById('codeVal').innerText = `股票代码: ${activeCase?.marketCode || activeCase?.code || '--'}`;
+      document.getElementById('codeVal').innerText = displayCodeLabel();
       document.getElementById('dateVal').innerText = `日期: ${last.date}`;
       document.getElementById('amountVal').innerText = formatAmount(last.amount);
     }
@@ -647,7 +685,7 @@
     favoriteSaved = saved;
     button.textContent = saved ? '★' : '☆';
     button.classList.toggle('is-saved', saved);
-    button.disabled = !activeCase;
+    button.disabled = isDailyReviewSource() || !activeCase;
     button.setAttribute('aria-label', saved ? '取消收藏' : '添加收藏');
     button.title = saved ? '取消收藏' : '添加收藏';
   }
@@ -656,7 +694,9 @@
     const select = document.getElementById('testCaseFile');
     const source = document.getElementById('dataSource').value;
     select.options.length = 1;
-    select.options[0].textContent = source === 'favorites' ? '请选择收藏分组' : '请选择测试用例 JSON';
+    select.options[0].textContent = source === 'favorites'
+      ? '请选择收藏分组'
+      : source === 'testcases' ? '请选择测试用例 JSON' : '请选择每日复盘 JSON';
     files.forEach(file => {
       const option = document.createElement('option');
       option.value = file;
@@ -670,8 +710,28 @@
     if (source === 'favorites') {
       updateDataSourceOptions(Object.keys(favoriteGroups));
     } else {
-      loadTestCaseFiles();
+      loadFilesForSource();
     }
+    updateSourceMode();
+  }
+
+  function loadDailyReviewFiles() {
+    const status = document.getElementById('testStatus');
+    fetch(`/api/daily-review?ts=${Date.now()}`, { cache: 'no-store' })
+      .then(response => {
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        return response.json();
+      })
+      .then(res => {
+        if (res.status_code !== 0 || !Array.isArray(res.files)) {
+          throw new Error(res.msg || '每日复盘接口返回格式错误');
+        }
+        updateDataSourceOptions(res.files);
+        if (!res.files.length) status.innerText = 'daily-review 文件夹中没有 JSON 文件';
+      })
+      .catch(error => {
+        status.innerText = `无法读取测试用例: ${error.message}`;
+      });
   }
 
   function loadTestCaseFiles() {
@@ -686,7 +746,7 @@
           throw new Error(res.msg || '测试用例接口返回格式错误');
         }
         updateDataSourceOptions(res.files);
-        if (!res.files.length) status.innerText = 'test-cases 文件夹中没有 JSON 测试用例';
+        if (!res.files.length) status.innerText = 'test-cases 文件夹中没有 JSON 文件';
       })
       .catch(error => {
         status.innerText = `无法读取测试用例: ${error.message}`;
@@ -702,11 +762,13 @@
         status_code: res.status_code,
         data: res.data?.groups?.[fileName] || [],
       }))
-      : fetch(`/api/test-cases/${encodeURIComponent(fileName)}`).then(res => res.json());
+      : source === 'dailyReview'
+        ? fetch(`/api/daily-review/${encodeURIComponent(fileName)}`).then(res => res.json())
+        : fetch(`/api/test-cases/${encodeURIComponent(fileName)}`).then(res => res.json());
     request
       .then(res => {
         if (res.status_code !== 0 || !res.data.length) {
-          alert(res.msg || 'xlsx 中没有有效测试用例');
+          alert(res.msg || 'JSON 中没有有效每日复盘数据');
           return;
         }
         testCases = res.data;
@@ -715,6 +777,10 @@
         successCount = 0;
         failureCount = 0;
         activeTrade = null;
+        boughtStockNames = [];
+        currentCaseBought = false;
+        currentCaseHasFutureData = true;
+        updateSourceMode();
         updateTestProgress();
         startNextCase();
       })
@@ -722,6 +788,7 @@
   }
 
   function toggleFavorite() {
+    if (isDailyReviewSource()) return;
     if (!activeCase) {
       alert('请先加载一个测试用例');
       return;
@@ -797,23 +864,37 @@
     activeTrade = null;
     caseResolved = false;
     favoriteSaved = false;
+    currentCaseHasFutureData = true;
     updateFavoriteButton();
+    updateSourceMode();
     document.getElementById('nextCaseButton').innerText = '空仓';
     if (casePosition >= shuffledCases.length) {
       setTestButtons(false);
       document.getElementById('stockNameVal').innerText = '股票名称: --';
-      document.getElementById('codeVal').innerText = '股票代码: --';
-      document.getElementById('testStatus').innerText = `回测结束，成功率 ${(successCount / (successCount + failureCount || 1) * 100).toFixed(2)}%`;
-      alert(`回测结束\n成功：${successCount}\n失败：${failureCount}\n成功率：${(successCount / (successCount + failureCount || 1) * 100).toFixed(2)}%`);
+      document.getElementById('codeVal').innerText = isDailyReviewSource() ? '每日复盘完成' : '股票代码: --';
+      if (isDailyReviewSource()) {
+        document.getElementById('testStatus').innerText = boughtStockNames.length
+          ? `买入记录：${boughtStockNames.join(' ')}`
+          : '每日复盘完成，没有点击买入的股票';
+        window.prompt(
+          '每日复盘买入股票名称（可直接选择并复制）',
+          boughtStockNames.join(' ') || '每日复盘完成，没有点击买入的股票'
+        );
+      } else {
+        document.getElementById('testStatus').innerText = `回测结束，成功率 ${(successCount / (successCount + failureCount || 1) * 100).toFixed(2)}%`;
+        alert(`回测结束\n成功：${successCount}\n失败：${failureCount}\n成功率：${(successCount / (successCount + failureCount || 1) * 100).toFixed(2)}%`);
+      }
       return;
     }
 
     activeCase = shuffledCases[casePosition];
+  currentCaseBought = false;
     updateFavoriteButton();
     document.getElementById('stockNameVal').innerText = '股票名称: --';
     document.getElementById('stockNameVal').style.visibility = 'hidden';
     document.getElementById('testStatus').innerText = `正在回放 ${activeCase.marketCode} ${activeCase.date}`;
     setTestButtons(false);
+    setDailyReviewButtons();
 
     fetch(`/api/kline?code=${activeCase.code}&cutoffDate=${activeCase.date}`)
       .then(res => res.json())
@@ -827,16 +908,18 @@
         }
         fullData = res.data;
         const startIndex = fullData.findIndex(item => item.date >= activeCase.date);
-        if (startIndex < 0 || startIndex + 1 >= fullData.length) {
+        if (startIndex < 0) {
           casePosition++;
           updateTestProgress();
           startNextCase();
           return;
         }
+        currentCaseHasFutureData = startIndex + 1 < fullData.length;
         currentIndex = startIndex + 1;
         updateTestProgress();
         updateChartData();
         setTestButtons(true);
+        setDailyReviewButtons();
       });
   }
 
@@ -851,6 +934,12 @@
 
   function buyAtCurrentCandle() {
     if (!activeCase || activeTrade || currentIndex === 0) return;
+    if (isDailyReviewSource() && !currentCaseHasFutureData) {
+      boughtStockNames.push(activeCase.stockName || activeCase.marketCode || activeCase.code);
+      currentCaseBought = true;
+      finishCurrentCase(`已记录买入：${activeCase.stockName || activeCase.marketCode || activeCase.code}`);
+      return;
+    }
     const buyIndex = currentIndex - 1;
     const entryIndex = buyIndex + 1;
     const resultIndex = buyIndex + 2;
@@ -880,6 +969,20 @@
 
   function nextTestCase() {
     if (!activeCase) return;
+    if (isDailyReviewSource() && !currentCaseHasFutureData) {
+      caseResolved = true;
+      document.getElementById('buyButton').disabled = true;
+      document.getElementById('nextCaseButton').innerText = '继续';
+      if (casePosition + 1 < shuffledCases.length) {
+        casePosition++;
+        updateTestProgress();
+        startNextCase();
+      } else {
+        casePosition++;
+        startNextCase();
+      }
+      return;
+    }
     if (!caseResolved) {
       const buyIndex = currentIndex - 1;
       const entryIndex = buyIndex + 1;
@@ -915,7 +1018,7 @@
   window.addEventListener('pointerdown', requestLandscape, { once: true });
 
   function nextStep() {
-    if (currentIndex < fullData.length) {
+    if (currentIndex < fullData.length && currentCaseHasFutureData) {
       currentIndex++;
       updateChartData();
     }
@@ -923,7 +1026,8 @@
 
   window.onload = () => {
     initChart();
-    loadTestCaseFiles();
+    loadFilesForSource();
+    updateSourceMode();
     fetch('/api/favorites')
       .then(res => res.json())
       .then(res => {

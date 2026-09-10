@@ -7,7 +7,8 @@ const axios = require('axios');
 const { chromium } = require('playwright');
 const { r2Client, readJson, writeJson } = require('./r2-storage');
 
-const TEST_CASE_DIR = __dirname;
+const DAILY_REVIEW_DIR = path.join(__dirname, 'daily-review');
+const TEST_CASE_DIR = path.join(__dirname, 'test-cases');
 const sleep = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
 
 function parseDate(dateString) {
@@ -149,10 +150,12 @@ function convertToRecords(rows, dateString, startIndex) {
 }
 
 async function loadJson(filename) {
+  const isDailyReview = path.basename(filename) === '今日首板.json';
+  const prefix = isDailyReview ? 'daily-review' : 'test-cases';
   let data;
   if (r2Client) {
     try {
-      data = await readJson(`test-cases/${path.basename(filename)}`);
+      data = await readJson(`${prefix}/${path.basename(filename)}`);
     } catch (error) {
       if (error.name !== 'NoSuchKey' && error.$metadata?.httpStatusCode !== 404) throw error;
       return [];
@@ -167,9 +170,11 @@ async function loadJson(filename) {
 
 async function saveJson(records, filename) {
   if (r2Client) {
-    await writeJson(`test-cases/${path.basename(filename)}`, records);
+    const prefix = path.basename(filename) === '今日首板.json' ? 'daily-review' : 'test-cases';
+    await writeJson(`${prefix}/${path.basename(filename)}`, records);
     return;
   }
+  fs.mkdirSync(path.dirname(filename), { recursive: true });
   const temporary = `${filename}.tmp`;
   fs.writeFileSync(temporary, `${JSON.stringify(records, null, 2)}\n`, 'utf8');
   fs.renameSync(temporary, filename);
@@ -246,7 +251,7 @@ async function runTodayFirstBoard() {
   }
 
   const dateString = beijingDateString();
-  const filename = path.join(TEST_CASE_DIR, '今日首板.json');
+  const filename = path.join(DAILY_REVIEW_DIR, '今日首板.json');
   const records = await loadJson(filename);
   const hasTodayRecords = records.some(item => String(item.date || '').replaceAll('-', '') === dateString);
   if (hasTodayRecords) {

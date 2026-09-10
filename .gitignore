@@ -5,4 +5,5 @@ node_modules/
 
 # R2 下载的本地副本
 test-cases/
+daily-review/
 favorites.json

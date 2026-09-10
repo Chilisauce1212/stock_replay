@@ -7,6 +7,7 @@
     "start": "node server.js",
     "turnover": "node turnover_json.js",
     "download:r2": "node download-r2.js",
+    "restore:r2-layout": "node restore-r2-layout.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],

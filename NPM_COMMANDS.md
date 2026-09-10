@@ -81,8 +81,8 @@ node turnover_json.js 20250104 20251231
 - 根据起始日期和结束日期查询回测数据；
 - 自动跳过非交易日；
 - 已有同名数据时从最后日期继续；
-- 配置 R2 后从 `test-cases/` 读取并写回 R2；
-- 未配置 R2 时回退使用本地 `test-cases/` 文件夹；
+- 配置 R2 后从 `daily-review/` 读取并写回 R2；
+- 未配置 R2 时回退使用本地 `daily-review/` 文件夹；
 - 该脚本的问财页面查询使用本机原生 Chrome 调试端口 `9222`。
 
 参数必须是 `YYYYMMDD` 格式。
@@ -104,7 +104,7 @@ node turnover_json.js --today
 - 只在北京时间 15:00 至 24:00 执行；
 - 自动判断当天是否为交易日；
 - 查询当天收盘涨停、前一交易日收盘未涨停、当天涨幅大于 9%、主板、非 ST；
-- 输出到 `test-cases/今日首板.json`，配置 R2 后实际写入 R2 的 `test-cases/今日首板.json`；
+- 输出到 `daily-review/今日首板.json`，配置 R2 后实际写入 R2 的 `daily-review/今日首板.json`；
 - 如果当天数据已经存在，则跳过，不重复生成。
 
 ## 5. 从 R2 恢复所有文件
@@ -124,12 +124,22 @@ node download-r2.js
 - 列出 R2 Bucket 中的所有对象；
 - 下载全部对象到项目根目录；
 - 自动根据对象路径创建文件夹；
-- 例如 R2 中的 `test-cases/今日首板.json` 会恢复到本地的 `test-cases/今日首板.json`；
+- 例如 R2 中的 `daily-review/今日首板.json` 会恢复到本地的 `daily-review/今日首板.json`；
 - `favorites.json` 也会恢复到项目根目录。
 
-本地恢复的 `test-cases/` 和 `favorites.json` 已加入 [.gitignore](.gitignore)，不会被 Git 提交。
+本地恢复的 `daily-review/`、`test-cases/` 和 `favorites.json` 已加入 [.gitignore](.gitignore)，不会被 Git 提交。
 
-## 6. 测试命令
+## 6. 恢复 R2 目录布局
+
+如果此前误将回测文件迁移到了 R2 的 `daily-review/` 目录，执行：
+
+```text
+npm.cmd run restore:r2-layout
+```
+
+该命令只保留 `daily-review/今日首板.json`，并将其他每日复盘对象恢复到 `test-cases/`。确认复制成功后会删除 `daily-review/` 中对应的回测对象。只需执行一次。
+
+## 7. 测试命令
 
 ```text
 npm.cmd test
@@ -143,7 +153,7 @@ npm.cmd test
 
 项目目前没有配置自动化测试，因此该命令会主动返回失败状态。它只是 npm 的默认占位命令，暂时不用于验证业务功能。
 
-## 7. npm 安全审计
+## 8. npm 安全审计
 
 ```text
 npm.cmd audit

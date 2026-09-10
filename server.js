@@ -9,6 +9,7 @@ const { S3Client, GetObjectCommand, PutObjectCommand } = require('@aws-sdk/clien
 const { r2Client: sharedR2Client, R2_BUCKET: sharedR2Bucket, readJson, writeJson, listJsonKeys } = require('./r2-storage');
 const app = express();
 const PORT = process.env.PORT || 3000;
+const DAILY_REVIEW_DIR = path.join(__dirname, 'daily-review');
 const TEST_CASE_DIR = path.join(__dirname, 'test-cases');
 const FAVORITES_FILE = path.join(__dirname, 'favorites.json');
 const REPLAY_BEFORE_COUNT = 300;
@@ -75,6 +76,18 @@ async function writeFavorites(favorites) {
   }));
 }
 
+function safeDailyReviewPath(fileName) {
+  const safeName = path.basename(fileName || '');
+  if (!/\.(xlsx|json)$/i.test(safeName)) return null;
+  const filePath = path.join(DAILY_REVIEW_DIR, safeName);
+  return filePath.startsWith(DAILY_REVIEW_DIR) ? filePath : null;
+}
+
+function safeDailyReviewKey(fileName) {
+  const safeName = path.basename(fileName || '');
+  return /\.json$/i.test(safeName) ? `daily-review/${safeName}` : null;
+}
+
 function safeTestCasePath(fileName) {
   const safeName = path.basename(fileName || '');
   if (!/\.(xlsx|json)$/i.test(safeName)) return null;
@@ -113,17 +126,52 @@ function parseXlsxTestCases(fileName) {
 }
 
 function syncJsonTestCases() {
-  const xlsxFiles = fs.readdirSync(TEST_CASE_DIR, { withFileTypes: true })
+  if (!fs.existsSync(DAILY_REVIEW_DIR)) return;
+  const xlsxFiles = fs.readdirSync(DAILY_REVIEW_DIR, { withFileTypes: true })
     .filter(entry => entry.isFile() && entry.name.toLowerCase().endsWith('.xlsx'))
     .map(entry => entry.name);
 
   xlsxFiles.forEach(xlsxFile => {
     const jsonFile = `${path.basename(xlsxFile, path.extname(xlsxFile))}.json`;
-    const xlsxPath = path.join(TEST_CASE_DIR, xlsxFile);
-    const jsonPath = path.join(TEST_CASE_DIR, jsonFile);
+    const xlsxPath = path.join(DAILY_REVIEW_DIR, xlsxFile);
+    const jsonPath = path.join(DAILY_REVIEW_DIR, jsonFile);
     if (!fs.existsSync(jsonPath) || fs.statSync(xlsxPath).mtimeMs > fs.statSync(jsonPath).mtimeMs) {
       fs.writeFileSync(jsonPath, JSON.stringify(parseXlsxTestCases(xlsxFile), null, 2), 'utf8');
     }
+  });
+}
+
+function listLocalJson(directory) {
+  if (!fs.existsSync(directory)) return [];
+  return fs.readdirSync(directory, { withFileTypes: true })
+    .filter(entry => entry.isFile() && entry.name.toLowerCase().endsWith('.json'))
+    .map(entry => entry.name);
+}
+
+async function parseDailyReview(fileName) {
+  if (sharedR2Client && fileName.toLowerCase().endsWith('.json')) {
+    const key = safeDailyReviewKey(fileName);
+    if (!key) throw new Error('测试用例文件名不合法');
+    const data = await readJson(key);
+    if (!Array.isArray(data)) throw new Error('测试用例 JSON 格式错误');
+    return data.map(item => {
+      const date = String(item.date || '').trim();
+      return /^\d{8}$/.test(date)
+        ? { ...item, date: `${date.slice(0, 4)}-${date.slice(4, 6)}-${date.slice(6, 8)}` }
+        : item;
+    });
+  }
+  const filePath = safeDailyReviewPath(fileName);
+  if (!filePath || !fs.existsSync(filePath)) throw new Error('测试用例文件不存在');
+  if (fileName.toLowerCase().endsWith('.xlsx')) return parseXlsxTestCases(fileName);
+
+  const data = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+  if (!Array.isArray(data)) throw new Error('JSON 测试用例格式错误');
+  return data.map(item => {
+    const date = String(item.date || '').trim();
+    return /^\d{8}$/.test(date)
+      ? { ...item, date: `${date.slice(0, 4)}-${date.slice(4, 6)}-${date.slice(6, 8)}` }
+      : item;
   });
 }
 
@@ -143,38 +191,34 @@ async function parseTestCases(fileName) {
   const filePath = safeTestCasePath(fileName);
   if (!filePath || !fs.existsSync(filePath)) throw new Error('测试用例文件不存在');
   if (fileName.toLowerCase().endsWith('.xlsx')) return parseXlsxTestCases(fileName);
-
   const data = JSON.parse(fs.readFileSync(filePath, 'utf8'));
-  if (!Array.isArray(data)) throw new Error('JSON 测试用例格式错误');
-  return data.map(item => {
-    const date = String(item.date || '').trim();
-    return /^\d{8}$/.test(date)
-      ? { ...item, date: `${date.slice(0, 4)}-${date.slice(4, 6)}-${date.slice(6, 8)}` }
-      : item;
-  });
+  if (!Array.isArray(data)) throw new Error('测试用例 JSON 格式错误');
+  return data;
 }
 
-app.get('/api/test-cases', async (req, res) => {
+app.get('/api/daily-review', async (req, res) => {
   try {
     let files;
     if (sharedR2Client) {
-      const keys = await listJsonKeys('test-cases/');
-      files = keys.map(key => key.slice('test-cases/'.length));
+      const keys = await listJsonKeys('daily-review/');
+      files = keys.map(key => key.slice('daily-review/'.length));
     } else {
       syncJsonTestCases();
-      files = fs.readdirSync(TEST_CASE_DIR, { withFileTypes: true })
-        .filter(entry => entry.isFile() && entry.name.toLowerCase().endsWith('.json'))
-        .map(entry => entry.name);
+      files = fs.existsSync(DAILY_REVIEW_DIR)
+          ? fs.readdirSync(DAILY_REVIEW_DIR, { withFileTypes: true })
+            .filter(entry => entry.isFile() && entry.name.toLowerCase().endsWith('.json'))
+            .map(entry => entry.name)
+          : [];
     }
     res.json({ status_code: 0, files });
   } catch (error) {
-    res.status(500).json({ status_code: -1, msg: `读取 R2 测试用例失败: ${error.message}` });
+    res.status(500).json({ status_code: -1, msg: `读取每日复盘失败: ${error.message}` });
   }
 });
 
-app.get('/api/test-cases/:fileName', async (req, res) => {
+app.get('/api/daily-review/:fileName', async (req, res) => {
   try {
-    const cases = await parseTestCases(req.params.fileName);
+    const cases = await parseDailyReview(req.params.fileName);
     res.json({ status_code: 0, total: cases.length, data: cases });
   } catch (error) {
     res.status(400).json({ status_code: -1, msg: error.message });
@@ -438,4 +482,24 @@ app.get('/api/kline', async (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`服务启动成功: http://localhost:${PORT}`);
+});
+
+app.get('/api/test-cases', async (req, res) => {
+  try {
+    const files = sharedR2Client
+      ? (await listJsonKeys('test-cases/')).map(key => key.slice('test-cases/'.length))
+      : listLocalJson(TEST_CASE_DIR);
+    res.json({ status_code: 0, files });
+  } catch (error) {
+    res.status(500).json({ status_code: -1, msg: `读取测试用例失败: ${error.message}` });
+  }
+});
+
+app.get('/api/test-cases/:fileName', async (req, res) => {
+  try {
+    const cases = await parseTestCases(req.params.fileName);
+    res.json({ status_code: 0, total: cases.length, data: cases });
+  } catch (error) {
+    res.status(400).json({ status_code: -1, msg: error.message });
+  }
 });

@@ -2,7 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const axios = require('axios');
 
-const testCaseDir = path.join(__dirname, 'test-cases');
+const testCaseDir = path.join(__dirname, 'daily-review');
 const outputNames = new Set([
   '大于30元.json',
   '小于3元.json',
