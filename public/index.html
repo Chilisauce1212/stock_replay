@@ -377,7 +377,7 @@
   function updateTestProgress() {
     document.getElementById('successCount').innerText = successCount;
     document.getElementById('failureCount').innerText = failureCount;
-    document.getElementById('totalCount').innerText = shuffledCases.length;
+    document.getElementById('totalCount').innerText = `${Math.min(casePosition + 1, shuffledCases.length)}/${shuffledCases.length}`;
   }
 
   function clearTradeDrawing() {
