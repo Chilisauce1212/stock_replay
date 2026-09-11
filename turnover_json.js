@@ -260,12 +260,10 @@ async function runTodayFirstBoard() {
 
   const dateString = beijingDateString();
   const filename = path.join(DAILY_REVIEW_DIR, '今日首板.json');
-  const records = await loadJson(filename);
-  const hasTodayRecords = records.some(item => String(item.date || '').replaceAll('-', '') === dateString);
-  if (hasTodayRecords) {
-    console.log(`已存在 ${dateString} 的今日首板数据，不重复生成。`);
-    return;
-  }
+  const storageTarget = r2Client
+    ? 'R2 对象 daily-review/今日首板.json'
+    : `本地文件 ${filename}`;
+  console.log(`>>> 每日复盘将强制覆盖: ${storageTarget}`);
 
   const calendar = await getMarketCalendar(dateString);
   if (!calendar.isTrade) {
@@ -307,10 +305,9 @@ async function runTodayFirstBoard() {
     await page.close();
   }
 
-  const newRecords = convertToRecords(normalizeData(batch, calendar), dateString, records.length)
-    .filter(item => !records.some(existing => existing.date === item.date && existing.marketCode === item.marketCode));
-  await saveJson([...records, ...newRecords], filename);
-  console.log(`>>> 今日首板生成完成：${newRecords.length} 条，文件: ${filename}`);
+  const records = convertToRecords(normalizeData(batch, calendar), dateString, 0);
+  await saveJson(records, filename);
+  console.log(`>>> 今日首板生成完成：${records.length} 条，已覆盖 ${storageTarget}`);
 }
 
 const [, , start, end] = process.argv;
