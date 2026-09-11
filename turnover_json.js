@@ -203,7 +203,7 @@ async function run(startArgument, endArgument) {
     console.log(`检测到已有文件，最后日期为 ${lastDate.toISOString().slice(0, 10)}，将从 ${formatDate(startDate)} 继续。`);
   } else if (r2Client) {
     console.log(`R2 中未检测到对象 test-cases/${path.basename(filename)}，将创建该对象。`);
-       console.log(`R2 中未检测到对象 test-cases/${path.basename(filename)}，将创建该对象。`);
+  } else {
     console.log(`本地未检测到同名 JSON，将创建文件: ${filename}`);
   }
   if (startDate > endDate) return console.log('已有数据已经覆盖指定日期范围，无需追加。');
