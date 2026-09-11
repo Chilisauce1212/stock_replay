@@ -934,7 +934,7 @@
 
   function buyAtCurrentCandle() {
     if (!activeCase || activeTrade || currentIndex === 0) return;
-    if (isDailyReviewSource() && !currentCaseHasFutureData) {
+    if (isDailyReviewSource()) {
       boughtStockNames.push(activeCase.stockName || activeCase.marketCode || activeCase.code);
       currentCaseBought = true;
       finishCurrentCase(`已记录买入：${activeCase.stockName || activeCase.marketCode || activeCase.code}`);

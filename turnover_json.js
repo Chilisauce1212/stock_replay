@@ -191,13 +191,21 @@ async function run(startArgument, endArgument) {
     endDate = currentDate;
   }
   const filename = path.join(TEST_CASE_DIR, `一进二回测_${startText}_${endText}.json`);
+  const storageTarget = r2Client
+    ? `R2 对象 test-cases/${path.basename(filename)}`
+    : `本地文件 ${filename}`;
+  console.log(`>>> 数据存储位置: ${storageTarget}`);
   let records = await loadJson(filename);
   if (records.length) {
     const dates = records.filter(item => item.date).map(item => new Date(`${item.date}T00:00:00Z`));
     const lastDate = new Date(Math.max(...dates));
     startDate = new Date(Math.max(startDate.getTime(), addDays(lastDate, 1).getTime()));
     console.log(`检测到已有文件，最后日期为 ${lastDate.toISOString().slice(0, 10)}，将从 ${formatDate(startDate)} 继续。`);
-  } else console.log(`未检测到同名 JSON，将创建新文件: ${filename}`);
+  } else if (r2Client) {
+    console.log(`R2 中未检测到对象 test-cases/${path.basename(filename)}，将创建该对象。`);
+       console.log(`R2 中未检测到对象 test-cases/${path.basename(filename)}，将创建该对象。`);
+    console.log(`本地未检测到同名 JSON，将创建文件: ${filename}`);
+  }
   if (startDate > endDate) return console.log('已有数据已经覆盖指定日期范围，无需追加。');
 
   console.log('\n>>> 任务开始！输出格式为 JSON');
