@@ -109,6 +109,25 @@ node turnover_json.js --today
 
 ## 5. 从 R2 恢复所有文件
 
+## 5. 保持 Render 服务活跃
+
+```text
+npm.cmd run keep-render
+```
+
+默认每 10 分钟访问一次 `https://stock-replay.onrender.com`。命令会立即访问一次，之后按间隔继续访问；按 `Ctrl+C` 停止。
+
+可以通过环境变量修改地址和间隔：
+
+```text
+RENDER_URL=https://stock-replay.onrender.com
+RENDER_KEEPALIVE_INTERVAL_MS=600000
+```
+
+该命令用于减少 Render 因无访问而休眠的情况，不能绕过 Render 平台本身的休眠或配额策略。
+
+## 6. 从 R2 恢复所有文件
+
 ```text
 npm.cmd run download:r2
 ```
@@ -129,7 +148,7 @@ node download-r2.js
 
 本地恢复的 `daily-review/`、`test-cases/` 和 `favorites.json` 已加入 [.gitignore](.gitignore)，不会被 Git 提交。
 
-## 6. 恢复 R2 目录布局
+## 7. 恢复 R2 目录布局
 
 如果此前误将回测文件迁移到了 R2 的 `daily-review/` 目录，执行：
 
@@ -139,7 +158,7 @@ npm.cmd run restore:r2-layout
 
 该命令只保留 `daily-review/今日首板.json`，并将其他每日复盘对象恢复到 `test-cases/`。确认复制成功后会删除 `daily-review/` 中对应的回测对象。只需执行一次。
 
-## 7. 测试命令
+## 8. 测试命令
 
 ```text
 npm.cmd test
@@ -153,7 +172,7 @@ npm.cmd test
 
 项目目前没有配置自动化测试，因此该命令会主动返回失败状态。它只是 npm 的默认占位命令，暂时不用于验证业务功能。
 
-## 8. npm 安全审计
+## 9. npm 安全审计
 
 ```text
 npm.cmd audit

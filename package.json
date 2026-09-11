@@ -6,6 +6,7 @@
   "scripts": {
     "start": "node server.js",
     "turnover": "node turnover_json.js",
+    "keep-render": "node keep-render.js",
     "download:r2": "node download-r2.js",
     "restore:r2-layout": "node restore-r2-layout.js",
     "test": "echo \"Error: no test specified\" && exit 1"
