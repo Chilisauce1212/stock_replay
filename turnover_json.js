@@ -258,18 +258,24 @@ async function runTodayFirstBoard() {
     return;
   }
 
-  const dateString = beijingDateString();
+  let dateString = beijingDateString();
   const filename = path.join(DAILY_REVIEW_DIR, '今日首板.json');
   const storageTarget = r2Client
     ? 'R2 对象 daily-review/今日首板.json'
     : `本地文件 ${filename}`;
-  console.log(`>>> 每日复盘将强制覆盖: ${storageTarget}`);
 
-  const calendar = await getMarketCalendar(dateString);
+  let calendar = await getMarketCalendar(dateString);
+  let attempts = 0;
+  while (!calendar.isTrade && attempts < 7) {
+    dateString = formatDate(addDays(parseDate(dateString), -1));
+    calendar = await getMarketCalendar(dateString);
+    attempts += 1;
+  }
   if (!calendar.isTrade) {
-    console.log(`${dateString} 不是交易日，不生成今日首板.json。`);
+    console.log('最近交易日查询失败，不生成今日首板.json。');
     return;
   }
+  console.log(`>>> 每日复盘将强制覆盖: ${storageTarget}（更新 ${dateString}）`);
 
   const year = `${dateString.slice(0, 4)}年`;
   const question = `${year}${calendar.tChs}收盘涨停,${year}${calendar.tMinus1Chs}收盘未涨停,${year}${calendar.tChs}涨幅>9%,主板,非st`;

@@ -958,12 +958,14 @@
     currentIndex = Math.min(entryIndex + 8, fullData.length);
     updateChartData();
 
-    if (resultCandle.limitStatus === 'limit-up') {
+    const reachedLimitUp = resultCandle.limitStatus === 'limit-up'
+      || resultCandle.limitStatus.startsWith('touch-limit-up-');
+    if (reachedLimitUp) {
       successCount++;
-      finishCurrentCase(`成功：${resultCandle.date} 为 B 点后的第二根 K 线并收盘涨停`);
+      finishCurrentCase(`成功：${resultCandle.date} 为 B 点后的第二根 K 线且最高价达到涨停价`);
     } else {
       failureCount++;
-      finishCurrentCase(`失败：${resultCandle.date} 为 B 点后的第二根 K 线但未收盘涨停`);
+      finishCurrentCase(`失败：${resultCandle.date} 为 B 点后的第二根 K 线且最高价未达到涨停价`);
     }
   }
 
