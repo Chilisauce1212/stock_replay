@@ -87,7 +87,23 @@ node turnover_json.js 20250104 20251231
 
 参数必须是 `YYYYMMDD` 格式。
 
-## 4. 生成今日首板数据
+## 4. 根据历史股价生成低价回测版本
+
+```text
+npm.cmd run filter-under30
+```
+
+该命令读取 `test-cases/` 中的三个原始一进二回测文件，通过历史 K 线查询获取每条记录目标日的收盘价，筛选收盘价小于 30 元的股票，生成：
+
+```text
+test-cases/一进二回测_小于30元_20240104_20241231.json
+test-cases/一进二回测_小于30元_20250104_20251231.json
+test-cases/一进二回测_小于30元_20260106_20261231.json
+```
+
+运行前需要启动网站服务 `npm.cmd start`。配置 R2 后，生成的文件会同时写入 R2 的 `test-cases/` 目录。
+
+## 5. 生成今日首板数据
 
 ```text
 npm.cmd run turnover -- --today
@@ -107,9 +123,9 @@ node turnover_json.js --today
 - 输出到 `daily-review/今日首板.json`，配置 R2 后实际写入 R2 的 `daily-review/今日首板.json`；
 - 如果当天数据已经存在，则跳过，不重复生成。
 
-## 5. 从 R2 恢复所有文件
+## 6. 从 R2 恢复所有文件
 
-## 5. 保持 Render 服务活跃
+## 7. 保持 Render 服务活跃
 
 ```text
 npm.cmd run keep-render
@@ -126,7 +142,7 @@ RENDER_KEEPALIVE_INTERVAL_MS=600000
 
 该命令用于减少 Render 因无访问而休眠的情况，不能绕过 Render 平台本身的休眠或配额策略。
 
-## 6. 从 R2 恢复所有文件
+## 8. 从 R2 恢复所有文件
 
 ```text
 npm.cmd run download:r2
@@ -148,7 +164,7 @@ node download-r2.js
 
 本地恢复的 `daily-review/`、`test-cases/` 和 `favorites.json` 已加入 [.gitignore](.gitignore)，不会被 Git 提交。
 
-## 7. 恢复 R2 目录布局
+## 9. 恢复 R2 目录布局
 
 如果此前误将回测文件迁移到了 R2 的 `daily-review/` 目录，执行：
 
@@ -158,7 +174,7 @@ npm.cmd run restore:r2-layout
 
 该命令只保留 `daily-review/今日首板.json`，并将其他每日复盘对象恢复到 `test-cases/`。确认复制成功后会删除 `daily-review/` 中对应的回测对象。只需执行一次。
 
-## 8. 测试命令
+## 10. 测试命令
 
 ```text
 npm.cmd test
@@ -172,7 +188,7 @@ npm.cmd test
 
 项目目前没有配置自动化测试，因此该命令会主动返回失败状态。它只是 npm 的默认占位命令，暂时不用于验证业务功能。
 
-## 9. npm 安全审计
+## 11. npm 安全审计
 
 ```text
 npm.cmd audit
