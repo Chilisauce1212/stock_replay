@@ -74,14 +74,14 @@ function roundPrice(price) {
 async function getMatch(item) {
   const rows = await getHistory(item.code, item.date);
   const targetIndex = rows.findIndex(row => row.date === item.date);
-  if (targetIndex < 1 || targetIndex + 1 >= rows.length) return false;
+  if (targetIndex < 0 || targetIndex + 2 >= rows.length) return false;
 
-  const previousClose = Number(rows[targetIndex - 1].close);
-  const targetHigh = Number(rows[targetIndex].high);
-  const nextHigh = Number(rows[targetIndex + 1].high);
-  if (![previousClose, targetHigh, nextHigh].every(Number.isFinite)) return false;
+  const baseClose = Number(rows[targetIndex].close);
+  const targetHigh = Number(rows[targetIndex + 1].high);
+  const nextHigh = Number(rows[targetIndex + 2].high);
+  if (![baseClose, targetHigh, nextHigh].every(Number.isFinite)) return false;
 
-  const limitUp = roundPrice(previousClose * 1.1);
+  const limitUp = roundPrice(baseClose * 1.1);
   return targetHigh >= limitUp - PRICE_TOLERANCE && nextHigh < limitUp;
 }
 

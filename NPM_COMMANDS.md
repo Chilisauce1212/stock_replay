@@ -2,12 +2,12 @@
 
 项目中的 npm 命令定义在 [package.json](package.json) 的 `scripts` 字段中。
 
-> Windows PowerShell 当前可能禁止执行 `npm.ps1`。如果直接执行 `npm` 报脚本策略错误，请使用 `npm.cmd` 替代。
+> 使用本项目命令前，请先将 VS Code 集成终端和 Copilot 终端的默认 Shell 都切换为 Git Bash。下面的命令均按 Git Bash 环境编写。
 
 ## 1. 安装依赖
 
 ```text
-npm.cmd install
+npm install
 ```
 
 根据 [package.json](package.json) 和 `package-lock.json` 安装项目依赖，包括 Express、Axios、AWS SDK、Playwright、dotenv 和 XLSX。
@@ -33,13 +33,13 @@ npx playwright install chromium
 $env:HTTP_PROXY='http://127.0.0.1:7890'
 $env:HTTPS_PROXY='http://127.0.0.1:7890'
 $env:ALL_PROXY='http://127.0.0.1:7890'
-& 'C:\Program Files\nodejs\npm.cmd' exec -- playwright install chromium
+npm exec -- playwright install chromium
 ```
 
 ## 2. 启动网站服务
 
 ```text
-npm.cmd start
+npm start
 ```
 
 对应命令为：
@@ -61,13 +61,13 @@ http://localhost:3000
 ## 3. 运行回测数据生成脚本
 
 ```text
-npm.cmd run turnover -- YYYYMMDD YYYYMMDD
+npm run turnover -- YYYYMMDD YYYYMMDD
 ```
 
 示例：
 
 ```text
-npm.cmd run turnover -- 20250104 20251231
+npm run turnover -- 20250104 20251231
 ```
 
 对应命令为：
@@ -90,7 +90,7 @@ node turnover_json.js 20250104 20251231
 ## 4. 根据历史股价生成低价回测版本
 
 ```text
-npm.cmd run filter-under30
+npm run filter-under30
 ```
 
 该命令读取 `test-cases/` 中的三个原始一进二回测文件，通过历史 K 线查询获取每条记录目标日的收盘价，筛选收盘价小于 30 元的股票，生成：
@@ -101,26 +101,26 @@ test-cases/一进二回测_小于30元_20250104_20251231.json
 test-cases/一进二回测_小于30元_20260106_20261231.json
 ```
 
-运行前需要启动网站服务 `npm.cmd start`。配置 R2 后，生成的文件会同时写入 R2 的 `test-cases/` 目录。
+运行前需要启动网站服务 `npm start`。配置 R2 后，生成的文件会同时写入 R2 的 `test-cases/` 目录。
 
 ## 5. 筛选闷杀股票
 
 ```text
-npm.cmd run filter -- 输入R2 JSON路径 [输入R2 JSON路径 ...]
+npm run filter -- 输入R2 JSON路径 [输入R2 JSON路径 ...]
 ```
 
 例如，可以同时输入多个回测文件：
 
 ```text
-npm.cmd run filter -- test-cases/一进二回测_小于30元_20240104_20241231.json test-cases/一进二回测_小于30元_20250104_20251231.json test-cases/一进二回测_小于30元_20260106_20261231.json
+npm run filter -- test-cases/一进二回测_小于30元_20240104_20241231.json test-cases/一进二回测_小于30元_20250104_20251231.json test-cases/一进二回测_小于30元_20260106_20261231.json
 ```
 
-命令会读取所有输入 R2 JSON，合并并去重后，直接查询外部历史行情，筛选出回测当天最高价达到涨停价、但下一个交易日最高价低于回测当天涨停价的股票，固定写入 `test-cases/闷杀.json`，不需要启动本地网站服务。
+命令会读取所有输入 R2 JSON，合并并去重后，直接查询外部历史行情，筛选出回测日的后一个交易日最高价达到涨停价 `t`、再后一个交易日最高价低于涨停价 `t` 的股票，固定写入 `test-cases/闷杀.json`，不需要启动本地网站服务。
 
 ## 6. 生成今日首板数据
 
 ```text
-npm.cmd run turnover -- --today
+npm run turnover -- --today
 ```
 
 对应命令为：
@@ -142,7 +142,7 @@ node turnover_json.js --today
 ## 8. 保持 Render 服务活跃
 
 ```text
-npm.cmd run keep-render
+npm run keep-render
 ```
 
 默认每 10 分钟访问一次 `https://stock-replay.onrender.com`。命令会立即访问一次，之后按间隔继续访问；按 `Ctrl+C` 停止。
@@ -159,7 +159,7 @@ RENDER_KEEPALIVE_INTERVAL_MS=600000
 ## 9. 从 R2 恢复所有文件
 
 ```text
-npm.cmd run download:r2
+npm run download:r2
 ```
 
 对应命令为：
@@ -183,7 +183,7 @@ node download-r2.js
 如果此前误将回测文件迁移到了 R2 的 `daily-review/` 目录，执行：
 
 ```text
-npm.cmd run restore:r2-layout
+npm run restore:r2-layout
 ```
 
 该命令只保留 `daily-review/今日首板.json`，并将其他每日复盘对象恢复到 `test-cases/`。确认复制成功后会删除 `daily-review/` 中对应的回测对象。只需执行一次。
@@ -191,7 +191,7 @@ npm.cmd run restore:r2-layout
 ## 11. 测试命令
 
 ```text
-npm.cmd test
+npm test
 ```
 
 当前对应的命令是：
@@ -205,7 +205,7 @@ npm.cmd test
 ## 12. npm 安全审计
 
 ```text
-npm.cmd audit
+npm audit
 ```
 
 检查项目依赖是否存在已知安全漏洞。该命令只进行检查，不会修改依赖。
@@ -213,7 +213,7 @@ npm.cmd audit
 尝试自动修复兼容范围内的问题：
 
 ```text
-npm.cmd audit fix
+npm audit fix
 ```
 
 执行后应检查 [package.json](package.json) 和 [package-lock.json](package-lock.json) 是否发生变化，并重新运行项目验证兼容性。
@@ -221,14 +221,14 @@ npm.cmd audit fix
 ## 常用首次配置流程
 
 ```text
-npm.cmd install
+npm install
 npx playwright install chromium
-npm.cmd run turnover -- --today
-npm.cmd start
+npm run turnover -- --today
+npm start
 ```
 
 如果要从 R2 恢复本地副本：
 
 ```text
-npm.cmd run download:r2
+npm run download:r2
 ```
