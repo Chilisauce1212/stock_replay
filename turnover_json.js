@@ -57,6 +57,48 @@ function isTodayGenerationWindow() {
   return hour >= 15 && hour < 24;
 }
 
+function extractRobotRows(value) {
+  if (!value || typeof value !== 'object') return [];
+  if (Array.isArray(value.datas)) return value.datas;
+  if (Array.isArray(value)) return value.flatMap(extractRobotRows);
+  return Object.values(value).flatMap(extractRobotRows);
+}
+
+async function extractTableRows(page) {
+  const currentPageSize = page.getByText('显示50条/页', { exact: true });
+  for (let index = 0; index < await currentPageSize.count(); index += 1) {
+    if (await currentPageSize.nth(index).isVisible()) {
+      await currentPageSize.nth(index).click();
+      break;
+    }
+  }
+  const pageSize100 = page.getByText('显示100条/页', { exact: true });
+  if (await pageSize100.count() && await pageSize100.first().isVisible()) {
+    await pageSize100.first().click();
+    await page.waitForTimeout(1000);
+  }
+  return page.locator('.iwc-table-body tbody tr').evaluateAll(rows => rows.map(row => {
+    const cells = Array.from(row.querySelectorAll('td .td-cell-box'))
+      .map(cell => cell.textContent.trim());
+    return { 股票代码: cells[2] || '', 股票简称: cells[3] || '' };
+  }).filter(row => row.股票代码 && row.股票简称));
+}
+
+async function hasExplicitEmptyResult(page) {
+  const text = await page.locator('body').innerText().catch(() => '');
+  return /选出\s*A股\s*0/.test(text) || /选出\s*股票\s*0/.test(text);
+}
+
+async function waitForManualLogin(page, targetUrl) {
+  if (!page.url().includes('upass.10jqka.com.cn') && !page.url().includes('/login')) return;
+  console.log('>>> 检测到同花顺登录/验证页面，请在当前 Chrome 窗口完成验证。');
+  console.log('>>> 验证完成并返回问财页面后，脚本将继续抓取数据（最多等待 10 分钟）。');
+  await page.waitForURL(url => url.includes('iwencai.com') && !url.includes('upass.10jqka.com.cn') && !url.includes('/login'), {
+    timeout: 600000,
+  });
+  console.log(`>>> 登录验证完成，已返回问财页面: ${targetUrl}`);
+}
+
 async function ensureChromeDebugging() {
   const debugUrl = 'http://127.0.0.1:9222/json/version';
   const chromePath = process.env.CHROME_PATH || 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
@@ -219,29 +261,35 @@ async function run(startArgument, endArgument) {
       const calendar = await getMarketCalendar(dateString);
       if (!calendar.isTrade) { console.log(`跳过: ${dateString} (非交易日)`); continue; }
       const year = `${dateString.slice(0, 4)}年`;
-      const question = `${year}${calendar.tMinus1Chs}收盘涨停,${year}${calendar.tMinus2Chs}收盘未涨停,${year}${calendar.tChs}10点30前达到过涨停价,${year}${calendar.tChs}涨幅>9%,${year}${calendar.tChs}最低价<${year}${calendar.tChs}涨停价,主板,非st`;
+      const question = `${year}${calendar.tMinus1Chs}收盘涨停,${year}${calendar.tMinus2Chs}收盘未涨停,${year}${calendar.tChs}10点30前达到过涨停价,${year}${calendar.tChs}最低价<${year}${calendar.tChs}涨停价,主板,非st`;
       const targetUrl = `https://www.iwencai.com/unifiedwap/result?w=${encodeURIComponent(question)}`;
       process.stdout.write(`正在查询: ${dateString} ... `);
       const batch = [];
       const responseTasks = [];
       const handleResponse = response => {
-        if (!response.url().includes('get-robot-data') || response.status() !== 200) return;
+        if (!response.url().includes('robotdata') && !response.url().includes('get-robot-data') || response.status() !== 200) return;
         responseTasks.push((async () => {
           try {
             const body = await response.json();
-            const data = body?.data?.answer?.[0]?.txt?.[0]?.content?.components?.[0]?.data;
-            if (data?.datas) batch.push(...data.datas);
+            batch.push(...extractRobotRows(body));
           } catch { /* 忽略非目标响应 */ }
         })());
       };
       page.on('response', handleResponse);
       try {
         await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+        await waitForManualLogin(page, targetUrl);
         try { await page.waitForSelector('.iwc-table-body', { timeout: 15000 }); await sleep(3000); } catch { process.stdout.write(' [页面加载完成，但未检测到表格] '); }
         await Promise.all(responseTasks);
+        if (!batch.length) batch.push(...await extractTableRows(page));
       } catch (error) { process.stdout.write(` [错误: ${error.message}] `); }
       page.off('response', handleResponse);
-      const newRecords = convertToRecords(normalizeData(batch, calendar), calendar.tMinus1Raw, records.length)
+      const uniqueRows = Array.from(new Map(batch.map(row => [JSON.stringify(row), row])).values());
+      console.log(`>>> 问财接口捕获 ${uniqueRows.length} 条原始记录`);
+      if (!uniqueRows.length && !(await hasExplicitEmptyResult(page))) {
+        throw new Error('问财页面已显示结果，但未能从接口响应提取股票数据，已停止写入以避免覆盖已有文件');
+      }
+      const newRecords = convertToRecords(normalizeData(uniqueRows, calendar), calendar.tMinus1Raw, records.length)
         .filter(item => !records.some(existing => existing.date === item.date && existing.marketCode === item.marketCode));
       records.push(...newRecords);
       await saveJson(records, filename);
@@ -289,13 +337,13 @@ async function runTodayFirstBoard() {
   const page = await context.newPage();
   const batch = [];
   const responseTasks = [];
+  let explicitEmptyResult = false;
   const handleResponse = response => {
-    if (!response.url().includes('get-robot-data') || response.status() !== 200) return;
+    if (!response.url().includes('robotdata') && !response.url().includes('get-robot-data') || response.status() !== 200) return;
     responseTasks.push((async () => {
       try {
         const body = await response.json();
-        const data = body?.data?.answer?.[0]?.txt?.[0]?.content?.components?.[0]?.data;
-        if (data?.datas) batch.push(...data.datas);
+        batch.push(...extractRobotRows(body));
       } catch { /* 忽略非目标响应 */ }
     })());
   };
@@ -303,15 +351,23 @@ async function runTodayFirstBoard() {
   page.on('response', handleResponse);
   try {
     await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+    await waitForManualLogin(page, targetUrl);
     try { await page.waitForSelector('.iwc-table-body', { timeout: 15000 }); } catch { /* 继续等待接口响应 */ }
     await sleep(3000);
     await Promise.all(responseTasks);
+    if (!batch.length) batch.push(...await extractTableRows(page));
+    explicitEmptyResult = !batch.length && await hasExplicitEmptyResult(page);
   } finally {
     page.off('response', handleResponse);
     await page.close();
   }
 
-  const records = convertToRecords(normalizeData(batch, calendar), dateString, 0);
+  const uniqueRows = Array.from(new Map(batch.map(row => [JSON.stringify(row), row])).values());
+  console.log(`>>> 问财接口捕获 ${uniqueRows.length} 条原始记录`);
+  if (!uniqueRows.length && !explicitEmptyResult) {
+    throw new Error('问财页面已显示结果，但未能从接口响应提取股票数据，已停止写入以避免覆盖已有文件');
+  }
+  const records = convertToRecords(normalizeData(uniqueRows, calendar), dateString, 0);
   await saveJson(records, filename);
   console.log(`>>> 今日首板生成完成：${records.length} 条，已覆盖 ${storageTarget}`);
 }

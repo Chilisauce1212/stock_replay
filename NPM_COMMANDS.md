@@ -3,6 +3,7 @@
 项目中的 npm 命令定义在 [package.json](package.json) 的 `scripts` 字段中。
 
 > 使用本项目命令前，请先将 VS Code 集成终端和 Copilot 终端的默认 Shell 都切换为 Git Bash。下面的命令均按 Git Bash 环境编写。
+> Windows PowerShell 当前可能禁止执行 `npm.ps1`。如果直接执行 `npm` 报脚本策略错误，请调整 PowerShell 执行策略后再使用 `npm`。
 
 ## 1. 安装依赖
 
@@ -177,6 +178,14 @@ node download-r2.js
 - `favorites.json` 也会恢复到项目根目录。
 
 本地恢复的 `daily-review/`、`test-cases/` 和 `favorites.json` 已加入 [.gitignore](.gitignore)，不会被 Git 提交。
+
+## 10. 将本地数据上传到 R2
+
+```text
+npm run upload
+```
+
+该命令会上传本地 `test-cases/`、`daily-review/` 下的全部 JSON 文件，以及根目录的 `favorites.json`（如果存在），并覆盖 R2 中的同名对象。
 
 ## 10. 恢复 R2 目录布局
 
