@@ -261,7 +261,7 @@ async function run(startArgument, endArgument) {
       const calendar = await getMarketCalendar(dateString);
       if (!calendar.isTrade) { console.log(`跳过: ${dateString} (非交易日)`); continue; }
       const year = `${dateString.slice(0, 4)}年`;
-      const question = `${year}${calendar.tMinus1Chs}收盘涨停,${year}${calendar.tMinus2Chs}收盘未涨停,${year}${calendar.tChs}10点30前达到过涨停价,${year}${calendar.tChs}最低价<${year}${calendar.tChs}涨停价,主板,非st`;
+      const question = `${year}${calendar.tMinus1Chs}收盘涨停,${year}${calendar.tMinus2Chs}收盘未涨停,${year}${calendar.tChs}10点30前达到过${year}${calendar.tChs}涨停价,${year}${calendar.tChs}最低价<${year}${calendar.tChs}涨停价,主板,非st`;
       const targetUrl = `https://www.iwencai.com/unifiedwap/result?w=${encodeURIComponent(question)}`;
       process.stdout.write(`正在查询: ${dateString} ... `);
       const batch = [];
