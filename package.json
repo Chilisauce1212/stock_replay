@@ -6,6 +6,7 @@
   "scripts": {
     "start": "node server.js",
     "turnover": "node turnover_json.js",
+    "extract-price-cases": "node extract-price-cases.js",
     "filter": "node filter.js",
     "filter-under30": "node filter-under30.js",
     "keep-render": "node keep-render.js",
