@@ -158,9 +158,25 @@ node turnover_json.js --today
 npm run add-news -- test-cases/输入文件.json
 ```
 
-命令会遍历输入 JSON 的每条股票记录，按记录的 `date` 查询该日期之前的 5 个交易日，再分页读取同花顺股票新闻，将新闻时间戳和标题写入该记录的 `news` 数组。命令只修改本地 JSON 文件，不写入 R2；原有 `code`、`date` 等字段保持不变。
+命令会遍历输入 JSON 的每条股票记录，按记录的 `date` 查询“前 4 个交易日 + 回测日”共 5 个交易日的数据，并分页获取同花顺新闻和股票公告，将两者按发布时间合并写入该记录的 `news` 数组。命令只修改本地 JSON 文件，不写入 R2；原有 `code`、`date` 等字段保持不变。
 
-页面加载带有 `news` 的回测文件后，点击图表上方 legend 右侧的“新闻”按钮，可以打开半透明新闻面板，通过滑块查看新闻时间和标题；再次点击按钮关闭。
+脚本对外部接口使用全局频率限制，相邻请求至少间隔 10ms。
+
+如果接口返回 `403`，可以在浏览器开发者工具的 Network 面板中复制同花顺请求的完整 Cookie，填入项目根目录 `.env`：
+
+```dotenv
+THS_COOKIE=粘贴完整Cookie字符串，不要加引号
+```
+
+脚本会把它用于新闻、公告和交易日历请求。Cookie 属于临时登录凭证，不要提交到 Git 或发送给他人。
+
+如果需要重新查询并覆盖已有 `news` 数组，使用：
+
+```text
+npm run add-news -- --overwrite test-cases/输入文件.json
+```
+
+页面加载带有 `news` 的回测文件后，点击图表上方 legend 右侧的“新闻”按钮，可以打开半透明新闻面板，通过手机上下滑动或电脑滚轮/右侧滚动条查看新闻和公告；再次点击按钮关闭。
 
 ## 9. 从 R2 恢复所有文件
 
@@ -226,14 +242,14 @@ https://news.10jqka.com.cn/timeline_web/web/v1/news/list?marketId=33&code=003032
 例如：
 
 ```text
-https://news.10jqka.com.cn/timeline_web/web/v1/news/list?marketId=33&code=003032&offset=1789700000000&size=100
+https://news.10jqka.com.cn/timeline_web/web/v1/news/list?marketId=33&code=003032&offset=1789700000000.245617&size=100
 ```
 
 参数说明：
 
 | 参数 | 示例 | 说明 |
 | --- | --- | --- |
-| `marketId` | `33` | A 股市场使用 `33` |
+| `marketId` | `33` | A 股深圳市场使用 `33` 上海使用 `17` |
 | `code` | `003032` | 股票代码 |
 | `offset` | `1789700000000.214685` | 第一页使用毫秒时间戳加 6 位小数 |
 | `size` | `100` | 每页数量，建议使用 `100` |

@@ -1,6 +1,8 @@
 require('dotenv').config();
 
 const { S3Client, GetObjectCommand, ListObjectsV2Command, PutObjectCommand } = require('@aws-sdk/client-s3');
+const { NodeHttpHandler } = require('@smithy/node-http-handler');
+const { HttpsProxyAgent } = require('https-proxy-agent');
 
 const R2_BUCKET = process.env.R2_BUCKET || 'favorites';
 const R2_ENDPOINT = process.env.R2_ENDPOINT || (process.env.R2_ACCOUNT_ID
@@ -10,6 +12,11 @@ const r2Client = R2_ENDPOINT && process.env.R2_ACCESS_KEY_ID && process.env.R2_S
   ? new S3Client({
     endpoint: R2_ENDPOINT,
     region: 'auto',
+    requestHandler: (process.env.HTTPS_PROXY || process.env.https_proxy || process.env.HTTP_PROXY || process.env.http_proxy)
+      ? new NodeHttpHandler({
+        httpsAgent: new HttpsProxyAgent(process.env.HTTPS_PROXY || process.env.https_proxy || process.env.HTTP_PROXY || process.env.http_proxy),
+      })
+      : undefined,
     credentials: {
       accessKeyId: process.env.R2_ACCESS_KEY_ID,
       secretAccessKey: process.env.R2_SECRET_ACCESS_KEY,

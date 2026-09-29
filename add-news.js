@@ -6,11 +6,52 @@ const axios = require('axios');
 
 const TRADE_DAY_URL = 'https://data.10jqka.com.cn/dataapi/limit_up/trade_day';
 const NEWS_URL = 'https://news.10jqka.com.cn/timeline_web/web/v1/news/list';
+const NOTICE_URL = 'https://stockpage.10jqka.com.cn/stock_page/api/v1/stockpage/notices';
 const REQUEST_CONCURRENCY = 3;
 const PAGE_SIZE = 100;
+const NOTICE_PAGE_SIZE = 20;
+const REQUEST_INTERVAL_MS = 10;
+const THS_COOKIE = String(process.env.THS_COOKIE || '').trim();
+let requestQueue = Promise.resolve();
+let nextRequestAt = 0;
 
-function getMarketId(code) {
-  return String(code).startsWith('6') ? '17' : '33';
+function sleep(milliseconds) {
+  return new Promise(resolve => setTimeout(resolve, milliseconds));
+}
+
+async function waitForRequestSlot() {
+  let release;
+  const previous = requestQueue;
+  requestQueue = new Promise(resolve => { release = resolve; });
+  await previous;
+  const delay = Math.max(0, nextRequestAt - Date.now());
+  if (delay) await sleep(delay);
+  nextRequestAt = Date.now() + REQUEST_INTERVAL_MS;
+  release();
+}
+
+function getRequestUrl(config) {
+  try {
+    return axios.getUri(config);
+  } catch {
+    return config?.url || '未知请求地址';
+  }
+}
+
+function getRequestHeaders(referer) {
+  return {
+    'User-Agent': 'Mozilla/5.0',
+    Referer: referer,
+    ...(THS_COOKIE ? { Cookie: THS_COOKIE } : {}),
+  };
+}
+
+function getMarketCode(code) {
+  const value = String(code);
+  if (value.startsWith('6')) return '17';
+  if (value.startsWith('0') || value.startsWith('3')) return '33';
+  if (value.startsWith('8') || value.startsWith('4')) return '151';
+  return '33';
 }
 
 function toDateString(value) {
@@ -38,43 +79,41 @@ function createInitialNewsOffset() {
 }
 
 async function getPreviousTradingDays(dateString) {
+  await waitForRequestSlot();
   const response = await axios.get(TRADE_DAY_URL, {
     params: { date: toCompactDate(dateString), stock: 'stock', next: 1, prev: 5 },
-    headers: { 'User-Agent': 'Mozilla/5.0' },
+    headers: getRequestHeaders('https://data.10jqka.com.cn/'),
     timeout: 15000,
   });
   const data = response.data?.status_code === 0 ? response.data.data : null;
   const previous = Array.isArray(data?.prev_dates) ? data.prev_dates.map(toDateString) : [];
-  if (!data?.trade_day || previous.length < 5) return [];
-  return previous.slice(-5);
+  if (!data?.trade_day || previous.length < 4) return [];
+  return previous.slice(-4);
 }
 
 function normalizeNews(item) {
   const publishTime = Number(item.publishTime);
   const title = String(item.title || item.newsTitle || item.name || item.summary || '').trim();
   if (!Number.isFinite(publishTime) || !title) return null;
-  return {
-    publishTime,
-    title,
-    url: String(item.url || item.detailUrl || '').trim() || undefined,
-  };
+  return { publishTime, title };
 }
 
 async function fetchNews(code, startDate, endDate) {
   const startTime = dayStart(startDate);
-  const endTime = dayStart(endDate);
+  const endTime = dayEnd(endDate);
   let offset = createInitialNewsOffset();
   const news = [];
 
   for (let page = 0; page < 100; page += 1) {
+    await waitForRequestSlot();
     const response = await axios.get(NEWS_URL, {
-      params: { marketId: getMarketId(code), code: String(code).padStart(6, '0'), offset, size: PAGE_SIZE },
-      headers: { 'User-Agent': 'Mozilla/5.0', Referer: 'https://news.10jqka.com.cn/' },
+      params: { marketId: getMarketCode(code), code: String(code).padStart(6, '0'), offset, size: PAGE_SIZE },
+      headers: getRequestHeaders('https://news.10jqka.com.cn/'),
       validateStatus: status => status < 500,
       timeout: 15000,
     });
     if (response.data?.status_code !== 0) {
-      throw new Error(`新闻接口返回异常: HTTP ${response.status}，${response.data?.status_msg || '未知错误'}`);
+      throw new Error(`新闻接口返回异常: HTTP ${response.status}，${response.data?.status_msg || '未知错误'}，GET ${getRequestUrl(response.config)}`);
     }
     const data = response.data?.data || {};
     const list = Array.isArray(data.newsList) ? data.newsList : [];
@@ -95,13 +134,70 @@ async function fetchNews(code, startDate, endDate) {
   return [...unique.values()].sort((left, right) => left.publishTime - right.publishTime);
 }
 
-async function enrichCase(item) {
+function normalizeNotice(item) {
+  const publishTime = Number(item.publishTime);
+  const title = String(item.title || '').trim();
+  if (!Number.isFinite(publishTime) || !title) return null;
+  return { publishTime, title };
+}
+
+async function fetchNotices(code, startDate, endDate) {
+  const startTime = dayStart(startDate);
+  const endTime = dayEnd(endDate);
+  let offset = 'sp.1.XXX';
+  const notices = [];
+
+  for (let page = 0; page < 100; page += 1) {
+    await waitForRequestSlot();
+    const response = await axios.get(NOTICE_URL, {
+      params: {
+        code: String(code).padStart(6, '0'),
+        marketId: getMarketCode(code),
+        size: NOTICE_PAGE_SIZE,
+        noticeCategory: 'all',
+        offset,
+      },
+      headers: getRequestHeaders('https://stockpage.10jqka.com.cn/'),
+      validateStatus: status => status < 500,
+      timeout: 15000,
+    });
+    if (response.data?.status_code !== 0) {
+      throw new Error(`公告接口返回异常: HTTP ${response.status}，${response.data?.status_msg || '未知错误'}，GET ${getRequestUrl(response.config)}`);
+    }
+    const data = response.data?.data || {};
+    const list = Array.isArray(data.noticeList) ? data.noticeList : [];
+    list.forEach(item => {
+      const normalized = normalizeNotice(item);
+      if (normalized && normalized.publishTime >= startTime && normalized.publishTime < endTime) {
+        notices.push(normalized);
+      }
+    });
+
+    const oldestTime = Number(list.at(-1)?.publishTime || 0);
+    const nextOffset = data.offset;
+    if (!data.hasMore || !list.length || oldestTime < startTime || !nextOffset) break;
+    offset = nextOffset;
+  }
+
+  return notices;
+}
+
+async function enrichCase(item, overwrite) {
   const date = toDateString(item.date);
   if (!date || !item.code) throw new Error(`记录缺少有效 code/date: ${JSON.stringify(item)}`);
+  if (!overwrite && Array.isArray(item.news)) return item;
   const previousDays = await getPreviousTradingDays(date);
-  if (previousDays.length < 5) return { ...item, news: [] };
-  const news = await fetchNews(item.code, previousDays[0], date);
-  return { ...item, news };
+  if (previousDays.length < 4) return { ...item, news: [] };
+  const startDate = previousDays[0];
+  const endDate = date;
+  const [news, notices] = await Promise.all([
+    fetchNews(item.code, startDate, endDate),
+    fetchNotices(item.code, startDate, endDate),
+  ]);
+  const mergedNews = [...new Map(
+    [...news, ...notices].map(entry => [`${entry.publishTime}-${entry.title}`, entry])
+  ).values()].sort((left, right) => left.publishTime - right.publishTime);
+  return { ...item, news: mergedNews };
 }
 
 function resolveInputPath(input) {
@@ -114,9 +210,12 @@ function resolveInputPath(input) {
 }
 
 async function main() {
-  const input = process.argv[2];
-  if (!input || process.argv.length > 3) {
-    throw new Error('用法: npm run add-news -- test-cases/输入文件.json');
+  const args = process.argv.slice(2);
+  const overwrite = args.includes('--overwrite');
+  const inputs = args.filter(arg => arg !== '--overwrite');
+  const input = inputs[0];
+  if (!input || inputs.length > 1) {
+    throw new Error('用法: npm run add-news -- [--overwrite] test-cases/输入文件.json');
   }
   const inputPath = resolveInputPath(input);
   const records = JSON.parse(fs.readFileSync(inputPath, 'utf8'));
@@ -131,10 +230,10 @@ async function main() {
     while (nextIndex < records.length) {
       const index = nextIndex++;
       try {
-        result[index] = await enrichCase(records[index]);
+        result[index] = await enrichCase(records[index], overwrite);
       } catch (error) {
         errors += 1;
-        result[index] = { ...records[index], news: [] };
+        result[index] = records[index];
         console.error(`新闻查询失败 ${records[index].code || '--'} ${records[index].date || '--'}: ${error.message}`);
       }
       completed += 1;

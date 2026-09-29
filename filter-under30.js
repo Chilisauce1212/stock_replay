@@ -6,7 +6,7 @@ const axios = require('axios');
 const { r2Client, writeJson } = require('./r2-storage');
 
 const TEST_CASE_DIR = path.join(__dirname, 'test-cases');
-const API_URL = process.env.KLINE_API_URL || 'http://localhost:3000/api/kline';
+const KLINE_URL = 'https://quota-h.10jqka.com.cn/fuyao/common_hq_aggr/quote/v1/single_kline';
 const REQUEST_CONCURRENCY = 5;
 const SOURCE_RANGES = [
   ['20240104', '20241231'],
@@ -26,12 +26,67 @@ function outputKey(start, end) {
   return `test-cases/一进二回测_小于30元_${start}_${end}.json`;
 }
 
-async function getClosePrice(item) {
-  const response = await axios.get(API_URL, {
-    params: { code: item.code, cutoffDate: item.date },
+function getMarketCode(code) {
+  if (code.startsWith('6')) return '17';
+  if (code.startsWith('0') || code.startsWith('3')) return '33';
+  if (code.startsWith('8') || code.startsWith('4')) return '151';
+  return '33';
+}
+
+function getTradingDate(timestamp) {
+  const date = new Date(timestamp);
+  const day = date.getUTCDay();
+  date.setUTCDate(date.getUTCDate() + 1);
+  if (day === 5) date.setUTCDate(date.getUTCDate() + 2);
+  if (day === 6) date.setUTCDate(date.getUTCDate() + 1);
+  return date.toISOString().split('T')[0];
+}
+
+async function getHistory(code, cutoffDate) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(cutoffDate);
+  if (!match) throw new Error(`日期格式无效: ${cutoffDate}`);
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const nextMonth = month === 12 ? 1 : month + 1;
+  const nextMonthYear = month === 12 ? year + 1 : year;
+  const endTime = Date.UTC(nextMonthYear, nextMonth - 1, day);
+  const response = await axios.post(KLINE_URL, {
+    code_list: [{ codes: [code], market: getMarketCode(code) }],
+    trade_class: 'intraday',
+    time_period: 'day_1',
+    trade_date: -1,
+    begin_time: -350,
+    end_time: endTime,
+    adjust_type: 'forward',
+    gpid: 1,
+  }, {
+    headers: {
+      accept: '*/*',
+      'content-type': 'application/json',
+      origin: 'https://www.iwencai.com',
+      referer: 'https://www.iwencai.com/',
+      'source-id': 'hxkline-AIME_Component_Library_Component',
+      'user-agent': 'Mozilla/5.0',
+      'x-auth-appname': 'AINVEST',
+      'x-auth-progid': '7047',
+      'x-auth-type': 'ths',
+      'x-auth-version': '1.0',
+      'x-fuyao-auth': 'eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJhdXRob3JpemVyX25hbWVzcGFjZSI6ImNvbW1vbi1ocS1hZ2dyIiwibGljZW5zZWVfdHlwZSI6IkZST05UX0FQUCIsImxpY2Vuc2VlX25hbWVzcGFjZSI6Imh4a2xpbmUtQUlNRV9Db21wb25lbnRfTGlicmFyeV9Db21wb25lbnQifQ.MWqYrKk4Y2_oWTbG3XZjNGoHK_GmIi_KeJKc_mNDqTA',
+    },
     timeout: 30000,
   });
-  const rows = response.data?.data || [];
+  const values = response.data?.status_code === 0
+    ? response.data.data?.quote_data?.[0]?.value || []
+    : [];
+  return values.map(value => ({
+    date: getTradingDate(value[0]),
+    close: Number(value[4]),
+  }));
+}
+
+async function getClosePrice(item) {
+  const rows = await getHistory(item.code, item.date);
   const target = rows.find(row => row.date === item.date);
   const price = Number(target?.close);
   return Number.isFinite(price) ? price : null;
