@@ -152,7 +152,17 @@ node turnover_json.js --today
 - 输出到 `daily-review/今日首板.json`，配置 R2 后实际写入 R2 的 `daily-review/今日首板.json`；
 - 如果当天数据已经存在，则跳过，不重复生成。
 
-## 8. 从 R2 恢复所有文件
+## 8. 为 JSON 添加同花顺新闻
+
+```text
+npm run add-news -- test-cases/输入文件.json
+```
+
+命令会遍历输入 JSON 的每条股票记录，按记录的 `date` 查询该日期之前的 5 个交易日，再分页读取同花顺股票新闻，将新闻时间戳和标题写入该记录的 `news` 数组。命令只修改本地 JSON 文件，不写入 R2；原有 `code`、`date` 等字段保持不变。
+
+页面加载带有 `news` 的回测文件后，点击图表上方 legend 右侧的“新闻”按钮，可以打开半透明新闻面板，通过滑块查看新闻时间和标题；再次点击按钮关闭。
+
+## 9. 从 R2 恢复所有文件
 
 ## 9. 保持 Render 服务活跃
 
@@ -207,10 +217,10 @@ npm run upload
 https://news.10jqka.com.cn/timeline_web/web/v1/news/list
 ```
 
-第一页请求使用当前时间的毫秒时间戳作为 `offset`：
+第一页请求使用当前时间的毫秒时间戳加 6 位小数作为 `offset`：
 
 ```text
-https://news.10jqka.com.cn/timeline_web/web/v1/news/list?marketId=33&code=003032&offset=当前毫秒时间戳&size=100
+https://news.10jqka.com.cn/timeline_web/web/v1/news/list?marketId=33&code=003032&offset=当前毫秒时间戳.六位数字&size=100
 ```
 
 例如：
@@ -225,7 +235,7 @@ https://news.10jqka.com.cn/timeline_web/web/v1/news/list?marketId=33&code=003032
 | --- | --- | --- |
 | `marketId` | `33` | A 股市场使用 `33` |
 | `code` | `003032` | 股票代码 |
-| `offset` | `1789700000000` | 第一页使用当前毫秒时间戳 |
+| `offset` | `1789700000000.214685` | 第一页使用毫秒时间戳加 6 位小数 |
 | `size` | `100` | 每页数量，建议使用 `100` |
 
 接口返回的 `data.offset` 是下一页游标，必须原样传递，不要乘以 `1000` 或自行转换：
@@ -242,7 +252,7 @@ const https = require('https');
 function fetchNews(code, startDate) {
 	const startTime = new Date(`${startDate}T00:00:00+08:00`).getTime();
 	const news = [];
-	let offset = Date.now();
+	let offset = `${Date.now()}.${String(Math.floor(Math.random() * 1000000)).padStart(6, '0')}`;
 
 	function requestPage() {
 		const url = new URL(

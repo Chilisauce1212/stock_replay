@@ -176,6 +176,12 @@ async function parseDailyReview(fileName) {
 }
 
 async function parseTestCases(fileName) {
+  const localPath = safeTestCasePath(fileName);
+  if (localPath && fs.existsSync(localPath) && fileName.toLowerCase().endsWith('.json')) {
+    const localData = JSON.parse(fs.readFileSync(localPath, 'utf8'));
+    if (!Array.isArray(localData)) throw new Error('JSON 测试用例格式错误');
+    return localData;
+  }
   if (sharedR2Client && fileName.toLowerCase().endsWith('.json')) {
     const key = safeTestCaseKey(fileName);
     if (!key) throw new Error('测试用例文件名不合法');
@@ -188,7 +194,7 @@ async function parseTestCases(fileName) {
         : item;
     });
   }
-  const filePath = safeTestCasePath(fileName);
+  const filePath = localPath;
   if (!filePath || !fs.existsSync(filePath)) throw new Error('测试用例文件不存在');
   if (fileName.toLowerCase().endsWith('.xlsx')) return parseXlsxTestCases(fileName);
   const data = JSON.parse(fs.readFileSync(filePath, 'utf8'));

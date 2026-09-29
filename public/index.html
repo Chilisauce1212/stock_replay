@@ -132,10 +132,41 @@
       min-width: 0;
       display: flex;
       flex-direction: column;
+      position: relative;
     }
     .chart-area .legend {
       flex: 0 0 auto;
+      position: relative;
     }
+    #newsButton {
+      margin-left: auto;
+      padding: 2px 7px;
+      font-size: 12px;
+      color: #b7d7ff;
+    }
+    #newsPanel {
+      position: absolute;
+      z-index: 5;
+      top: 28px;
+      right: 0;
+      bottom: 0;
+      width: min(620px, 100%);
+      padding: 10px 12px;
+      box-sizing: border-box;
+      background: rgba(17, 20, 25, 0.94);
+      border: 1px solid #526176;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+      white-space: normal;
+      overflow-y: auto;
+      overscroll-behavior: contain;
+      touch-action: pan-y;
+      -webkit-overflow-scrolling: touch;
+    }
+    #newsPanel[hidden] { display: none; }
+    .news-list { display: grid; gap: 10px; }
+    .news-item { padding-bottom: 9px; border-bottom: 1px solid #2b3440; }
+    .news-date { color: #f0b90b; font-family: monospace; }
+    .news-title { margin: 4px 0 0; color: #f2f4f7; line-height: 1.45; }
     .test-panel {
       min-height: 0;
       min-width: 0;
@@ -328,6 +359,10 @@
         <span id="successBoard" class="result-board">成功: <span id="successCount">0</span></span>
         <span id="failureBoard" class="result-board">失败: <span id="failureCount">0</span></span>
         <span id="totalBoard" class="result-board">总数: <span id="totalCount">0</span><span id="dailyRecordStatus"></span></span>
+        <button id="newsButton" type="button" onclick="toggleNewsPanel()" aria-label="显示新闻" title="显示新闻">新闻</button>
+      </div>
+      <div id="newsPanel" hidden>
+        <div id="newsList" class="news-list"></div>
       </div>
       <div id="chartContainer"></div>
     </div>
@@ -355,6 +390,7 @@
   let boughtStockNames = [];
   let currentCaseHasFutureData = true;
   let currentCaseBought = false;
+  let currentNews = [];
 
   function isDailyReviewSource() {
     return document.getElementById('dataSource').value === 'dailyReview';
@@ -386,6 +422,48 @@
 
   function setDailyReviewButtons() {
     document.getElementById('nextStepButton').disabled = isDailyReviewSource() && !currentCaseHasFutureData;
+  }
+
+  function formatNewsDate(publishTime) {
+    return new Intl.DateTimeFormat('zh-CN', {
+      timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit',
+    }).format(new Date(publishTime));
+  }
+
+  function updateNewsDisplay() {
+    const list = document.getElementById('newsList');
+    list.replaceChildren();
+    if (!currentNews.length) {
+      const empty = document.createElement('div');
+      empty.className = 'news-title';
+      empty.textContent = '当前股票没有已加载的新闻';
+      list.appendChild(empty);
+      return;
+    }
+    currentNews.forEach(item => {
+      const article = document.createElement('article');
+      article.className = 'news-item';
+      const date = document.createElement('div');
+      date.className = 'news-date';
+      date.textContent = formatNewsDate(item.publishTime);
+      const title = document.createElement('p');
+      title.className = 'news-title';
+      title.textContent = item.title || '无标题';
+      article.append(date, title);
+      list.appendChild(article);
+    });
+  }
+
+  function updateNewsPanel() {
+    currentNews = Array.isArray(activeCase?.news) ? activeCase.news : [];
+    document.getElementById('newsButton').disabled = !activeCase;
+    updateNewsDisplay();
+  }
+
+  function toggleNewsPanel() {
+    const panel = document.getElementById('newsPanel');
+    panel.hidden = !panel.hidden;
   }
 
   function formatAmount(amount) {
@@ -860,6 +938,9 @@
   }
 
   function startNextCase() {
+    document.getElementById('newsPanel').hidden = true;
+    currentNews = [];
+    document.getElementById('newsButton').disabled = !activeCase;
     clearTradeDrawing();
     activeTrade = null;
     caseResolved = false;
@@ -869,6 +950,9 @@
     updateSourceMode();
     document.getElementById('nextCaseButton').innerText = '空仓';
     if (casePosition >= shuffledCases.length) {
+      activeCase = null;
+      currentNews = [];
+      document.getElementById('newsButton').disabled = true;
       setTestButtons(false);
       document.getElementById('stockNameVal').innerText = '股票名称: --';
       document.getElementById('codeVal').innerText = isDailyReviewSource() ? '每日复盘完成' : '股票代码: --';
@@ -888,6 +972,7 @@
     }
 
     activeCase = shuffledCases[casePosition];
+    updateNewsPanel();
   currentCaseBought = false;
     updateFavoriteButton();
     document.getElementById('stockNameVal').innerText = '股票名称: --';

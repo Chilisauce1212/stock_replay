@@ -9,6 +9,7 @@
     "extract-price-cases": "node extract-price-cases.js",
     "filter": "node filter.js",
     "filter-under30": "node filter-under30.js",
+    "add-news": "node add-news.js",
     "keep-render": "node keep-render.js",
     "download:r2": "node download-r2.js",
     "upload": "node upload-r2.js",
