@@ -137,6 +137,7 @@ async function main() {
     ['大于30元.json', allCases.filter((_, index) => prices[index] > 30)],
     ['小于3元.json', allCases.filter((_, index) => prices[index] < 3)],
     ['三连板及以上.json', allCases.filter((_, index) => boardCounts[index] >= 3)],
+    ['四连板及以上.json', allCases.filter((_, index) => boardCounts[index] >= 4)],
     ['五连板及以上.json', allCases.filter((_, index) => boardCounts[index] >= 5)],
   ];
   outputs.forEach(([fileName, cases]) => fs.writeFileSync(
@@ -144,7 +145,7 @@ async function main() {
     `${JSON.stringify(cases, null, 2)}\n`,
     'utf8'
   ));
-  console.log(`全量重算完成：大于30元 ${outputs[0][1].length} 条，小于3元 ${outputs[1][1].length} 条，三连板及以上 ${outputs[2][1].length} 条，五连板及以上 ${outputs[3][1].length} 条，未匹配 ${missing} 条`);
+  console.log(`全量重算完成：大于30元 ${outputs[0][1].length} 条，小于3元 ${outputs[1][1].length} 条，三连板及以上 ${outputs[2][1].length} 条，四连板及以上 ${outputs[3][1].length} 条，五连板及以上 ${outputs[4][1].length} 条，未匹配 ${missing} 条`);
 }
 
 main().catch(error => {

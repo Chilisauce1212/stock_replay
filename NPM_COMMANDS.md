@@ -104,7 +104,21 @@ test-cases/一进二回测_小于30元_20260106_20261231.json
 
 运行前需要启动网站服务 `npm start`。配置 R2 后，生成的文件会同时写入 R2 的 `test-cases/` 目录。
 
-## 5. 筛选闷杀股票
+## 5. 生成四连板及以上数据
+
+```text
+npm run extract-price-cases
+```
+
+该命令会读取三个原始一进二回测文件，查询目标日及后续交易日的历史行情，并在 `test-cases/` 下生成：
+
+```text
+test-cases/四连板及以上.json
+```
+
+同时会重新生成大于 30 元、小于 3 元、三连板及以上和五连板及以上文件。行情查询失败或找不到目标日期的记录不会进入连板筛选结果。
+
+## 6. 筛选闷杀股票
 
 ```text
 npm run filter -- 输入R2 JSON路径 [输入R2 JSON路径 ...]
@@ -118,7 +132,7 @@ npm run filter -- test-cases/一进二回测_小于30元_20240104_20241231.json 
 
 命令会读取所有输入 R2 JSON，合并并去重后，直接查询外部历史行情，筛选出回测日的后一个交易日最高价达到涨停价 `t`、再后一个交易日最高价低于涨停价 `t` 的股票，固定写入 `test-cases/闷杀.json`，不需要启动本地网站服务。
 
-## 6. 生成今日首板数据
+## 7. 生成今日首板数据
 
 ```text
 npm run turnover -- --today
@@ -138,9 +152,9 @@ node turnover_json.js --today
 - 输出到 `daily-review/今日首板.json`，配置 R2 后实际写入 R2 的 `daily-review/今日首板.json`；
 - 如果当天数据已经存在，则跳过，不重复生成。
 
-## 7. 从 R2 恢复所有文件
+## 8. 从 R2 恢复所有文件
 
-## 8. 保持 Render 服务活跃
+## 9. 保持 Render 服务活跃
 
 ```text
 npm run keep-render
@@ -157,7 +171,7 @@ RENDER_KEEPALIVE_INTERVAL_MS=600000
 
 该命令用于减少 Render 因无访问而休眠的情况，不能绕过 Render 平台本身的休眠或配额策略。
 
-## 9. 从 R2 恢复所有文件
+## 10. 从 R2 恢复所有文件
 
 ```text
 npm run download:r2
@@ -183,6 +197,97 @@ node download-r2.js
 
 ```text
 npm run upload
+```
+
+## 11. 查询同花顺股票新闻
+
+接口地址：
+
+```text
+https://news.10jqka.com.cn/timeline_web/web/v1/news/list
+```
+
+第一页请求使用当前时间的毫秒时间戳作为 `offset`：
+
+```text
+https://news.10jqka.com.cn/timeline_web/web/v1/news/list?marketId=33&code=003032&offset=当前毫秒时间戳&size=100
+```
+
+例如：
+
+```text
+https://news.10jqka.com.cn/timeline_web/web/v1/news/list?marketId=33&code=003032&offset=1789700000000&size=100
+```
+
+参数说明：
+
+| 参数 | 示例 | 说明 |
+| --- | --- | --- |
+| `marketId` | `33` | A 股市场使用 `33` |
+| `code` | `003032` | 股票代码 |
+| `offset` | `1789700000000` | 第一页使用当前毫秒时间戳 |
+| `size` | `100` | 每页数量，建议使用 `100` |
+
+接口返回的 `data.offset` 是下一页游标，必须原样传递，不要乘以 `1000` 或自行转换：
+
+```text
+https://news.10jqka.com.cn/timeline_web/web/v1/news/list?marketId=33&code=003032&offset=1785629606.605479&size=100
+```
+
+返回结果按 `publishTime` 倒序排列，`publishTime` 是毫秒时间戳。查询指定日期范围时，持续使用下一页游标，直到最旧新闻早于起始日期，再按时间过滤。例如查询 `003032` 在 2026-09-01 至今的新闻：
+
+```js
+const https = require('https');
+
+function fetchNews(code, startDate) {
+	const startTime = new Date(`${startDate}T00:00:00+08:00`).getTime();
+	const news = [];
+	let offset = Date.now();
+
+	function requestPage() {
+		const url = new URL(
+			'https://news.10jqka.com.cn/timeline_web/web/v1/news/list'
+		);
+
+		url.searchParams.set('marketId', '33');
+		url.searchParams.set('code', code);
+		url.searchParams.set('offset', String(offset));
+		url.searchParams.set('size', '100');
+
+		https.get(url, response => {
+			let body = '';
+
+			response.on('data', chunk => {
+				body += chunk;
+			});
+
+			response.on('end', () => {
+				const result = JSON.parse(body);
+				const list = result.data.newsList || [];
+
+				news.push(...list.filter(item => item.publishTime >= startTime));
+
+				const oldestTime = list.at(-1)?.publishTime || 0;
+
+				if (
+					result.data.hasMore &&
+					oldestTime >= startTime &&
+					result.data.offset
+				) {
+					offset = result.data.offset;
+					requestPage();
+					return;
+				}
+
+				console.log(JSON.stringify(news, null, 2));
+			});
+		});
+	}
+
+	requestPage();
+}
+
+fetchNews('003032', '2026-09-01');
 ```
 
 该命令会上传本地 `test-cases/`、`daily-review/` 下的全部 JSON 文件，以及根目录的 `favorites.json`（如果存在），并覆盖 R2 中的同名对象。
