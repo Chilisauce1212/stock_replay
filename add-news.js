@@ -5,12 +5,9 @@ const path = require('path');
 const axios = require('axios');
 
 const TRADE_DAY_URL = 'https://data.10jqka.com.cn/dataapi/limit_up/trade_day';
-const NEWS_URL = 'https://news.10jqka.com.cn/timeline_web/web/v1/news/list';
-const NOTICE_URL = 'https://stockpage.10jqka.com.cn/stock_page/api/v1/stockpage/notices';
+const TIMELINE_URL = 'https://m.10jqka.com.cn/app/timeline/v2/list';
 const REQUEST_CONCURRENCY = 3;
-const PAGE_SIZE = 100;
-const NOTICE_PAGE_SIZE = 20;
-const REQUEST_INTERVAL_MS = 10;
+const REQUEST_INTERVAL_MS = 100;
 const THS_COOKIE = String(process.env.THS_COOKIE || '').trim();
 let requestQueue = Promise.resolve();
 let nextRequestAt = 0;
@@ -75,7 +72,7 @@ function dayEnd(dateString) {
 
 function createInitialNewsOffset() {
   const fraction = String(Math.floor(Math.random() * 1000000)).padStart(6, '0');
-  return `${Date.now()}.${fraction}`;
+  return `${Math.floor(Date.now() / 1000)}.${fraction}`;
 }
 
 async function getPreviousTradingDays(dateString) {
@@ -91,9 +88,12 @@ async function getPreviousTradingDays(dateString) {
   return previous.slice(-4);
 }
 
-function normalizeNews(item) {
-  const publishTime = Number(item.publishTime);
-  const title = String(item.title || item.newsTitle || item.name || item.summary || '').trim();
+function normalizeTimelineItem(item) {
+  const combination = Array.isArray(item?.combination) ? item.combination : [];
+  const titlePart = combination.find(part => part?.title?.content);
+  const timePart = combination.find(part => Number.isFinite(Number(part?.bottomBar?.time)));
+  const publishTime = Number(timePart?.bottomBar?.time);
+  const title = String(titlePart?.title?.content || '').trim();
   if (!Number.isFinite(publishTime) || !title) return null;
   return { publishTime, title };
 }
@@ -106,80 +106,36 @@ async function fetchNews(code, startDate, endDate) {
 
   for (let page = 0; page < 100; page += 1) {
     await waitForRequestSlot();
-    const response = await axios.get(NEWS_URL, {
-      params: { marketId: getMarketCode(code), code: String(code).padStart(6, '0'), offset, size: PAGE_SIZE },
-      headers: getRequestHeaders('https://news.10jqka.com.cn/'),
+    const marketCode = getMarketCode(code);
+    const stockCode = String(code).padStart(6, '0');
+    const response = await axios.get(`${TIMELINE_URL}/${marketCode}/${stockCode}/${offset}`, {
+      headers: getRequestHeaders('https://m.10jqka.com.cn/'),
       validateStatus: status => status < 500,
       timeout: 15000,
     });
-    if (response.data?.status_code !== 0) {
-      throw new Error(`新闻接口返回异常: HTTP ${response.status}，${response.data?.status_msg || '未知错误'}，GET ${getRequestUrl(response.config)}`);
+    if (response.data?.errorCode !== 0) {
+      throw new Error(`时间线接口返回异常: HTTP ${response.status}，${response.data?.errorMsg || '未知错误'}，GET ${getRequestUrl(response.config)}`);
     }
-    const data = response.data?.data || {};
-    const list = Array.isArray(data.newsList) ? data.newsList : [];
+    const data = response.data || {};
+    const list = Array.isArray(data.pageItems) ? data.pageItems : [];
     list.forEach(item => {
-      const normalized = normalizeNews(item);
+      const normalized = normalizeTimelineItem(item);
       if (normalized && normalized.publishTime >= startTime && normalized.publishTime < endTime) {
         news.push(normalized);
       }
     });
 
-    const oldestTime = Number(list.at(-1)?.publishTime || 0);
+    const oldestTime = Math.min(...list.map(item => {
+      const normalized = normalizeTimelineItem(item);
+      return normalized?.publishTime || Number.POSITIVE_INFINITY;
+    }));
     const nextOffset = data.offset;
     if (!data.hasMore || !list.length || oldestTime < startTime || !nextOffset) break;
     offset = nextOffset;
   }
 
   const unique = new Map(news.map(item => [`${item.publishTime}-${item.title}`, item]));
-  return [...unique.values()].sort((left, right) => left.publishTime - right.publishTime);
-}
-
-function normalizeNotice(item) {
-  const publishTime = Number(item.publishTime);
-  const title = String(item.title || '').trim();
-  if (!Number.isFinite(publishTime) || !title) return null;
-  return { publishTime, title };
-}
-
-async function fetchNotices(code, startDate, endDate) {
-  const startTime = dayStart(startDate);
-  const endTime = dayEnd(endDate);
-  let offset = 'sp.1.XXX';
-  const notices = [];
-
-  for (let page = 0; page < 100; page += 1) {
-    await waitForRequestSlot();
-    const response = await axios.get(NOTICE_URL, {
-      params: {
-        code: String(code).padStart(6, '0'),
-        marketId: getMarketCode(code),
-        size: NOTICE_PAGE_SIZE,
-        noticeCategory: 'all',
-        offset,
-      },
-      headers: getRequestHeaders('https://stockpage.10jqka.com.cn/'),
-      validateStatus: status => status < 500,
-      timeout: 15000,
-    });
-    if (response.data?.status_code !== 0) {
-      throw new Error(`公告接口返回异常: HTTP ${response.status}，${response.data?.status_msg || '未知错误'}，GET ${getRequestUrl(response.config)}`);
-    }
-    const data = response.data?.data || {};
-    const list = Array.isArray(data.noticeList) ? data.noticeList : [];
-    list.forEach(item => {
-      const normalized = normalizeNotice(item);
-      if (normalized && normalized.publishTime >= startTime && normalized.publishTime < endTime) {
-        notices.push(normalized);
-      }
-    });
-
-    const oldestTime = Number(list.at(-1)?.publishTime || 0);
-    const nextOffset = data.offset;
-    if (!data.hasMore || !list.length || oldestTime < startTime || !nextOffset) break;
-    offset = nextOffset;
-  }
-
-  return notices;
+  return [...unique.values()].sort((left, right) => right.publishTime - left.publishTime);
 }
 
 async function enrichCase(item, overwrite) {
@@ -190,14 +146,8 @@ async function enrichCase(item, overwrite) {
   if (previousDays.length < 4) return { ...item, news: [] };
   const startDate = previousDays[0];
   const endDate = date;
-  const [news, notices] = await Promise.all([
-    fetchNews(item.code, startDate, endDate),
-    fetchNotices(item.code, startDate, endDate),
-  ]);
-  const mergedNews = [...new Map(
-    [...news, ...notices].map(entry => [`${entry.publishTime}-${entry.title}`, entry])
-  ).values()].sort((left, right) => left.publishTime - right.publishTime);
-  return { ...item, news: mergedNews };
+  const news = await fetchNews(item.code, startDate, endDate);
+  return { ...item, news };
 }
 
 function resolveInputPath(input) {

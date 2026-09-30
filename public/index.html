@@ -391,6 +391,9 @@
   let currentCaseHasFutureData = true;
   let currentCaseBought = false;
   let currentNews = [];
+  let currentNewsLoading = false;
+  let currentNewsError = '';
+  let currentNewsAbortController = null;
 
   function isDailyReviewSource() {
     return document.getElementById('dataSource').value === 'dailyReview';
@@ -434,10 +437,24 @@
   function updateNewsDisplay() {
     const list = document.getElementById('newsList');
     list.replaceChildren();
+    if (currentNewsLoading) {
+      const loading = document.createElement('div');
+      loading.className = 'news-title';
+      loading.textContent = '正在加载回测日前5个交易日新闻...';
+      list.appendChild(loading);
+      return;
+    }
+    if (currentNewsError) {
+      const failure = document.createElement('div');
+      failure.className = 'news-title';
+      failure.textContent = `实时新闻加载失败: ${currentNewsError}`;
+      list.appendChild(failure);
+      return;
+    }
     if (!currentNews.length) {
       const empty = document.createElement('div');
       empty.className = 'news-title';
-      empty.textContent = '当前股票没有已加载的新闻';
+      empty.textContent = '当前股票在回测日前5个交易日没有新闻';
       list.appendChild(empty);
       return;
     }
@@ -456,14 +473,57 @@
   }
 
   function updateNewsPanel() {
-    currentNews = Array.isArray(activeCase?.news) ? activeCase.news : [];
+    currentNews = [];
+    currentNewsLoading = Boolean(activeCase);
+    currentNewsError = '';
     document.getElementById('newsButton').disabled = !activeCase;
     updateNewsDisplay();
+  }
+
+  function loadCurrentNews(caseItem) {
+    if (currentNewsAbortController) currentNewsAbortController.abort();
+    const controller = new AbortController();
+    currentNewsAbortController = controller;
+    const timeoutId = setTimeout(() => controller.abort(), 30000);
+    fetch(`/api/news?code=${encodeURIComponent(caseItem.code)}&date=${encodeURIComponent(caseItem.date)}&ts=${Date.now()}`, {
+      cache: 'no-store',
+      signal: controller.signal,
+    })
+      .then(async response => {
+        const result = await response.json();
+        if (!response.ok || result.status_code !== 0) {
+          throw new Error(result.msg || `HTTP ${response.status}`);
+        }
+        return result;
+      })
+      .then(result => {
+        if (activeCase !== caseItem) return;
+        currentNews = Array.isArray(result.data)
+          ? result.data.sort((left, right) => Number(right.publishTime) - Number(left.publishTime))
+          : [];
+        currentNewsLoading = false;
+        currentNewsError = '';
+        updateNewsDisplay();
+      })
+      .catch(error => {
+        if (activeCase !== caseItem) return;
+        currentNews = [];
+        currentNewsLoading = false;
+        currentNewsError = error.name === 'AbortError'
+          ? '请求超时，请检查代理和服务是否正常运行'
+          : error.message;
+        updateNewsDisplay();
+      })
+      .finally(() => {
+        clearTimeout(timeoutId);
+        if (currentNewsAbortController === controller) currentNewsAbortController = null;
+      });
   }
 
   function toggleNewsPanel() {
     const panel = document.getElementById('newsPanel');
     panel.hidden = !panel.hidden;
+    if (!panel.hidden) updateNewsDisplay();
   }
 
   function formatAmount(amount) {
@@ -938,8 +998,11 @@
   }
 
   function startNextCase() {
+    if (currentNewsAbortController) currentNewsAbortController.abort();
     document.getElementById('newsPanel').hidden = true;
     currentNews = [];
+    currentNewsLoading = false;
+    currentNewsError = '';
     document.getElementById('newsButton').disabled = !activeCase;
     clearTradeDrawing();
     activeTrade = null;
@@ -951,8 +1014,7 @@
     document.getElementById('nextCaseButton').innerText = '空仓';
     if (casePosition >= shuffledCases.length) {
       activeCase = null;
-      currentNews = [];
-      document.getElementById('newsButton').disabled = true;
+      updateNewsPanel();
       setTestButtons(false);
       document.getElementById('stockNameVal').innerText = '股票名称: --';
       document.getElementById('codeVal').innerText = isDailyReviewSource() ? '每日复盘完成' : '股票代码: --';
@@ -973,6 +1035,7 @@
 
     activeCase = shuffledCases[casePosition];
     updateNewsPanel();
+    loadCurrentNews(activeCase);
   currentCaseBought = false;
     updateFavoriteButton();
     document.getElementById('stockNameVal').innerText = '股票名称: --';

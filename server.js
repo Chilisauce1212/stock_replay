@@ -15,6 +15,9 @@ const FAVORITES_FILE = path.join(__dirname, 'favorites.json');
 const REPLAY_BEFORE_COUNT = 300;
 const REPLAY_AFTER_COUNT = 30;
 const HISTORY_REQUEST_COUNT = 300;
+const TRADE_DAY_URL = 'https://data.10jqka.com.cn/dataapi/limit_up/trade_day';
+const TIMELINE_URL = 'https://m.10jqka.com.cn/app/timeline/v2/list';
+const THS_COOKIE = String(process.env.THS_COOKIE || '').trim();
 const R2_BUCKET = sharedR2Bucket;
 const R2_OBJECT_KEY = process.env.R2_OBJECT_KEY || 'favorites.json';
 const R2_ENDPOINT = process.env.R2_ENDPOINT || (process.env.R2_ACCOUNT_ID
@@ -300,6 +303,121 @@ function getMarketCode(code) {
   if (code.startsWith('8') || code.startsWith('4')) return "151";
   return "33"; // 默认 33
 }
+
+function toDateString(value) {
+  const text = String(value || '').trim();
+  if (/^\d{8}$/.test(text)) return `${text.slice(0, 4)}-${text.slice(4, 6)}-${text.slice(6, 8)}`;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return text;
+  return '';
+}
+
+function dayStart(dateString) {
+  return new Date(`${dateString}T00:00:00+08:00`).getTime();
+}
+
+function dayEnd(dateString) {
+  return dayStart(dateString) + 24 * 60 * 60 * 1000;
+}
+
+function createTimelineOffset(dateString) {
+  const fraction = String(Math.floor(Math.random() * 1000000)).padStart(6, '0');
+  return `${Math.floor(dayEnd(dateString) / 1000)}.${fraction}`;
+}
+
+async function getNewsDateRange(dateString) {
+  const response = await axios.get(TRADE_DAY_URL, {
+    params: {
+      date: dateString.replaceAll('-', ''),
+      stock: 'stock',
+      next: 1,
+      prev: 5,
+    },
+    headers: {
+      'User-Agent': 'Mozilla/5.0',
+      Referer: 'https://data.10jqka.com.cn/',
+      ...(THS_COOKIE ? { Cookie: THS_COOKIE } : {}),
+    },
+    timeout: 15000,
+  });
+  const data = response.data?.status_code === 0 ? response.data.data : null;
+  const previousDates = Array.isArray(data?.prev_dates)
+    ? data.prev_dates.map(toDateString).filter(Boolean)
+    : [];
+  if (!data?.trade_day || previousDates.length < 4) {
+    throw new Error('交易日历不足，无法确定5个交易日范围');
+  }
+  return {
+    startDate: previousDates[previousDates.length - 4],
+    endDate: dateString,
+  };
+}
+
+function normalizeTimelineItem(item) {
+  const combination = Array.isArray(item?.combination) ? item.combination : [];
+  const titlePart = combination.find(part => part?.title?.content);
+  const timePart = combination.find(part => Number.isFinite(Number(part?.bottomBar?.time)));
+  const publishTime = Number(timePart?.bottomBar?.time);
+  const title = String(titlePart?.title?.content || '').trim();
+  if (!Number.isFinite(publishTime) || !title) return null;
+  return { publishTime, title };
+}
+
+async function fetchTimeline(code, startDate, endDate) {
+  const marketCode = getMarketCode(code);
+  const stockCode = String(code).padStart(6, '0');
+  let offset = createTimelineOffset(endDate);
+  const news = [];
+  const startTime = dayStart(startDate);
+  const endTime = dayEnd(endDate);
+
+  for (let page = 0; page < 100; page += 1) {
+    const response = await axios.get(`${TIMELINE_URL}/${marketCode}/${stockCode}/${offset}`, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0',
+        Referer: 'https://m.10jqka.com.cn/',
+        ...(THS_COOKIE ? { Cookie: THS_COOKIE } : {}),
+      },
+      timeout: 15000,
+      validateStatus: status => status < 500,
+    });
+    if (response.data?.errorCode !== 0) {
+      throw new Error(response.data?.errorMsg || `HTTP ${response.status}`);
+    }
+    const data = response.data || {};
+    const list = Array.isArray(data.pageItems) ? data.pageItems : [];
+    const normalizedItems = list.map(normalizeTimelineItem).filter(Boolean);
+    normalizedItems.forEach(item => {
+      if (item.publishTime >= startTime && item.publishTime < endTime) news.push(item);
+    });
+    const oldestTime = normalizedItems.length
+      ? Math.min(...normalizedItems.map(item => item.publishTime))
+      : Number.POSITIVE_INFINITY;
+    const nextOffset = data.offset;
+    if (!data.hasMore || !list.length || oldestTime < startTime || !nextOffset) break;
+    offset = nextOffset;
+  }
+
+  return [...new Map(news.map(item => [`${item.publishTime}-${item.title}`, item])).values()]
+    .sort((left, right) => right.publishTime - left.publishTime);
+}
+
+app.get('/api/news', async (req, res) => {
+  const code = String(req.query.code || '').trim();
+  const date = toDateString(req.query.date);
+  if (!/^\d{6}$/.test(code) || !date) {
+    return res.status(400).json({ status_code: -1, msg: '股票代码或回测日期格式无效' });
+  }
+
+  try {
+    const { startDate, endDate } = await getNewsDateRange(date);
+    const news = await fetchTimeline(code, startDate, endDate);
+    res.set('Cache-Control', 'no-store');
+    res.json({ status_code: 0, code, startDate, endDate, data: news });
+  } catch (error) {
+    console.error(`实时新闻查询失败 ${code}: ${error.message}`);
+    res.status(502).json({ status_code: -1, msg: `实时新闻获取失败: ${error.message}` });
+  }
+});
 
 async function fetchThsKlineData(code = "000620", cutoffDate) {
   const url = 'https://quota-h.10jqka.com.cn/fuyao/common_hq_aggr/quote/v1/single_kline';
