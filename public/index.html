@@ -36,13 +36,19 @@
       box-sizing: border-box;
     }
     .container {
-      width: min(1100px, 100%);
+      width: min(1600px, 100%);
       max-width: 100%;
       min-width: 0;
       margin: 0 auto;
       height: calc(100dvh - clamp(16px, 4vw, 32px));
       display: flex;
       flex-direction: column;
+    }
+    @media (min-width: 901px) {
+      .container {
+        width: 100%;
+        max-width: none;
+      }
     }
     .workspace {
       min-height: 0;
@@ -372,6 +378,7 @@
 <script>
   let fullData = [];
   let currentIndex = 0; // 当前推演到的索引位置
+  const DEFAULT_VISIBLE_CANDLE_COUNT = 120;
   
   let chart, candlestickSeries, volumeSeries, ma5Series, ma10Series, ma20Series;
   let priceLine = null;
@@ -634,7 +641,7 @@
       handleScale: {
         mouseWheel: true,
         pinch: true,
-        axisPressedMouseMove: true,
+        axisPressedMouseMove: false,
         axisDoubleClickReset: true,
       },
     });
@@ -656,6 +663,7 @@
 
     // 【关键配置 1】：设置 K 线主 Y 轴 (right)，底部留出 30% 的空间给成交量
     chart.priceScale('right').applyOptions({
+      autoScale: true,
       scaleMargins: {
         top: 0.05,   // 顶部留白 5%
         bottom: 0.3, // 底部留白 30%（K线不会落入底部30%的成交量区域）
@@ -691,6 +699,7 @@
 
     // 【关键配置 2】：设置成交量专属 Y 轴的高度比例与隐藏数字
     chart.priceScale('volume').applyOptions({
+      autoScale: true,
       scaleMargins: {
         top: 0.8,   // 顶部留白 80% -> 即成交量最高只占底部 20% 高度
         bottom: 0,
@@ -715,7 +724,6 @@
   // 核心更新逻辑：将数据写入各个 Series
   function updateChartData() {
     const displayData = fullData.slice(0, currentIndex);
-    const visibleCount = 100;
 
     if (displayData.length === 0) return;
 
@@ -777,7 +785,7 @@
 
     // 【修正缩放】：使用 setVisibleRange 代替 Range index
     if (candles.length > 0) {
-      const startIndex = Math.max(0, candles.length - visibleCount);
+      const startIndex = Math.max(0, candles.length - DEFAULT_VISIBLE_CANDLE_COUNT);
       chart.timeScale().setVisibleRange({
         from: candles[startIndex].time,
         to: candles[candles.length - 1].time,
