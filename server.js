@@ -9,6 +9,7 @@ const { S3Client, GetObjectCommand, PutObjectCommand } = require('@aws-sdk/clien
 const { r2Client: sharedR2Client, R2_BUCKET: sharedR2Bucket, readJson, writeJson, listJsonKeys } = require('./r2-storage');
 const app = express();
 const PORT = process.env.PORT || 3000;
+const USE_LOCAL_JSON = process.env.USE_LOCAL_JSON !== 'false';
 const DAILY_REVIEW_DIR = path.join(__dirname, 'daily-review');
 const TEST_CASE_DIR = path.join(__dirname, 'test-cases');
 const FAVORITES_FILE = path.join(__dirname, 'favorites.json');
@@ -152,7 +153,7 @@ function listLocalJson(directory) {
 }
 
 async function parseDailyReview(fileName) {
-  if (sharedR2Client && fileName.toLowerCase().endsWith('.json')) {
+  if (!USE_LOCAL_JSON && sharedR2Client && fileName.toLowerCase().endsWith('.json')) {
     const key = safeDailyReviewKey(fileName);
     if (!key) throw new Error('测试用例文件名不合法');
     const data = await readJson(key);
@@ -185,7 +186,7 @@ async function parseTestCases(fileName) {
     if (!Array.isArray(localData)) throw new Error('JSON 测试用例格式错误');
     return localData;
   }
-  if (sharedR2Client && fileName.toLowerCase().endsWith('.json')) {
+  if (!USE_LOCAL_JSON && sharedR2Client && fileName.toLowerCase().endsWith('.json')) {
     const key = safeTestCaseKey(fileName);
     if (!key) throw new Error('测试用例文件名不合法');
     const data = await readJson(key);
@@ -208,7 +209,7 @@ async function parseTestCases(fileName) {
 app.get('/api/daily-review', async (req, res) => {
   try {
     let files;
-    if (sharedR2Client) {
+    if (!USE_LOCAL_JSON && sharedR2Client) {
       const keys = await listJsonKeys('daily-review/');
       files = keys.map(key => key.slice('daily-review/'.length));
     } else {
@@ -324,6 +325,30 @@ function createTimelineOffset(dateString) {
   return `${Math.floor(dayEnd(dateString) / 1000)}.${fraction}`;
 }
 
+function collectCombinationFieldValues(value, fieldName, results = []) {
+  if (Array.isArray(value)) {
+    value.forEach(child => collectCombinationFieldValues(child, fieldName, results));
+    return results;
+  }
+  if (!value || typeof value !== 'object') return results;
+
+  Object.entries(value).forEach(([key, child]) => {
+    if (key === fieldName) {
+      if (fieldName === 'time' && (typeof child === 'string' || typeof child === 'number')) {
+        results.push(String(child).trim());
+      } else if (fieldName === 'title' && typeof child === 'string') {
+        results.push(child.trim());
+      } else if (fieldName === 'title' && child && typeof child === 'object') {
+        ['content', 'text', 'value'].forEach(textKey => {
+          if (typeof child[textKey] === 'string') results.push(child[textKey].trim());
+        });
+      }
+    }
+    collectCombinationFieldValues(child, fieldName, results);
+  });
+  return results;
+}
+
 async function getNewsDateRange(dateString) {
   const response = await axios.get(TRADE_DAY_URL, {
     params: {
@@ -354,10 +379,11 @@ async function getNewsDateRange(dateString) {
 
 function normalizeTimelineItem(item) {
   const combination = Array.isArray(item?.combination) ? item.combination : [];
-  const titlePart = combination.find(part => part?.title?.content);
-  const timePart = combination.find(part => Number.isFinite(Number(part?.bottomBar?.time)));
-  const publishTime = Number(timePart?.bottomBar?.time);
-  const title = String(titlePart?.title?.content || '').trim();
+  const titles = collectCombinationFieldValues(combination, 'title').filter(Boolean);
+  const title = [...new Set(titles)].join(' ').trim();
+  const time = collectCombinationFieldValues(combination, 'time')
+    .find(value => Number.isFinite(Number(value)));
+  const publishTime = Number(time);
   if (!Number.isFinite(publishTime) || !title) return null;
   return { publishTime, title };
 }
@@ -610,7 +636,7 @@ app.listen(PORT, () => {
 
 app.get('/api/test-cases', async (req, res) => {
   try {
-    const files = sharedR2Client
+    const files = !USE_LOCAL_JSON && sharedR2Client
       ? (await listJsonKeys('test-cases/')).map(key => key.slice('test-cases/'.length))
       : listLocalJson(TEST_CASE_DIR);
     res.json({ status_code: 0, files });

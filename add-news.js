@@ -75,6 +75,30 @@ function createInitialNewsOffset() {
   return `${Math.floor(Date.now() / 1000)}.${fraction}`;
 }
 
+function collectCombinationFieldValues(value, fieldName, results = []) {
+  if (Array.isArray(value)) {
+    value.forEach(child => collectCombinationFieldValues(child, fieldName, results));
+    return results;
+  }
+  if (!value || typeof value !== 'object') return results;
+
+  Object.entries(value).forEach(([key, child]) => {
+    if (key === fieldName) {
+      if (fieldName === 'time' && (typeof child === 'string' || typeof child === 'number')) {
+        results.push(String(child).trim());
+      } else if (fieldName === 'title' && typeof child === 'string') {
+        results.push(child.trim());
+      } else if (fieldName === 'title' && child && typeof child === 'object') {
+        ['content', 'text', 'value'].forEach(textKey => {
+          if (typeof child[textKey] === 'string') results.push(child[textKey].trim());
+        });
+      }
+    }
+    collectCombinationFieldValues(child, fieldName, results);
+  });
+  return results;
+}
+
 async function getPreviousTradingDays(dateString) {
   await waitForRequestSlot();
   const response = await axios.get(TRADE_DAY_URL, {
@@ -90,10 +114,11 @@ async function getPreviousTradingDays(dateString) {
 
 function normalizeTimelineItem(item) {
   const combination = Array.isArray(item?.combination) ? item.combination : [];
-  const titlePart = combination.find(part => part?.title?.content);
-  const timePart = combination.find(part => Number.isFinite(Number(part?.bottomBar?.time)));
-  const publishTime = Number(timePart?.bottomBar?.time);
-  const title = String(titlePart?.title?.content || '').trim();
+  const titles = collectCombinationFieldValues(combination, 'title').filter(Boolean);
+  const title = [...new Set(titles)].join(' ').trim();
+  const time = collectCombinationFieldValues(combination, 'time')
+    .find(value => Number.isFinite(Number(value)));
+  const publishTime = Number(time);
   if (!Number.isFinite(publishTime) || !title) return null;
   return { publishTime, title };
 }

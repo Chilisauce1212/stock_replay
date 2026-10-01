@@ -57,7 +57,13 @@ http://localhost:3000
 
 如果 Render 或其他平台提供了 `PORT` 环境变量，服务器会自动使用该端口。
 
-启动前需要配置 R2 环境变量，具体见 [R2_SETUP.md](R2_SETUP.md)。本地开发时，如果没有配置 R2，程序会回退使用本地文件。
+`npm start` 默认从项目本地的 `daily-review/`、`test-cases/` 和其他本地 JSON 文件读取数据，即使 `.env` 中配置了 R2 也不会切换数据源。需要使用 R2 数据时，显式设置：
+
+```dotenv
+USE_LOCAL_JSON=false
+```
+
+R2 环境变量配置见 [R2_SETUP.md](R2_SETUP.md)。收藏数据仍可按服务端配置使用本地文件或 R2。
 
 ## 3. 运行回测数据生成脚本
 
@@ -159,6 +165,8 @@ npm run add-news -- test-cases/输入文件.json
 ```
 
 命令会遍历输入 JSON 的每条股票记录，按记录的 `date` 查询“前 4 个交易日 + 回测日”共 5 个交易日的数据，并分页获取同花顺新闻和股票公告，将两者按发布时间合并写入该记录的 `news` 数组。命令只修改本地 JSON 文件，不写入 R2；原有 `code`、`date` 等字段保持不变。
+
+新闻时间线会递归检查 `combination` 的所有层级；标题只采集字符串，时间戳支持数字或数字字符串。
 
 脚本对外部接口使用全局频率限制，相邻请求至少间隔 10ms。
 
@@ -357,6 +365,10 @@ npm audit fix
 ```
 
 执行后应检查 [package.json](package.json) 和 [package-lock.json](package-lock.json) 是否发生变化，并重新运行项目验证兼容性。
+
+## 提交前约定
+
+每次 `git commit` 前，都要同步检查并更新相关 Markdown 文档，至少确认命令、配置项、数据来源和使用说明与当前代码一致。完成文档更新后，再执行语法检查、功能验证和提交。
 
 ## 常用首次配置流程
 
