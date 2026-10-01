@@ -9,7 +9,7 @@ const { S3Client, GetObjectCommand, PutObjectCommand } = require('@aws-sdk/clien
 const { r2Client: sharedR2Client, R2_BUCKET: sharedR2Bucket, readJson, writeJson, listJsonKeys } = require('./r2-storage');
 const app = express();
 const PORT = process.env.PORT || 3000;
-const USE_LOCAL_JSON = process.env.USE_LOCAL_JSON !== 'false';
+const USE_LOCAL_JSON = process.env.USE_LOCAL_JSON === 'true';
 const DAILY_REVIEW_DIR = path.join(__dirname, 'daily-review');
 const TEST_CASE_DIR = path.join(__dirname, 'test-cases');
 const FAVORITES_FILE = path.join(__dirname, 'favorites.json');

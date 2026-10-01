@@ -57,13 +57,13 @@ http://localhost:3000
 
 如果 Render 或其他平台提供了 `PORT` 环境变量，服务器会自动使用该端口。
 
-`npm start` 默认从项目本地的 `daily-review/`、`test-cases/` 和其他本地 JSON 文件读取数据，即使 `.env` 中配置了 R2 也不会切换数据源。需要使用 R2 数据时，显式设置：
+`npm start` 默认从 R2 读取 `daily-review/` 和 `test-cases/` 数据，适合 Render 部署。需要使用项目本地 JSON 时，显式设置：
 
 ```dotenv
-USE_LOCAL_JSON=false
+USE_LOCAL_JSON=true
 ```
 
-R2 环境变量配置见 [R2_SETUP.md](R2_SETUP.md)。收藏数据仍可按服务端配置使用本地文件或 R2。
+R2 环境变量配置见 [R2_SETUP.md](R2_SETUP.md)。本地 JSON 模式只在 `USE_LOCAL_JSON=true` 时启用；收藏数据仍可按服务端配置使用本地文件或 R2。
 
 ## 3. 运行回测数据生成脚本
 
