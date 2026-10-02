@@ -601,6 +601,7 @@ app.get('/api/kline', async (req, res) => {
     : rawCutoffDate || undefined;
 
   try {
+    res.set('Cache-Control', 'no-store');
     const rawValues = await fetchThsKlineData(code, cutoffDate);
     const allProcessedData = processThsValues(rawValues);
     let processedData = allProcessedData;

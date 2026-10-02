@@ -551,6 +551,59 @@
     return result;
   }
 
+  function getProgressStorageKey() {
+    const source = document.getElementById('dataSource').value;
+    const fileName = document.getElementById('testCaseFile').value;
+    return fileName ? `kline-replay-progress:${source}:${fileName}` : '';
+  }
+
+  function saveProgressCheckpoint() {
+    const key = getProgressStorageKey();
+    if (!key || !shuffledCases.length) return;
+    const checkpointPosition = caseResolved ? casePosition + 1 : casePosition;
+    if (checkpointPosition === 0 && successCount === 0 && failureCount === 0 && !boughtStockNames.length) {
+      localStorage.removeItem(key);
+      return;
+    }
+    try {
+      localStorage.setItem(key, JSON.stringify({
+        shuffledCases,
+        // 已结算的用例下次直接从下一条开始，避免 iPhone 被挂起后重复计数。
+        casePosition: checkpointPosition,
+        successCount,
+        failureCount,
+        boughtStockNames,
+        savedAt: new Date().toISOString(),
+      }));
+    } catch (error) {
+      console.warn('保存回测进度失败:', error.message);
+    }
+  }
+
+  function readProgressCheckpoint() {
+    const key = getProgressStorageKey();
+    if (!key) return null;
+    try {
+      const saved = JSON.parse(localStorage.getItem(key) || 'null');
+      if (!saved || !Array.isArray(saved.shuffledCases) || !saved.shuffledCases.length) return null;
+      if (Number(saved.casePosition) === 0 && !Number(saved.successCount) && !Number(saved.failureCount)
+        && (!Array.isArray(saved.boughtStockNames) || !saved.boughtStockNames.length)) {
+        localStorage.removeItem(key);
+        return null;
+      }
+      return saved;
+    } catch (error) {
+      console.warn('读取回测进度失败:', error.message);
+      return null;
+    }
+  }
+
+  function clearProgressCheckpoint() {
+    const key = getProgressStorageKey();
+    if (!key) return;
+    localStorage.removeItem(key);
+  }
+
   function setTestButtons(enabled) {
     document.getElementById('buyButton').disabled = !enabled;
     document.getElementById('nextCaseButton').disabled = !activeCase || (!enabled && !caseResolved);
@@ -561,6 +614,7 @@
     document.getElementById('failureCount').innerText = failureCount;
     document.getElementById('totalCount').innerText = `${Math.min(casePosition + 1, shuffledCases.length)}/${shuffledCases.length}`;
     document.getElementById('dailyRecordStatus').innerText = currentCaseBought ? ' 已加入记录' : '';
+    saveProgressCheckpoint();
   }
 
   function clearTradeDrawing() {
@@ -918,12 +972,23 @@
           return;
         }
         testCases = res.data;
-        shuffledCases = shuffle(testCases);
-        casePosition = 0;
-        successCount = 0;
-        failureCount = 0;
+        const savedProgress = readProgressCheckpoint();
+        const resume = savedProgress && confirm(`检测到未完成的回测进度（${savedProgress.casePosition}/${savedProgress.shuffledCases.length}），是否继续？`);
+        if (resume) {
+          shuffledCases = savedProgress.shuffledCases;
+          casePosition = Math.min(Number(savedProgress.casePosition) || 0, shuffledCases.length);
+          successCount = Number(savedProgress.successCount) || 0;
+          failureCount = Number(savedProgress.failureCount) || 0;
+          boughtStockNames = Array.isArray(savedProgress.boughtStockNames) ? savedProgress.boughtStockNames : [];
+        } else {
+          if (savedProgress) clearProgressCheckpoint();
+          shuffledCases = shuffle(testCases);
+          casePosition = 0;
+          successCount = 0;
+          failureCount = 0;
+          boughtStockNames = [];
+        }
         activeTrade = null;
-        boughtStockNames = [];
         currentCaseBought = false;
         currentCaseHasFutureData = true;
         updateSourceMode();
@@ -1021,6 +1086,7 @@
     updateSourceMode();
     document.getElementById('nextCaseButton').innerText = '空仓';
     if (casePosition >= shuffledCases.length) {
+      clearProgressCheckpoint();
       activeCase = null;
       updateNewsPanel();
       setTestButtons(false);
@@ -1052,7 +1118,9 @@
     setTestButtons(false);
     setDailyReviewButtons();
 
-    fetch(`/api/kline?code=${activeCase.code}&cutoffDate=${activeCase.date}`)
+    fetch(`/api/kline?code=${encodeURIComponent(activeCase.code)}&cutoffDate=${encodeURIComponent(activeCase.date)}`, {
+      cache: 'no-store',
+    })
       .then(res => res.json())
       .then(res => {
         if (res.status_code !== 0 || !res.data.length) {
@@ -1174,6 +1242,7 @@
   }
 
   window.addEventListener('pointerdown', requestLandscape, { once: true });
+  window.addEventListener('pagehide', saveProgressCheckpoint);
 
   function nextStep() {
     if (currentIndex < fullData.length && currentCaseHasFutureData) {
