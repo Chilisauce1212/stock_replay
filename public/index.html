@@ -542,19 +542,14 @@
     return `成交金额: ${(value / 1e8).toFixed(2)}亿`;
   }
 
-  function shuffle(items) {
-    const result = [...items];
-    for (let i = result.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [result[i], result[j]] = [result[j], result[i]];
-    }
-    return result;
+  function sortCasesByDate(items) {
+    return [...items].sort((left, right) => String(left.date || '').localeCompare(String(right.date || '')));
   }
 
   function getProgressStorageKey() {
     const source = document.getElementById('dataSource').value;
     const fileName = document.getElementById('testCaseFile').value;
-    return fileName ? `kline-replay-progress:${source}:${fileName}` : '';
+    return fileName ? `kline-replay-progress:v2:${source}:${fileName}` : '';
   }
 
   function saveProgressCheckpoint() {
@@ -982,7 +977,7 @@
           boughtStockNames = Array.isArray(savedProgress.boughtStockNames) ? savedProgress.boughtStockNames : [];
         } else {
           if (savedProgress) clearProgressCheckpoint();
-          shuffledCases = shuffle(testCases);
+          shuffledCases = sortCasesByDate(testCases);
           casePosition = 0;
           successCount = 0;
           failureCount = 0;
