@@ -336,6 +336,8 @@ function collectCombinationFieldValues(value, fieldName, results = []) {
     if (key === fieldName) {
       if (fieldName === 'time' && (typeof child === 'string' || typeof child === 'number')) {
         results.push(String(child).trim());
+      } else if (fieldName === 'recommendType' && (typeof child === 'string' || typeof child === 'number')) {
+        results.push(String(child).trim());
       } else if (fieldName === 'title' && typeof child === 'string') {
         results.push(child.trim());
       } else if (fieldName === 'title' && child && typeof child === 'object') {
@@ -383,9 +385,40 @@ function normalizeTimelineItem(item) {
   const title = [...new Set(titles)].join(' ').trim();
   const time = collectCombinationFieldValues(combination, 'time')
     .find(value => Number.isFinite(Number(value)));
+  const recommendType = collectCombinationFieldValues(combination, 'recommendType')
+    .map(value => Number(value))
+    .find(Number.isFinite);
   const publishTime = Number(time);
   if (!Number.isFinite(publishTime) || !title) return null;
-  return { publishTime, title };
+  return {
+    publishTime,
+    title,
+    jumpUrl: typeof item?.info?.jumpUrl === 'string' ? item.info.jumpUrl : '',
+    isPinned: recommendType === 2,
+  };
+}
+
+async function fetchPinnedTimeline(code, date) {
+  const marketCode = getMarketCode(code);
+  const stockCode = String(code).padStart(6, '0');
+  const response = await axios.get(`${TIMELINE_URL}/${marketCode}/${stockCode}/first`, {
+    headers: {
+      'User-Agent': 'Mozilla/5.0',
+      Referer: 'https://m.10jqka.com.cn/',
+      ...(THS_COOKIE ? { Cookie: THS_COOKIE } : {}),
+    },
+    timeout: 15000,
+    validateStatus: status => status < 500,
+  });
+  if (response.data?.errorCode !== 0) {
+    throw new Error(response.data?.errorMsg || `HTTP ${response.status}`);
+  }
+  const startTime = dayStart(date);
+  const endTime = dayEnd(date);
+  const list = Array.isArray(response.data?.pageItems) ? response.data.pageItems : [];
+  return list
+    .map(normalizeTimelineItem)
+    .filter(item => item?.isPinned && item.publishTime >= startTime && item.publishTime < endTime);
 }
 
 async function fetchTimeline(code, startDate, endDate) {
@@ -436,7 +469,20 @@ app.get('/api/news', async (req, res) => {
 
   try {
     const { startDate, endDate } = await getNewsDateRange(date);
-    const news = await fetchTimeline(code, startDate, endDate);
+    const [timelineNews, pinnedNews] = await Promise.all([
+      fetchTimeline(code, startDate, endDate),
+      fetchPinnedTimeline(code, endDate).catch(error => {
+        console.error(`临时置顶新闻查询失败 ${code}: ${error.message}`);
+        return [];
+      }),
+    ]);
+    const seen = new Set();
+    const news = [...pinnedNews, ...timelineNews].filter(item => {
+      const key = `${item.publishTime}-${item.title}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
     res.set('Cache-Control', 'no-store');
     res.json({ status_code: 0, code, startDate, endDate, data: news });
   } catch (error) {

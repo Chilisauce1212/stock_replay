@@ -186,6 +186,8 @@ npm run add-news -- --overwrite test-cases/输入文件.json
 
 页面加载带有 `news` 的回测文件后，点击图表上方 legend 右侧的“新闻”按钮，可以打开半透明新闻面板，通过手机上下滑动或电脑滚轮/右侧滚动条查看新闻和公告；再次点击按钮关闭。
 
+`daily-review` 页面通过 `/api/news?code=股票代码&date=回测日期` 查询实时新闻。除历史分页接口外，服务端还会请求同花顺 `https://m.10jqka.com.cn/app/timeline/v2/list/{market}/{code}/first`，筛选回测日的 `recommendType: 2` 临时置顶新闻并放在列表最前。这些新闻返回时带有 `isPinned: true`，页面会额外显示“置顶”标记；`first` 接口失败时仍会返回历史新闻。
+
 ## 9. 从 R2 恢复所有文件
 
 ## 9. 保持 Render 服务活跃

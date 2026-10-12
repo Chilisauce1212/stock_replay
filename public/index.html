@@ -173,6 +173,7 @@
     .news-item { padding-bottom: 9px; border-bottom: 1px solid #2b3440; }
     .news-date { color: #f0b90b; font-family: monospace; }
     .news-title { margin: 4px 0 0; color: #f2f4f7; line-height: 1.45; }
+    .news-pin { display: inline-block; margin-right: 6px; padding: 1px 5px; border: 1px solid #f0b90b; border-radius: 3px; color: #f0b90b; font-size: 12px; line-height: 1.3; vertical-align: 1px; }
     .test-panel {
       min-height: 0;
       min-width: 0;
@@ -473,7 +474,13 @@
       date.textContent = formatNewsDate(item.publishTime);
       const title = document.createElement('p');
       title.className = 'news-title';
-      title.textContent = item.title || '无标题';
+      if (item.isPinned) {
+        const pin = document.createElement('span');
+        pin.className = 'news-pin';
+        pin.textContent = '置顶';
+        title.appendChild(pin);
+      }
+      title.append(document.createTextNode(item.title || '无标题'));
       article.append(date, title);
       list.appendChild(article);
     });
@@ -506,7 +513,10 @@
       .then(result => {
         if (activeCase !== caseItem) return;
         currentNews = Array.isArray(result.data)
-          ? result.data.sort((left, right) => Number(right.publishTime) - Number(left.publishTime))
+          ? result.data.sort((left, right) => (
+            Number(Boolean(right.isPinned)) - Number(Boolean(left.isPinned))
+            || Number(right.publishTime) - Number(left.publishTime)
+          ))
           : [];
         currentNewsLoading = false;
         currentNewsError = '';
