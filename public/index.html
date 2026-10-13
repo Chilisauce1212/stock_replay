@@ -144,6 +144,129 @@
       flex: 0 0 auto;
       position: relative;
     }
+    #reviewWheelToggle {
+      position: absolute;
+      z-index: 7;
+      top: 38px;
+      left: 8px;
+      padding: 5px 9px;
+      background: rgba(17, 20, 25, 0.92);
+      color: #f0b90b;
+    }
+    #reviewStockWheel {
+      position: absolute;
+      z-index: 7;
+      top: 76px;
+      left: 8px;
+      width: min(240px, calc(100vw - 32px));
+      padding: 9px;
+      box-sizing: border-box;
+      border: 1px solid #526176;
+      background: rgba(17, 20, 25, 0.96);
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+      display: flex;
+      flex-direction: column;
+      max-height: calc(100% - 84px);
+    }
+    #reviewDateButton {
+      flex: 1 1 0;
+      width: 100%;
+      min-width: 0;
+      height: auto;
+      padding: 6px 10px;
+      font-size: 14px;
+      color: #fff;
+    }
+    #reviewCalendar {
+      position: fixed;
+      z-index: 8;
+      top: 0;
+      left: 0;
+      width: min(280px, calc(100vw - 32px));
+      padding: 9px;
+      box-sizing: border-box;
+      border: 1px solid #526176;
+      background: rgba(17, 20, 25, 0.97);
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+    }
+    #reviewCalendar[hidden] { display: none; }
+    .review-calendar-head {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+      margin-bottom: 8px;
+    }
+    .review-calendar-head select { flex: 1 1 0; min-width: 0; padding: 4px 6px; }
+    .review-calendar-head button { padding: 2px 9px; }
+    .review-calendar-grid {
+      display: grid;
+      grid-template-columns: repeat(7, 1fr);
+      gap: 3px;
+      text-align: center;
+    }
+    .review-calendar-weekday { color: #7d8794; font-size: 12px; padding: 3px 0; }
+    .review-calendar-day {
+      padding: 6px 0;
+      border-radius: 3px;
+      font-size: 13px;
+      font-weight: normal;
+      color: #fff;
+    }
+    .review-calendar-day:disabled {
+      color: #4a515b;
+      background: transparent;
+      border-color: transparent;
+      cursor: not-allowed;
+    }
+    .review-calendar-day.is-done:not(:disabled) { color: #7d8794; }
+    .review-calendar-day.is-selected { background: #f0b90b; color: #111; border-color: #f0b90b; font-weight: bold; }
+    #reviewStockWheel[hidden],
+    #reviewWheelToggle[hidden] { display: none; }
+    .review-wheel-heading {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 7px;
+      color: #f0b90b;
+      font-size: 13px;
+    }
+    .review-wheel-heading button {
+      padding: 2px 7px;
+    }
+    #reviewWheelList {
+      flex: 1 1 auto;
+      min-height: 0;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      overscroll-behavior: contain;
+      touch-action: pan-y;
+      -webkit-overflow-scrolling: touch;
+      scrollbar-width: thin;
+      scrollbar-color: #526176 transparent;
+    }
+    .review-wheel-item {
+      display: block;
+      flex: 0 0 40px;
+      width: 100%;
+      height: 40px;
+      padding: 0 8px;
+      overflow: hidden;
+      border: 0;
+      border-radius: 0;
+      background: transparent;
+      color: #aeb8c5;
+      font-size: 14px;
+      font-weight: normal;
+      text-align: center;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .review-wheel-item.is-current {
+      border-block: 1px solid #f0b90b;
+      color: #f0b90b;
+      font-weight: bold;
+    }
     #newsButton {
       margin-left: auto;
       padding: 2px 7px;
@@ -350,6 +473,7 @@
         <select id="favoriteGroup" aria-label="收藏分组" onchange="updateFavoriteButton()"></select>
         <input id="newFavoriteGroup" type="text" placeholder="新建分组">
         <button id="favoriteButton" type="button" onclick="toggleFavorite()" aria-label="添加收藏" title="添加收藏">☆</button>
+        <button id="reviewDateButton" type="button" hidden aria-haspopup="true" aria-expanded="false" aria-label="选择复盘日期" onclick="toggleReviewCalendar()">选择日期</button>
       </div>
       <div class="test-actions">
         <button id="buyButton" onclick="buyAtCurrentCandle()" disabled>买入</button>
@@ -359,6 +483,23 @@
     </div>
 
     <div class="chart-area">
+      <button id="reviewWheelToggle" type="button" hidden aria-expanded="false" aria-controls="reviewStockWheel" onclick="toggleReviewWheel()">选择股票</button>
+      <div id="reviewCalendar" hidden>
+        <div class="review-calendar-head">
+          <button type="button" id="reviewCalendarPrev" aria-label="上个月" onclick="shiftReviewCalendarMonth(-1)">‹</button>
+          <select id="reviewCalendarYear" aria-label="年" onchange="changeReviewCalendarView()"></select>
+          <select id="reviewCalendarMonth" aria-label="月" onchange="changeReviewCalendarView()"></select>
+          <button type="button" id="reviewCalendarNext" aria-label="下个月" onclick="shiftReviewCalendarMonth(1)">›</button>
+        </div>
+        <div class="review-calendar-grid" id="reviewCalendarGrid"></div>
+      </div>
+      <div id="reviewStockWheel" hidden>
+        <div class="review-wheel-heading">
+          <span>点击股票跳转</span>
+          <button type="button" aria-label="收起股票选择" onclick="toggleReviewWheel(false)">收起</button>
+        </div>
+        <div id="reviewWheelList"></div>
+      </div>
       <div class="legend">
         <span id="codeVal" style="color: #f0b90b;">股票代码: --</span>
         <span id="dateVal" style="color: #fff;">日期: --</span>
@@ -396,6 +537,14 @@
   let failureCount = 0;
   let favoriteSaved = false;
   let boughtStockNames = [];
+  let selectedReviewDate = '';
+  let reviewDates = [];
+  let skippedReviewCaseIds = new Set();
+  let boughtReviewCaseIds = new Set();
+  let keepReviewPosition = false;
+  let pendingCaseNotice = '';
+  let calendarYear = 0;
+  let calendarMonth = 1;
   let currentCaseHasFutureData = true;
   let currentCaseBought = false;
   let currentNews = [];
@@ -418,10 +567,18 @@
     document.querySelector('.test-panel').classList.toggle('daily-review-mode', dailyReview);
     document.getElementById('successBoard').style.display = dailyReview ? 'none' : '';
     document.getElementById('failureBoard').style.display = dailyReview ? 'none' : '';
-    document.getElementById('totalBoard').style.display = '';
-    document.getElementById('favoriteGroup').disabled = dailyReview;
-    document.getElementById('newFavoriteGroup').disabled = dailyReview;
+    document.getElementById('totalBoard').style.display = dailyReview ? 'none' : '';
+    document.getElementById('favoriteGroup').hidden = dailyReview;
+    document.getElementById('newFavoriteGroup').hidden = dailyReview;
+    document.getElementById('reviewDateButton').hidden = !dailyReview;
+    document.getElementById('reviewDateButton').disabled = reviewDates.length <= 1;
+    document.getElementById('reviewWheelToggle').hidden = !dailyReview;
+    if (!dailyReview) {
+      toggleReviewWheel(false);
+      toggleReviewCalendar(false);
+    }
     document.getElementById('favoriteButton').disabled = dailyReview || !activeCase;
+    document.getElementById('favoriteButton').hidden = dailyReview;
   }
 
   function displayCodeLabel() {
@@ -556,17 +713,225 @@
     return [...items].sort((left, right) => String(left.date || '').localeCompare(String(right.date || '')));
   }
 
+  function reviewCaseDate(item) {
+    return String(item.date || '').trim();
+  }
+
+  function getReviewCasesForDate(date) {
+    return testCases.filter(item => reviewCaseDate(item) === date);
+  }
+
+  function isReviewCaseDone(item) {
+    const id = String(item.id);
+    return skippedReviewCaseIds.has(id) || boughtReviewCaseIds.has(id);
+  }
+
+  function initReviewDates(items) {
+    reviewDates = [...new Set(items.map(reviewCaseDate).filter(Boolean))].sort();
+    selectedReviewDate = reviewDates[0] || '';
+    skippedReviewCaseIds = new Set();
+    boughtReviewCaseIds = new Set();
+    toggleReviewCalendar(false);
+    updateReviewDateButton();
+  }
+
+  function updateReviewDateButton() {
+    const button = document.getElementById('reviewDateButton');
+    button.textContent = selectedReviewDate || '选择日期';
+    button.disabled = reviewDates.length <= 1;
+    if (!document.getElementById('reviewCalendar').hidden) renderReviewCalendar();
+  }
+
+  function startDailyReviewSession() {
+    shuffledCases = getReviewCasesForDate(selectedReviewDate);
+    casePosition = 0;
+    successCount = 0;
+    failureCount = 0;
+    boughtStockNames = [];
+    keepReviewPosition = false;
+    activeTrade = null;
+    caseResolved = false;
+    currentCaseBought = false;
+    currentCaseHasFutureData = true;
+    updateSourceMode();
+    updateReviewWheel();
+    updateTestProgress();
+    startNextCase();
+  }
+
+  function changeReviewDate(date) {
+    if (!isDailyReviewSource() || !reviewDates.includes(date)) return;
+    toggleReviewCalendar(false);
+    selectedReviewDate = date;
+    shuffledCases = getReviewCasesForDate(date);
+    casePosition = 0;
+    keepReviewPosition = true;
+    updateReviewDateButton();
+    startNextCase();
+  }
+
+  // 当天剩余股票全部处理完后自动切换到下一个仍有未处理股票的日期
+  function resolveReviewPosition() {
+    if (keepReviewPosition) {
+      keepReviewPosition = false;
+      return;
+    }
+    for (;;) {
+      while (casePosition < shuffledCases.length && isReviewCaseDone(shuffledCases[casePosition])) casePosition++;
+      if (casePosition < shuffledCases.length) return;
+      const nextDate = reviewDates.find(date => date > selectedReviewDate
+        && getReviewCasesForDate(date).some(item => !isReviewCaseDone(item)));
+      if (!nextDate) return;
+      selectedReviewDate = nextDate;
+      shuffledCases = getReviewCasesForDate(nextDate);
+      casePosition = 0;
+      updateReviewDateButton();
+    }
+  }
+
+  function toggleReviewCalendar(forceOpen) {
+    const calendar = document.getElementById('reviewCalendar');
+    const open = typeof forceOpen === 'boolean' ? forceOpen : calendar.hidden;
+    if (open && !reviewDates.length) return;
+    calendar.hidden = !open;
+    document.getElementById('reviewDateButton').setAttribute('aria-expanded', String(open));
+    if (!open) return;
+    toggleReviewWheel(false);
+    const [year, month] = selectedReviewDate.split('-').map(Number);
+    calendarYear = year;
+    calendarMonth = month;
+    renderReviewCalendar();
+    positionReviewCalendar();
+  }
+
+  function positionReviewCalendar() {
+    const calendar = document.getElementById('reviewCalendar');
+    if (calendar.hidden) return;
+    const rect = document.getElementById('reviewDateButton').getBoundingClientRect();
+    const left = Math.max(4, Math.min(rect.left, window.innerWidth - calendar.offsetWidth - 4));
+    calendar.style.left = `${left}px`;
+    calendar.style.top = `${rect.bottom + 4}px`;
+  }
+  window.addEventListener('resize', positionReviewCalendar);
+
+  function shiftReviewCalendarMonth(delta) {
+    const index = calendarYear * 12 + calendarMonth - 1 + delta;
+    calendarYear = Math.floor(index / 12);
+    calendarMonth = index % 12 + 1;
+    renderReviewCalendar();
+  }
+
+  function changeReviewCalendarView() {
+    calendarYear = Number(document.getElementById('reviewCalendarYear').value);
+    calendarMonth = Number(document.getElementById('reviewCalendarMonth').value);
+    renderReviewCalendar();
+  }
+
+  function renderReviewCalendar() {
+    const firstYear = Number(reviewDates[0].slice(0, 4));
+    const lastYear = Number(reviewDates[reviewDates.length - 1].slice(0, 4));
+    const yearSelect = document.getElementById('reviewCalendarYear');
+    const monthSelect = document.getElementById('reviewCalendarMonth');
+    yearSelect.replaceChildren(...Array.from({ length: lastYear - firstYear + 1 }, (_, i) => {
+      const option = new Option(`${firstYear + i}年`, String(firstYear + i));
+      return option;
+    }));
+    monthSelect.replaceChildren(...Array.from({ length: 12 }, (_, i) => new Option(`${i + 1}月`, String(i + 1))));
+    yearSelect.value = String(calendarYear);
+    monthSelect.value = String(calendarMonth);
+    const monthIndex = calendarYear * 12 + calendarMonth - 1;
+    document.getElementById('reviewCalendarPrev').disabled = monthIndex <= firstYear * 12;
+    document.getElementById('reviewCalendarNext').disabled = monthIndex >= lastYear * 12 + 11;
+
+    const grid = document.getElementById('reviewCalendarGrid');
+    const cells = ['日', '一', '二', '三', '四', '五', '六'].map(name => {
+      const cell = document.createElement('div');
+      cell.className = 'review-calendar-weekday';
+      cell.textContent = name;
+      return cell;
+    });
+    const leading = new Date(calendarYear, calendarMonth - 1, 1).getDay();
+    for (let i = 0; i < leading; i++) cells.push(document.createElement('div'));
+    const daysInMonth = new Date(calendarYear, calendarMonth, 0).getDate();
+    for (let day = 1; day <= daysInMonth; day++) {
+      const date = `${calendarYear}-${String(calendarMonth).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'review-calendar-day';
+      button.textContent = String(day);
+      const dayCases = reviewDates.includes(date) ? getReviewCasesForDate(date) : [];
+      button.disabled = !dayCases.length;
+      if (dayCases.length && dayCases.every(isReviewCaseDone)) button.classList.add('is-done');
+      if (date === selectedReviewDate) button.classList.add('is-selected');
+      button.addEventListener('click', () => changeReviewDate(date));
+      cells.push(button);
+    }
+    grid.replaceChildren(...cells);
+  }
+
+  function toggleReviewWheel(forceOpen) {
+    const wheel = document.getElementById('reviewStockWheel');
+    const open = typeof forceOpen === 'boolean' ? forceOpen : wheel.hidden;
+    wheel.hidden = !open;
+    document.getElementById('reviewWheelToggle').setAttribute('aria-expanded', String(open));
+    if (open) {
+      toggleReviewCalendar(false);
+      updateReviewWheel();
+    }
+  }
+
+  function updateReviewWheel() {
+    const list = document.getElementById('reviewWheelList');
+    if (!list || !isDailyReviewSource() || document.getElementById('reviewStockWheel').hidden) return;
+    const fragment = document.createDocumentFragment();
+    shuffledCases.forEach((item, index) => {
+      if (skippedReviewCaseIds.has(String(item.id))) return;
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'review-wheel-item';
+      button.dataset.caseIndex = String(index);
+      button.textContent = item.stockName || item.marketCode || item.code || '未知股票';
+      button.title = `${button.textContent} ${item.date || ''}`;
+      if (index === casePosition) button.classList.add('is-current');
+      button.addEventListener('click', () => selectReviewCase(index));
+      fragment.appendChild(button);
+    });
+    list.replaceChildren(fragment);
+    const current = list.querySelector('.is-current');
+    if (current) current.scrollIntoView({ block: 'nearest' });
+  }
+
+  function selectReviewCase(index) {
+    if (!isDailyReviewSource() || index < 0 || index >= shuffledCases.length
+      || skippedReviewCaseIds.has(String(shuffledCases[index].id))) return;
+    toggleReviewWheel(false);
+    if (index === casePosition && activeCase?.id === shuffledCases[index].id) return;
+    casePosition = index;
+    caseResolved = false;
+    keepReviewPosition = true;
+    startNextCase();
+  }
+
+  function markReviewCaseSkipped() {
+    if (!isDailyReviewSource() || !activeCase?.id) return;
+    skippedReviewCaseIds.add(String(activeCase.id));
+    updateReviewWheel();
+    updateTestProgress();
+  }
+
   function getProgressStorageKey() {
     const source = document.getElementById('dataSource').value;
     const fileName = document.getElementById('testCaseFile').value;
-    return fileName ? `kline-replay-progress:v2:${source}:${fileName}` : '';
+    if (!fileName || source === 'dailyReview') return '';
+    return `kline-replay-progress:v2:${source}:${fileName}`;
   }
 
   function saveProgressCheckpoint() {
     const key = getProgressStorageKey();
     if (!key || !shuffledCases.length) return;
     const checkpointPosition = caseResolved ? casePosition + 1 : casePosition;
-    if (checkpointPosition === 0 && successCount === 0 && failureCount === 0 && !boughtStockNames.length) {
+    if (checkpointPosition === 0 && successCount === 0 && failureCount === 0
+      && !boughtStockNames.length && !skippedReviewCaseIds.size) {
       localStorage.removeItem(key);
       return;
     }
@@ -578,6 +943,7 @@
         successCount,
         failureCount,
         boughtStockNames,
+        skippedReviewCaseIds: [...skippedReviewCaseIds],
         savedAt: new Date().toISOString(),
       }));
     } catch (error) {
@@ -592,7 +958,8 @@
       const saved = JSON.parse(localStorage.getItem(key) || 'null');
       if (!saved || !Array.isArray(saved.shuffledCases) || !saved.shuffledCases.length) return null;
       if (Number(saved.casePosition) === 0 && !Number(saved.successCount) && !Number(saved.failureCount)
-        && (!Array.isArray(saved.boughtStockNames) || !saved.boughtStockNames.length)) {
+      && (!Array.isArray(saved.boughtStockNames) || !saved.boughtStockNames.length)
+      && (!Array.isArray(saved.skippedReviewCaseIds) || !saved.skippedReviewCaseIds.length)) {
         localStorage.removeItem(key);
         return null;
       }
@@ -977,6 +1344,11 @@
           return;
         }
         testCases = res.data;
+        if (isDailyReviewSource()) {
+          initReviewDates(testCases);
+          startDailyReviewSession();
+          return;
+        }
         const savedProgress = readProgressCheckpoint();
         const resume = savedProgress && confirm(`检测到未完成的回测进度（${savedProgress.casePosition}/${savedProgress.shuffledCases.length}），是否继续？`);
         if (resume) {
@@ -992,6 +1364,7 @@
           successCount = 0;
           failureCount = 0;
           boughtStockNames = [];
+          skippedReviewCaseIds = new Set();
         }
         activeTrade = null;
         currentCaseBought = false;
@@ -1076,6 +1449,7 @@
   }
 
   function startNextCase() {
+    if (isDailyReviewSource()) resolveReviewPosition();
     if (currentNewsAbortController) currentNewsAbortController.abort();
     document.getElementById('newsPanel').hidden = true;
     currentNews = [];
@@ -1093,6 +1467,7 @@
     if (casePosition >= shuffledCases.length) {
       clearProgressCheckpoint();
       activeCase = null;
+      updateReviewWheel();
       updateNewsPanel();
       setTestButtons(false);
       document.getElementById('stockNameVal').innerText = '股票名称: --';
@@ -1113,13 +1488,16 @@
     }
 
     activeCase = shuffledCases[casePosition];
+    updateReviewWheel();
     updateNewsPanel();
     loadCurrentNews(activeCase);
   currentCaseBought = false;
     updateFavoriteButton();
     document.getElementById('stockNameVal').innerText = '股票名称: --';
     document.getElementById('stockNameVal').style.visibility = 'hidden';
-    document.getElementById('testStatus').innerText = `正在回放 ${activeCase.marketCode} ${activeCase.date}`;
+    const requestedCase = activeCase;
+    document.getElementById('testStatus').innerText = `${pendingCaseNotice ? `${pendingCaseNotice}；` : ''}正在回放 ${activeCase.marketCode} ${activeCase.date}`;
+    pendingCaseNotice = '';
     setTestButtons(false);
     setDailyReviewButtons();
 
@@ -1129,18 +1507,13 @@
       .then(res => res.json())
       .then(res => {
         if (res.status_code !== 0 || !res.data.length) {
-          document.getElementById('testStatus').innerText = '该用例没有 K 线数据，自动跳过';
-          casePosition++;
-          updateTestProgress();
-          startNextCase();
+          skipUnavailableCase(requestedCase, '行情源没有返回 K 线数据');
           return;
         }
         fullData = res.data;
-        const startIndex = fullData.findIndex(item => item.date >= activeCase.date);
+        const startIndex = fullData.findIndex(item => item.date >= requestedCase.date);
         if (startIndex < 0) {
-          casePosition++;
-          updateTestProgress();
-          startNextCase();
+          skipUnavailableCase(requestedCase, '没有回放日期对应的 K 线');
           return;
         }
         currentCaseHasFutureData = startIndex + 1 < fullData.length;
@@ -1149,7 +1522,20 @@
         updateChartData();
         setTestButtons(true);
         setDailyReviewButtons();
+      })
+      .catch(() => {
+        if (activeCase === requestedCase) skipUnavailableCase(requestedCase, 'K 线请求失败');
       });
+  }
+
+  function skipUnavailableCase(failedCase, reason) {
+    if (activeCase !== failedCase) return;
+    const name = failedCase.stockName || failedCase.marketCode || failedCase.code;
+    pendingCaseNotice = `${name} ${failedCase.date}：${reason}，已跳过`;
+    if (isDailyReviewSource()) skippedReviewCaseIds.add(String(failedCase.id));
+    casePosition++;
+    updateTestProgress();
+    startNextCase();
   }
 
   function finishCurrentCase(message) {
@@ -1165,6 +1551,7 @@
     if (!activeCase || activeTrade || currentIndex === 0) return;
     if (isDailyReviewSource()) {
       boughtStockNames.push(activeCase.stockName || activeCase.marketCode || activeCase.code);
+      boughtReviewCaseIds.add(String(activeCase.id));
       currentCaseBought = true;
       finishCurrentCase(`已记录买入：${activeCase.stockName || activeCase.marketCode || activeCase.code}`);
       return;
@@ -1202,14 +1589,17 @@
     if (!activeCase) return;
     if (isDailyReviewSource() && !currentCaseHasFutureData) {
       caseResolved = true;
+      markReviewCaseSkipped();
       document.getElementById('buyButton').disabled = true;
       document.getElementById('nextCaseButton').innerText = '继续';
       if (casePosition + 1 < shuffledCases.length) {
         casePosition++;
+        caseResolved = false;
         updateTestProgress();
         startNextCase();
       } else {
         casePosition++;
+        caseResolved = false;
         startNextCase();
       }
       return;
@@ -1220,6 +1610,7 @@
       currentIndex = Math.min(entryIndex + 8, fullData.length);
       updateChartData();
       caseResolved = true;
+      if (isDailyReviewSource()) markReviewCaseSkipped();
       document.getElementById('buyButton').disabled = true;
       document.getElementById('nextCaseButton').innerText = '继续';
       document.getElementById('testStatus').innerText = '空仓：已展示后续 K 线，再次点击进入下一题';
@@ -1228,6 +1619,7 @@
     clearTradeDrawing();
     activeTrade = null;
     casePosition++;
+    caseResolved = false;
     updateTestProgress();
     startNextCase();
   }
