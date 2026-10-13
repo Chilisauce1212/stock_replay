@@ -521,6 +521,7 @@
         <span id="successBoard" class="result-board">成功: <span id="successCount">0</span></span>
         <span id="failureBoard" class="result-board">失败: <span id="failureCount">0</span></span>
         <span id="totalBoard" class="result-board">总数: <span id="totalCount">0</span><span id="dailyRecordStatus"></span></span>
+        <span id="reviewPnlBoard" class="result-board" hidden>当日盈亏: <span id="reviewDayPnl">--</span> 累计盈亏: <span id="reviewTotalPnl">--</span></span>
         <button id="newsButton" type="button" onclick="toggleNewsPanel()" aria-label="显示新闻" title="显示新闻">新闻</button>
       </div>
       <div id="newsPanel" hidden>
@@ -538,6 +539,8 @@
   
   let chart, candlestickSeries, volumeSeries, ma5Series, ma10Series, ma20Series;
   let priceLine = null;
+  let sellPriceLine = null;
+  let reviewPnlResults = new Map();
   let candleMarkers = [];
   let markerController = null;
   let testCases = [];
@@ -747,6 +750,7 @@
     skippedReviewCaseIds = new Set();
     boughtReviewCaseIds = new Set();
     boughtReviewViews = new Map();
+    reviewPnlResults = new Map();
     toggleReviewCalendar(false);
     updateReviewDateButton();
   }
@@ -1002,14 +1006,42 @@
     document.getElementById('failureCount').innerText = failureCount;
     document.getElementById('totalCount').innerText = `${Math.min(casePosition + 1, shuffledCases.length)}/${shuffledCases.length}`;
     document.getElementById('dailyRecordStatus').innerText = currentCaseBought ? ' 已加入记录' : '';
+    updateReviewPnlBoard();
     saveProgressCheckpoint();
+  }
+
+  // 当日盈亏 = 当日所有盈亏点数之和 / 当日买入数；累计盈亏 = 各日盈亏之和
+  function updateReviewPnlBoard() {
+    const board = document.getElementById('reviewPnlBoard');
+    board.hidden = !isDailyReviewSource();
+    if (board.hidden) return;
+    const byDate = new Map();
+    reviewPnlResults.forEach(({ date, pnlPct }) => {
+      const entry = byDate.get(date) || { sum: 0, count: 0 };
+      entry.sum += pnlPct;
+      entry.count++;
+      byDate.set(date, entry);
+    });
+    const format = (value, el) => {
+      el.innerText = value === null ? '--' : `${value > 0 ? '+' : ''}${value.toFixed(2)}%`;
+      el.style.color = value === null || value === 0 ? '' : value > 0 ? '#d9363e' : '#1f9d55';
+    };
+    const day = byDate.get(selectedReviewDate);
+    let total = 0;
+    byDate.forEach(({ sum, count }) => { total += sum / count; });
+    format(day ? day.sum / day.count : null, document.getElementById('reviewDayPnl'));
+    format(byDate.size ? total : null, document.getElementById('reviewTotalPnl'));
   }
 
   function clearTradeDrawing() {
     if (priceLine && candlestickSeries) {
       candlestickSeries.removePriceLine(priceLine);
     }
+    if (sellPriceLine && candlestickSeries) {
+      candlestickSeries.removePriceLine(sellPriceLine);
+    }
     priceLine = null;
+    sellPriceLine = null;
     candleMarkers = [];
     if (candlestickSeries) setCandleMarkers(candleMarkers);
   }
@@ -1032,6 +1064,10 @@
       candlestickSeries.removePriceLine(priceLine);
       priceLine = null;
     }
+    if (sellPriceLine && candlestickSeries) {
+      candlestickSeries.removePriceLine(sellPriceLine);
+      sellPriceLine = null;
+    }
     candleMarkers = [{
       time: activeTrade.buyDate,
       position: 'belowBar',
@@ -1039,6 +1075,23 @@
       shape: 'arrowUp',
       text: 'B',
     }];
+    if (activeTrade.sellDate) {
+      candleMarkers.push({
+        time: activeTrade.sellDate,
+        position: 'aboveBar',
+        color: '#4cc9f0',
+        shape: 'arrowDown',
+        text: 'S',
+      });
+      sellPriceLine = candlestickSeries.createPriceLine({
+        price: activeTrade.sellPrice,
+        color: '#4cc9f0',
+        lineWidth: 2,
+        lineStyle: 2,
+        axisLabelVisible: true,
+        title: '卖出',
+      });
+    }
     setCandleMarkers(candleMarkers);
     priceLine = candlestickSeries.createPriceLine({
       price: activeTrade.buyPrice,
@@ -1536,8 +1589,7 @@
         currentIndex = startIndex + 1;
         const boughtView = isDailyReviewSource() ? boughtReviewViews.get(String(requestedCase.id)) : null;
         if (boughtView && currentCaseHasFutureData) {
-          const entryCandle = fullData[startIndex + 1];
-          activeTrade = { buyDate: entryCandle.date, buyPrice: Number(entryCandle.close) };
+          activeTrade = boughtView.trade;
           currentIndex = Math.min(boughtView.shown, fullData.length);
           updateChartData();
           setTestButtons(true);
@@ -1580,17 +1632,77 @@
     updateTestProgress();
   }
 
+  function buyDailyReviewWithPnl() {
+    const requestedCase = activeCase;
+    const buyIndex = currentIndex - 1;
+    const buyCandle = fullData[buyIndex];
+    boughtReviewCaseIds.add(String(requestedCase.id));
+    updateReviewWheel();
+    if (!fullData[buyIndex + 1]) {
+      finishCurrentCase('没有下一根 K 线，无法计算盈亏');
+      return;
+    }
+    document.getElementById('buyButton').disabled = true;
+    document.getElementById('nextStepButton').disabled = true;
+    document.getElementById('nextCaseButton').disabled = true;
+    document.getElementById('testStatus').innerText = '正在获取逐笔成交并计算盈亏...';
+
+    const query = new URLSearchParams({
+      code: requestedCase.code,
+      date: buyCandle.date,
+      name: requestedCase.stockName || '',
+    });
+    fetch(`/api/review-pnl?${query}`, { cache: 'no-store' })
+      .then(res => res.json())
+      .then(res => {
+        if (res.status_code !== 0) throw new Error(res.msg || '盈亏计算失败');
+        return res;
+      })
+      .then(res => ({ res }), error => ({ error }))
+      .then(({ res, error }) => {
+        if (activeCase !== requestedCase) return;
+        const entryIndex = buyIndex + 1;
+        let message;
+        let trade = null;
+        let shown = Math.min(entryIndex + 8, fullData.length);
+        if (res) {
+          trade = {
+            buyDate: res.buyDate,
+            buyPrice: res.buyChartPrice,
+            sellDate: res.sellDate,
+            sellPrice: res.sellChartPrice,
+            pnlPct: res.pnlPct,
+          };
+          const sellIndex = fullData.findIndex(item => item.date === res.sellDate);
+          if (sellIndex >= 0) shown = Math.min(Math.max(shown, sellIndex + 3), fullData.length);
+          else shown = fullData.length;
+          const sign = res.pnlPct > 0 ? '+' : '';
+          message = `买入 ${res.buyPrice}（${res.buyDate}）卖出 ${res.sellPrice}（${res.sellDate} ${res.sellTick.time}）盈亏 ${sign}${res.pnlPct}%：${res.sellReason}`;
+          reviewPnlResults.set(String(requestedCase.id), { date: reviewCaseDate(requestedCase), pnlPct: res.pnlPct });
+        } else {
+          message = `${error.message}，已展示后续 K 线`;
+        }
+        activeTrade = trade;
+        currentIndex = shown;
+        updateChartData();
+        finishCurrentCase(message);
+        boughtReviewViews.set(String(requestedCase.id), { shown, message, trade });
+      });
+  }
+
   function buyAtCurrentCandle() {
     if (!activeCase || activeTrade || currentIndex === 0) return;
     if (isDailyReviewSource()) {
-      boughtReviewCaseIds.add(String(activeCase.id));
-      updateReviewWheel();
       if (!currentCaseHasFutureData) {
+        boughtReviewCaseIds.add(String(activeCase.id));
+        updateReviewWheel();
         boughtStockNames.push(activeCase.stockName || activeCase.marketCode || activeCase.code);
         currentCaseBought = true;
         finishCurrentCase(`已记录买入：${activeCase.stockName || activeCase.marketCode || activeCase.code}`);
-        return;
+      } else {
+        buyDailyReviewWithPnl();
       }
+      return;
     }
     const buyIndex = currentIndex - 1;
     const entryIndex = buyIndex + 1;
@@ -1618,12 +1730,6 @@
     } else {
       failureCount++;
       finishCurrentCase(`失败：${resultCandle.date} 为 B 点后的第二根 K 线且最高价未达到涨停价`);
-    }
-    if (isDailyReviewSource()) {
-      boughtReviewViews.set(String(activeCase.id), {
-        shown: currentIndex,
-        message: document.getElementById('testStatus').innerText,
-      });
     }
   }
 

@@ -7,6 +7,7 @@ const fs = require('fs');
 const XLSX = require('xlsx');
 const { S3Client, GetObjectCommand, PutObjectCommand } = require('@aws-sdk/client-s3');
 const { r2Client: sharedR2Client, R2_BUCKET: sharedR2Bucket, readJson, writeJson, listJsonKeys } = require('./r2-storage');
+const { calcReviewPnl } = require('./review-pnl');
 const app = express();
 const PORT = process.env.PORT || 3000;
 const USE_LOCAL_JSON = process.env.USE_LOCAL_JSON === 'true';
@@ -674,6 +675,45 @@ app.get('/api/kline', async (req, res) => {
     });
   } catch (err) {
     res.status(500).json({ status_code: -1, msg: "数据获取失败" });
+  }
+});
+
+app.get('/api/review-pnl', async (req, res) => {
+  const code = String(req.query.code || '').trim();
+  const date = String(req.query.date || '').trim();
+  const name = String(req.query.name || '').trim();
+  if (!/^\d{6}$/.test(code) || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    return res.status(400).json({ status_code: -1, msg: '参数错误' });
+  }
+  try {
+    res.set('Cache-Control', 'no-store');
+    const kline = processThsValues(await fetchThsKlineData(code, date));
+    const result = await calcReviewPnl({ code, name, date, tradingDates: kline.map(item => item.date) });
+
+    // K 线可能经过复权，把逐笔原始价格换算到图表价格
+    const chartFactor = (day) => {
+      const candle = kline.find(item => item.date === day);
+      const raw = result.days.find(item => item.date === day);
+      return candle && raw && raw.close ? Number(candle.close) / raw.close : 1;
+    };
+    const { sell } = result;
+    res.json({
+      status_code: 0,
+      code,
+      date,
+      buyDate: result.buyDate,
+      buyPrice: result.buyPrice,
+      buyChartPrice: Number((result.buyPrice * chartFactor(result.buyDate)).toFixed(3)),
+      sellDate: sell.date,
+      sellPrice: sell.price,
+      sellChartPrice: Number((sell.price * chartFactor(sell.date)).toFixed(3)),
+      sellReason: sell.reason,
+      pnlPct: result.pnlPct,
+      sellTick: { date: sell.date, time: sell.tick.time, price: sell.tick.price, vol: sell.tick.vol, buyorsell: sell.tick.buyorsell },
+      days: result.days,
+    });
+  } catch (err) {
+    res.status(502).json({ status_code: -1, msg: `盈亏计算失败: ${err.message}` });
   }
 });
 
