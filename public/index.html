@@ -262,6 +262,20 @@
       text-overflow: ellipsis;
       white-space: nowrap;
     }
+    .review-wheel-item.is-bought {
+      color: #d9363e;
+    }
+    .review-wheel-item.is-skipped {
+      color: #1f9d55;
+    }
+    .review-wheel-item.is-bought::before,
+    .review-wheel-item.is-skipped::before {
+      content: '*[';
+    }
+    .review-wheel-item.is-bought::after,
+    .review-wheel-item.is-skipped::after {
+      content: ']*';
+    }
     .review-wheel-item.is-current {
       border-block: 1px solid #f0b90b;
       color: #f0b90b;
@@ -541,6 +555,7 @@
   let reviewDates = [];
   let skippedReviewCaseIds = new Set();
   let boughtReviewCaseIds = new Set();
+  let boughtReviewViews = new Map();
   let keepReviewPosition = false;
   let pendingCaseNotice = '';
   let calendarYear = 0;
@@ -731,6 +746,7 @@
     selectedReviewDate = reviewDates[0] || '';
     skippedReviewCaseIds = new Set();
     boughtReviewCaseIds = new Set();
+    boughtReviewViews = new Map();
     toggleReviewCalendar(false);
     updateReviewDateButton();
   }
@@ -885,7 +901,6 @@
     if (!list || !isDailyReviewSource() || document.getElementById('reviewStockWheel').hidden) return;
     const fragment = document.createDocumentFragment();
     shuffledCases.forEach((item, index) => {
-      if (skippedReviewCaseIds.has(String(item.id))) return;
       const button = document.createElement('button');
       button.type = 'button';
       button.className = 'review-wheel-item';
@@ -893,6 +908,8 @@
       button.textContent = item.stockName || item.marketCode || item.code || '未知股票';
       button.title = `${button.textContent} ${item.date || ''}`;
       if (index === casePosition) button.classList.add('is-current');
+      if (boughtReviewCaseIds.has(String(item.id))) button.classList.add('is-bought');
+      else if (skippedReviewCaseIds.has(String(item.id))) button.classList.add('is-skipped');
       button.addEventListener('click', () => selectReviewCase(index));
       fragment.appendChild(button);
     });
@@ -902,8 +919,7 @@
   }
 
   function selectReviewCase(index) {
-    if (!isDailyReviewSource() || index < 0 || index >= shuffledCases.length
-      || skippedReviewCaseIds.has(String(shuffledCases[index].id))) return;
+    if (!isDailyReviewSource() || index < 0 || index >= shuffledCases.length) return;
     toggleReviewWheel(false);
     if (index === casePosition && activeCase?.id === shuffledCases[index].id) return;
     casePosition = index;
@@ -1518,6 +1534,23 @@
         }
         currentCaseHasFutureData = startIndex + 1 < fullData.length;
         currentIndex = startIndex + 1;
+        const boughtView = isDailyReviewSource() ? boughtReviewViews.get(String(requestedCase.id)) : null;
+        if (boughtView && currentCaseHasFutureData) {
+          const entryCandle = fullData[startIndex + 1];
+          activeTrade = { buyDate: entryCandle.date, buyPrice: Number(entryCandle.close) };
+          currentIndex = Math.min(boughtView.shown, fullData.length);
+          updateChartData();
+          setTestButtons(true);
+          setDailyReviewButtons();
+          document.getElementById('nextStepButton').disabled = true;
+          document.getElementById('buyButton').disabled = true;
+          document.getElementById('nextCaseButton').disabled = false;
+          document.getElementById('nextCaseButton').innerText = '继续';
+          caseResolved = true;
+          document.getElementById('testStatus').innerText = boughtView.message;
+          updateTestProgress();
+          return;
+        }
         updateTestProgress();
         updateChartData();
         setTestButtons(true);
@@ -1550,11 +1583,14 @@
   function buyAtCurrentCandle() {
     if (!activeCase || activeTrade || currentIndex === 0) return;
     if (isDailyReviewSource()) {
-      boughtStockNames.push(activeCase.stockName || activeCase.marketCode || activeCase.code);
       boughtReviewCaseIds.add(String(activeCase.id));
-      currentCaseBought = true;
-      finishCurrentCase(`已记录买入：${activeCase.stockName || activeCase.marketCode || activeCase.code}`);
-      return;
+      updateReviewWheel();
+      if (!currentCaseHasFutureData) {
+        boughtStockNames.push(activeCase.stockName || activeCase.marketCode || activeCase.code);
+        currentCaseBought = true;
+        finishCurrentCase(`已记录买入：${activeCase.stockName || activeCase.marketCode || activeCase.code}`);
+        return;
+      }
     }
     const buyIndex = currentIndex - 1;
     const entryIndex = buyIndex + 1;
@@ -1582,6 +1618,12 @@
     } else {
       failureCount++;
       finishCurrentCase(`失败：${resultCandle.date} 为 B 点后的第二根 K 线且最高价未达到涨停价`);
+    }
+    if (isDailyReviewSource()) {
+      boughtReviewViews.set(String(activeCase.id), {
+        shown: currentIndex,
+        message: document.getElementById('testStatus').innerText,
+      });
     }
   }
 
