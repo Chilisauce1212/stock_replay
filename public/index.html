@@ -291,15 +291,18 @@
       font-weight: bold;
     }
     #newsButton {
-      margin-left: auto;
-      padding: 2px 7px;
-      font-size: 12px;
+      position: absolute;
+      z-index: 7;
+      top: 38px;
+      right: 84px;
+      padding: 5px 9px;
+      background: rgba(17, 20, 25, 0.92);
       color: #b7d7ff;
     }
     #newsPanel {
       position: absolute;
       z-index: 5;
-      top: 28px;
+      top: 72px;
       right: 0;
       bottom: 0;
       width: min(620px, 100%);
@@ -531,8 +534,8 @@
         <span id="failureBoard" class="result-board">失败: <span id="failureCount">0</span></span>
         <span id="totalBoard" class="result-board">总数: <span id="totalCount">0</span><span id="dailyRecordStatus"></span></span>
         <span id="reviewPnlBoard" class="result-board" hidden>当日盈亏: <span id="reviewDayPnl">--</span> 累计盈亏: <span id="reviewTotalPnl">--</span></span>
-        <button id="newsButton" type="button" onclick="toggleNewsPanel()" aria-label="显示新闻" title="显示新闻">新闻</button>
       </div>
+      <button id="newsButton" type="button" onclick="toggleNewsPanel()" aria-label="显示新闻" title="显示新闻">新闻</button>
       <div id="newsPanel" hidden>
         <div id="newsList" class="news-list"></div>
       </div>
