@@ -182,7 +182,7 @@
       z-index: 8;
       top: 0;
       left: 0;
-      width: min(280px, calc(100vw - 32px));
+      width: min(350px, calc(100vw - 32px));
       padding: 9px;
       box-sizing: border-box;
       border: 1px solid #526176;
@@ -206,7 +206,10 @@
     }
     .review-calendar-weekday { color: #7d8794; font-size: 12px; padding: 3px 0; }
     .review-calendar-day {
-      padding: 6px 0;
+      min-width: 0;
+      height: 44px;
+      padding: 4px 0;
+      overflow: hidden;
       border-radius: 3px;
       font-size: 13px;
       font-weight: normal;
@@ -220,6 +223,12 @@
     }
     .review-calendar-day.is-done:not(:disabled) { color: #7d8794; }
     .review-calendar-day.is-selected { background: #f0b90b; color: #111; border-color: #f0b90b; font-weight: bold; }
+    .review-calendar-pnl { display: block; font-size: 10px; line-height: 1.2; font-weight: normal; white-space: nowrap; overflow: hidden; }
+    .review-calendar-pnl.is-empty { visibility: hidden; }
+    .review-calendar-pnl.is-up { color: #ff5a5f; }
+    .review-calendar-pnl.is-down { color: #2ecc71; }
+    .review-calendar-pnl.is-flat { color: #aeb8c5; }
+    .review-calendar-day.is-selected .review-calendar-pnl { color: #111; }
     #reviewStockWheel[hidden],
     #reviewWheelToggle[hidden] { display: none; }
     .review-wheel-heading {
@@ -268,12 +277,12 @@
     .review-wheel-item.is-skipped {
       color: #1f9d55;
     }
-    .review-wheel-item.is-bought::before,
-    .review-wheel-item.is-skipped::before {
+    .review-wheel-item.is-bought .review-wheel-name::before,
+    .review-wheel-item.is-skipped .review-wheel-name::before {
       content: '*[';
     }
-    .review-wheel-item.is-bought::after,
-    .review-wheel-item.is-skipped::after {
+    .review-wheel-item.is-bought .review-wheel-name::after,
+    .review-wheel-item.is-skipped .review-wheel-name::after {
       content: ']*';
     }
     .review-wheel-item.is-current {
@@ -542,6 +551,7 @@
   let sellPriceLine = null;
   let reviewPnlResults = new Map();
   let preloadedReviewCases = null;
+  let loadedReviewFile = '';
   let candleMarkers = [];
   let markerController = null;
   let testCases = [];
@@ -586,7 +596,7 @@
     document.querySelector('.test-panel').classList.toggle('daily-review-mode', dailyReview);
     document.getElementById('successBoard').style.display = dailyReview ? 'none' : '';
     document.getElementById('failureBoard').style.display = dailyReview ? 'none' : '';
-    document.getElementById('totalBoard').style.display = dailyReview ? 'none' : '';
+    document.getElementById('totalBoard').style.display = '';
     document.getElementById('favoriteGroup').hidden = dailyReview;
     document.getElementById('newFavoriteGroup').hidden = dailyReview;
     document.getElementById('reviewDateButton').hidden = !dailyReview;
@@ -880,6 +890,18 @@
       button.type = 'button';
       button.className = 'review-calendar-day';
       button.textContent = String(day);
+      const dayPnl = getReviewPnlByDate().get(date);
+      const label = document.createElement('span');
+      label.className = 'review-calendar-pnl';
+      if (dayPnl) {
+        label.textContent = formatPnl(dayPnl.sum / dayPnl.count);
+        label.classList.add(dayPnl.sum > 0 ? 'is-up' : dayPnl.sum < 0 ? 'is-down' : 'is-flat');
+      } else {
+        // 占位文本与最宽的盈亏文本等宽，保证所有日期格大小一致
+        label.textContent = '+10.00%';
+        label.classList.add('is-empty');
+      }
+      button.appendChild(label);
       const dayCases = reviewDates.includes(date) ? getReviewCasesForDate(date) : [];
       button.disabled = !dayCases.length;
       if (dayCases.length && dayCases.every(isReviewCaseDone)) button.classList.add('is-done');
@@ -910,8 +932,18 @@
       button.type = 'button';
       button.className = 'review-wheel-item';
       button.dataset.caseIndex = String(index);
-      button.textContent = item.stockName || item.marketCode || item.code || '未知股票';
-      button.title = `${button.textContent} ${item.date || ''}`;
+      const name = document.createElement('span');
+      name.className = 'review-wheel-name';
+      name.textContent = item.stockName || item.marketCode || item.code || '未知股票';
+      button.appendChild(name);
+      button.title = `${name.textContent} ${item.date || ''}`;
+      const pnl = reviewPnlResults.get(String(item.id));
+      if (pnl && boughtReviewCaseIds.has(String(item.id))) {
+        const pnlLabel = document.createElement('span');
+        pnlLabel.className = 'review-wheel-pnl';
+        pnlLabel.textContent = ` ${formatPnl(pnl.pnlPct)}`;
+        button.appendChild(pnlLabel);
+      }
       if (index === casePosition) button.classList.add('is-current');
       if (boughtReviewCaseIds.has(String(item.id))) button.classList.add('is-bought');
       else if (skippedReviewCaseIds.has(String(item.id))) button.classList.add('is-skipped');
@@ -943,12 +975,75 @@
   function getProgressStorageKey() {
     const source = document.getElementById('dataSource').value;
     const fileName = document.getElementById('testCaseFile').value;
-    if (!fileName || source === 'dailyReview') return '';
+    if (!fileName) return '';
+    if (source === 'dailyReview') return `kline-replay-progress:daily:${fileName}`;
     return `kline-replay-progress:v2:${source}:${fileName}`;
+  }
+
+  function hasReviewProgress() {
+    return skippedReviewCaseIds.size > 0 || boughtReviewCaseIds.size > 0;
+  }
+
+  function saveReviewProgress(key) {
+    if (!loadedReviewFile || loadedReviewFile !== document.getElementById('testCaseFile').value) return;
+    if (!hasReviewProgress()) {
+      localStorage.removeItem(key);
+      return;
+    }
+    try {
+      localStorage.setItem(key, JSON.stringify({
+        selectedReviewDate,
+        skippedReviewCaseIds: [...skippedReviewCaseIds],
+        boughtReviewCaseIds: [...boughtReviewCaseIds],
+        boughtReviewViews: [...boughtReviewViews],
+        reviewPnlResults: [...reviewPnlResults],
+        boughtStockNames,
+        savedAt: new Date().toISOString(),
+      }));
+    } catch (error) {
+      console.warn('保存每日复盘进度失败:', error.message);
+    }
+  }
+
+  function readReviewProgress(key) {
+    try {
+      const saved = JSON.parse(localStorage.getItem(key) || 'null');
+      if (!saved || !/^\d{4}-\d{2}-\d{2}$/.test(saved.selectedReviewDate || '')) return null;
+      const doneCount = (saved.skippedReviewCaseIds?.length || 0) + (saved.boughtReviewCaseIds?.length || 0);
+      return doneCount ? saved : null;
+    } catch (error) {
+      console.warn('读取每日复盘进度失败:', error.message);
+      return null;
+    }
+  }
+
+  // 恢复后若保存的日期已不存在则忽略
+  function applyReviewProgress(saved) {
+    if (!reviewDates.includes(saved.selectedReviewDate)) return false;
+    selectedReviewDate = saved.selectedReviewDate;
+    skippedReviewCaseIds = new Set((saved.skippedReviewCaseIds || []).map(String));
+    boughtReviewCaseIds = new Set((saved.boughtReviewCaseIds || []).map(String));
+    boughtReviewViews = new Map(saved.boughtReviewViews || []);
+    reviewPnlResults = new Map(saved.reviewPnlResults || []);
+    boughtStockNames = Array.isArray(saved.boughtStockNames) ? saved.boughtStockNames : [];
+    updateReviewDateButton();
+    return true;
+  }
+
+  function describeReviewProgress(saved) {
+    const dayCases = getReviewCasesForDate(saved.selectedReviewDate);
+    const ids = new Set([...(saved.skippedReviewCaseIds || []), ...(saved.boughtReviewCaseIds || [])].map(String));
+    const done = dayCases.filter(item => ids.has(String(item.id))).length;
+    const [year, month, day] = saved.selectedReviewDate.split('-');
+    return `${year}年${Number(month)}月${Number(day)}日，当天已测试 ${done}/${dayCases.length}`;
   }
 
   function saveProgressCheckpoint() {
     const key = getProgressStorageKey();
+    if (isDailyReviewSource()) {
+      if (key) saveReviewProgress(key);
+      return;
+    }
     if (!key || !shuffledCases.length) return;
     const checkpointPosition = caseResolved ? casePosition + 1 : casePosition;
     if (checkpointPosition === 0 && successCount === 0 && failureCount === 0
@@ -1005,17 +1100,23 @@
   function updateTestProgress() {
     document.getElementById('successCount').innerText = successCount;
     document.getElementById('failureCount').innerText = failureCount;
-    document.getElementById('totalCount').innerText = `${Math.min(casePosition + 1, shuffledCases.length)}/${shuffledCases.length}`;
+    if (isDailyReviewSource()) {
+      const done = shuffledCases.filter(isReviewCaseDone).length;
+      document.getElementById('totalCount').innerText = `${done}/${shuffledCases.length}`;
+    } else {
+      document.getElementById('totalCount').innerText = `${Math.min(casePosition + 1, shuffledCases.length)}/${shuffledCases.length}`;
+    }
     document.getElementById('dailyRecordStatus').innerText = currentCaseBought ? ' 已加入记录' : '';
     updateReviewPnlBoard();
     saveProgressCheckpoint();
   }
 
-  // 当日盈亏 = 当日所有盈亏点数之和 / 当日买入数；累计盈亏 = 各日盈亏之和
-  function updateReviewPnlBoard() {
-    const board = document.getElementById('reviewPnlBoard');
-    board.hidden = !isDailyReviewSource();
-    if (board.hidden) return;
+  function formatPnl(value) {
+    return `${value > 0 ? '+' : ''}${value.toFixed(2)}%`;
+  }
+
+  // 各日盈亏 = 当日所有盈亏点数之和 / 当日买入数
+  function getReviewPnlByDate() {
     const byDate = new Map();
     reviewPnlResults.forEach(({ date, pnlPct }) => {
       const entry = byDate.get(date) || { sum: 0, count: 0 };
@@ -1023,8 +1124,17 @@
       entry.count++;
       byDate.set(date, entry);
     });
+    return byDate;
+  }
+
+  // 当日盈亏 = 当日所有盈亏点数之和 / 当日买入数；累计盈亏 = 各日盈亏之和
+  function updateReviewPnlBoard() {
+    const board = document.getElementById('reviewPnlBoard');
+    board.hidden = !isDailyReviewSource();
+    if (board.hidden) return;
+    const byDate = getReviewPnlByDate();
     const format = (value, el) => {
-      el.innerText = value === null ? '--' : `${value > 0 ? '+' : ''}${value.toFixed(2)}%`;
+      el.innerText = value === null ? '--' : formatPnl(value);
       el.style.color = value === null || value === 0 ? '' : value > 0 ? '#d9363e' : '#1f9d55';
     };
     const day = byDate.get(selectedReviewDate);
@@ -1415,7 +1525,17 @@
         }
         testCases = res.data;
         if (isDailyReviewSource()) {
+          loadedReviewFile = '';
           initReviewDates(testCases);
+          const key = getProgressStorageKey();
+          const saved = key ? readReviewProgress(key) : null;
+          if (saved && reviewDates.includes(saved.selectedReviewDate)
+            && confirm(`检测到未完成的每日复盘进度（${describeReviewProgress(saved)}），是否继续？`)) {
+            applyReviewProgress(saved);
+          } else if (key) {
+            localStorage.removeItem(key);
+          }
+          loadedReviewFile = document.getElementById('testCaseFile').value;
           startDailyReviewSession();
           return;
         }
@@ -1542,6 +1662,7 @@
     document.getElementById('nextCaseButton').innerText = '空仓';
     if (casePosition >= shuffledCases.length) {
       clearProgressCheckpoint();
+      if (isDailyReviewSource()) loadedReviewFile = '';
       activeCase = null;
       updateReviewWheel();
       updateNewsPanel();
@@ -1703,6 +1824,8 @@
           const sign = res.pnlPct > 0 ? '+' : '';
           message = `买入 ${res.buyPrice}（${res.buyDate}）卖出 ${res.sellPrice}（${res.sellDate} ${res.sellTick.time}）盈亏 ${sign}${res.pnlPct}%：${res.sellReason}`;
           reviewPnlResults.set(String(requestedCase.id), { date: reviewCaseDate(requestedCase), pnlPct: res.pnlPct });
+          updateReviewWheel();
+          updateReviewDateButton();
         } else {
           message = `${error.message}，已展示后续 K 线`;
         }
@@ -1711,6 +1834,7 @@
         updateChartData();
         finishCurrentCase(message);
         boughtReviewViews.set(String(requestedCase.id), { shown, message, trade });
+        saveProgressCheckpoint();
       });
   }
 

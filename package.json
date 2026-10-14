@@ -11,6 +11,7 @@
     "filter-under30": "node filter-under30.js",
     "add-news": "node add-news.js",
     "keep-render": "node keep-render.js",
+    "pnl": "node pnl.js",
     "download:r2": "node download-r2.js",
     "upload": "node upload-r2.js",
     "restore:r2-layout": "node restore-r2-layout.js",

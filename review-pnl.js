@@ -29,11 +29,10 @@ function limitRatio(code, name = '') {
   return 0.1;
 }
 
-async function fetchTrades(code, date) {
+async function fetchTrades(code, date, worker) {
   const key = `${code}|${date}`;
   if (tickCache.has(key)) return tickCache.get(key);
-  const worker = await getWorker();
-  const rows = await worker.run(code, parseInt(date.replace(/-/g, ''), 10));
+  const rows = await (worker || await getWorker()).run(code, parseInt(date.replace(/-/g, ''), 10));
   if (!rows.length) throw new Error(`${date} 没有逐笔成交数据`);
   const csvRows = rows.map(r => ({ date, ...r }));
   if (tickCache.size >= TICK_CACHE_LIMIT) tickCache.delete(tickCache.keys().next().value);
@@ -42,8 +41,8 @@ async function fetchTrades(code, date) {
 }
 
 // 只保留真实成交（集合竞价撮合的 09:25 成交量 > 0 也在内）
-async function loadDay(code, date) {
-  const rows = await fetchTrades(code, date);
+async function loadDay(code, date, worker) {
+  const rows = await fetchTrades(code, date, worker);
   const trades = rows.filter(r => r.vol > 0 && r.time <= '15:00');
   if (!trades.length) throw new Error(`${date} 没有有效成交`);
   const auction = trades.find(r => r.time === '09:25');
@@ -70,7 +69,7 @@ function halfAmountTrade(day) {
  * 以信号日涨停价为成本计算卖出点。
  * tradingDates: 升序交易日列表，需包含信号日及其前一日。
  */
-async function calcReviewPnl({ code, name, date, tradingDates }) {
+async function calcReviewPnl({ code, name, date, tradingDates, worker }) {
   // date 为首板日，买入发生在其后一个交易日，成本为该日涨停价
   const signalIdx = tradingDates.indexOf(date);
   if (signalIdx < 0) throw new Error('找不到首板日');
@@ -81,7 +80,7 @@ async function calcReviewPnl({ code, name, date, tradingDates }) {
   const ratio = limitRatio(code, name);
   const limitOf = (prevClose) => round2(prevClose * (1 + ratio));
   const days = {};
-  const getDay = async (d) => (days[d] = days[d] || await loadDay(code, d));
+  const getDay = async (d) => (days[d] = days[d] || await loadDay(code, d, worker));
 
   const prev = await getDay(tradingDates[idx - 1]);
   const signal = await getDay(buyDate);
@@ -130,4 +129,7 @@ async function calcReviewPnl({ code, name, date, tradingDates }) {
   };
 }
 
-module.exports = { calcReviewPnl };
+// 盈亏规则变更时递增，已缓存且版本不同的结果会被视为过期并重算
+const RULES_VERSION = 1;
+
+module.exports = { calcReviewPnl, RULES_VERSION };

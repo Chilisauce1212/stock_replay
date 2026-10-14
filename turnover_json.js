@@ -210,16 +210,21 @@ async function loadJson(filename) {
   return data;
 }
 
-async function saveJson(records, filename) {
-  if (r2Client) {
-    const prefix = path.basename(filename) === '今日首板.json' ? 'daily-review' : 'test-cases';
-    await writeJson(`${prefix}/${path.basename(filename)}`, records);
-    return;
-  }
+function saveLocalJson(records, filename) {
   fs.mkdirSync(path.dirname(filename), { recursive: true });
   const temporary = `${filename}.tmp`;
   fs.writeFileSync(temporary, `${JSON.stringify(records, null, 2)}\n`, 'utf8');
   fs.renameSync(temporary, filename);
+}
+
+async function saveJson(records, filename, { alsoLocal = false } = {}) {
+  if (r2Client) {
+    const prefix = path.basename(filename) === '今日首板.json' ? 'daily-review' : 'test-cases';
+    await writeJson(`${prefix}/${path.basename(filename)}`, records);
+    if (alsoLocal) saveLocalJson(records, filename);
+    return;
+  }
+  saveLocalJson(records, filename);
 }
 
 async function run(startArgument, endArgument) {
@@ -368,8 +373,8 @@ async function runTodayFirstBoard() {
     throw new Error('问财页面已显示结果，但未能从接口响应提取股票数据，已停止写入以避免覆盖已有文件');
   }
   const records = convertToRecords(normalizeData(uniqueRows, calendar), dateString, 0);
-  await saveJson(records, filename);
-  console.log(`>>> 今日首板生成完成：${records.length} 条，已覆盖 ${storageTarget}`);
+  await saveJson(records, filename, { alsoLocal: true });
+  console.log(`>>> 今日首板生成完成：${records.length} 条，已覆盖 ${storageTarget}${r2Client ? `，并同步本地 ${filename}` : ''}`);
 }
 
 const [, , start, end] = process.argv;

@@ -7,7 +7,8 @@ const fs = require('fs');
 const XLSX = require('xlsx');
 const { S3Client, GetObjectCommand, PutObjectCommand } = require('@aws-sdk/client-s3');
 const { r2Client: sharedR2Client, R2_BUCKET: sharedR2Bucket, readJson, writeJson, listJsonKeys } = require('./r2-storage');
-const { calcReviewPnl } = require('./review-pnl');
+const { calcReviewPnl, RULES_VERSION } = require('./review-pnl');
+const pnlKey = (code, date) => `${code}|${date}`;
 const app = express();
 const PORT = process.env.PORT || 3000;
 const USE_LOCAL_JSON = process.env.USE_LOCAL_JSON === 'true';
@@ -230,7 +231,7 @@ app.get('/api/daily-review', async (req, res) => {
 app.get('/api/daily-review/:fileName', async (req, res) => {
   try {
     const cases = await parseDailyReview(req.params.fileName);
-    res.json({ status_code: 0, total: cases.length, data: cases });
+    res.json({ status_code: 0, total: cases.length, data: cases.map(({ pnl, ...item }) => item) });
   } catch (error) {
     res.status(400).json({ status_code: -1, msg: error.message });
   }
@@ -540,11 +541,17 @@ async function fetchThsKlineData(code = "000620", cutoffDate) {
     'x-fuyao-auth': 'eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJhdXRob3JpemVyX25hbWVzcGFjZSI6ImNvbW1vbi1ocS1hZ2dyIiwibGljZW5zZWVfdHlwZSI6IkZST05UX0FQUCIsImxpY2Vuc2VlX25hbWVzcGFjZSI6Imh4a2xpbmUtQUlNRV9Db21wb25lbnRfTGlicmFyeV9Db21wb25lbnQifQ.MWqYrKk4Y2_oWTbG3XZjNGoHK_GmIi_KeJKc_mNDqTA'
   };
 
+  // 沪市 ST/风险警示股在同花顺使用市场代码 22，普通沪市股票为 17：主代码无数据时再试备用代码
+  const markets = [market];
+  if (market === '17') markets.push('22');
+
   try {
-    const response = await axios.post(url, payload, { headers });
-    if (response.data && response.data.status_code === 0) {
-      const quoteData = response.data.data.quote_data[0];
-      return quoteData ? quoteData.value : [];
+    for (const candidate of markets) {
+      const response = await axios.post(url, { ...payload, code_list: [{ codes: [code], market: candidate }] }, { headers });
+      if (response.data && response.data.status_code === 0) {
+        const quoteData = response.data.data.quote_data[0];
+        if (quoteData && quoteData.value && quoteData.value.length) return quoteData.value;
+      }
     }
     return [];
   } catch (error) {
@@ -678,9 +685,9 @@ app.get('/api/kline', async (req, res) => {
   }
 });
 
-async function computeReviewPnl(code, date, name) {
+async function computeReviewPnl(code, date, name, worker) {
   const kline = processThsValues(await fetchThsKlineData(code, date));
-  const result = await calcReviewPnl({ code, name, date, tradingDates: kline.map(item => item.date) });
+  const result = await calcReviewPnl({ code, name, date, tradingDates: kline.map(item => item.date), worker });
 
   // K 线可能经过复权，把逐笔原始价格换算到图表价格
   const chartFactor = (day) => {
@@ -691,6 +698,7 @@ async function computeReviewPnl(code, date, name) {
   const { sell } = result;
   return {
     status_code: 0,
+    rulesVersion: RULES_VERSION,
     code,
     date,
     buyDate: result.buyDate,
@@ -702,8 +710,48 @@ async function computeReviewPnl(code, date, name) {
     sellReason: sell.reason,
     pnlPct: result.pnlPct,
     sellTick: { date: sell.date, time: sell.tick.time, price: sell.tick.price, vol: sell.tick.vol, buyorsell: sell.tick.buyorsell },
-    days: result.days,
   };
+}
+
+// 本地预计算的盈亏（npm run pnl 写入 daily-review JSON 每条记录的 pnl 字段），命中则不再实时抓取
+const PNL_CACHE_TTL_MS = 10 * 60 * 1000;
+let pnlCache = new Map();
+let pnlCacheLoadedAt = 0;
+let pnlCacheLoading = null;
+
+async function loadPnlCache() {
+  const items = new Map();
+  const add = (data) => {
+    for (const item of Array.isArray(data) ? data : []) {
+      if (!item || !item.pnl || item.pnl.rulesVersion !== RULES_VERSION) continue;
+      const date = String(item.date || '').trim();
+      const normalized = /^\d{8}$/.test(date) ? `${date.slice(0, 4)}-${date.slice(4, 6)}-${date.slice(6, 8)}` : date;
+      items.set(pnlKey(String(item.code || '').trim(), normalized), item.pnl);
+    }
+  };
+  if (!USE_LOCAL_JSON && sharedR2Client) {
+    for (const key of await listJsonKeys('daily-review/')) add(await readJson(key));
+  } else if (fs.existsSync(DAILY_REVIEW_DIR)) {
+    for (const name of fs.readdirSync(DAILY_REVIEW_DIR)) {
+      if (name.toLowerCase().endsWith('.json')) add(JSON.parse(fs.readFileSync(path.join(DAILY_REVIEW_DIR, name), 'utf8')));
+    }
+  }
+  return items;
+}
+
+async function getPnlCache() {
+  if (Date.now() - pnlCacheLoadedAt < PNL_CACHE_TTL_MS) return pnlCache;
+  if (!pnlCacheLoading) {
+    pnlCacheLoading = loadPnlCache()
+      .then(items => { pnlCache = items; })
+      .catch(error => console.error(`读取盈亏缓存失败: ${error.message}`))
+      .finally(() => {
+        pnlCacheLoadedAt = Date.now();
+        pnlCacheLoading = null;
+      });
+  }
+  await pnlCacheLoading;
+  return pnlCache;
 }
 
 // 盈亏任务队列：串行执行并限速，避免预加载抢占 K 线接口；用户主动请求优先
@@ -767,12 +815,13 @@ function parsePnlParams(source) {
 }
 
 // 预加载：只入队，立即返回
-app.post('/api/review-pnl/preload', express.json({ limit: '1mb' }), (req, res) => {
+app.post('/api/review-pnl/preload', express.json({ limit: '1mb' }), async (req, res) => {
   const items = Array.isArray(req.body?.items) ? req.body.items : [];
+  const cache = await getPnlCache();
   let queued = 0;
   for (const item of items) {
     const params = parsePnlParams(item);
-    if (!params) continue;
+    if (!params || cache.has(pnlKey(params.code, params.date))) continue;
     enqueuePnlJob(params.code, params.date, params.name, false);
     queued++;
   }
@@ -785,6 +834,8 @@ app.get('/api/review-pnl', async (req, res) => {
   if (!params) return res.status(400).json({ status_code: -1, msg: '参数错误' });
   res.set('Cache-Control', 'no-store');
   try {
+    const cached = (await getPnlCache()).get(pnlKey(params.code, params.date));
+    if (cached) return res.json(cached);
     const job = enqueuePnlJob(params.code, params.date, params.name, true);
     res.json(await job.promise);
   } catch (err) {
@@ -792,9 +843,11 @@ app.get('/api/review-pnl', async (req, res) => {
   }
 });
 
-app.listen(PORT, () => {
-  console.log(`服务启动成功: http://localhost:${PORT}`);
-});
+if (require.main === module) {
+  app.listen(PORT, () => {
+    console.log(`服务启动成功: http://localhost:${PORT}`);
+  });
+}
 
 app.get('/api/test-cases', async (req, res) => {
   try {
@@ -815,3 +868,5 @@ app.get('/api/test-cases/:fileName', async (req, res) => {
     res.status(400).json({ status_code: -1, msg: error.message });
   }
 });
+
+module.exports = { computeReviewPnl };
