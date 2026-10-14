@@ -541,6 +541,7 @@
   let priceLine = null;
   let sellPriceLine = null;
   let reviewPnlResults = new Map();
+  let preloadedReviewCases = null;
   let candleMarkers = [];
   let markerController = null;
   let testCases = [];
@@ -601,9 +602,8 @@
 
   function displayCodeLabel() {
     const code = activeCase?.marketCode || activeCase?.code || '--';
-    return isDailyReviewSource() && activeCase?.stockName
-      ? `股票名称: ${activeCase.stockName} 股票代码: ${code}`
-      : `股票代码: ${code}`;
+    if (isDailyReviewSource()) return `股票名称: ${activeCase?.stockName || code}`;
+    return `股票代码: ${code}`;
   }
 
   function setDailyReviewButtons() {
@@ -751,6 +751,7 @@
     boughtReviewCaseIds = new Set();
     boughtReviewViews = new Map();
     reviewPnlResults = new Map();
+    preloadedReviewCases = null;
     toggleReviewCalendar(false);
     updateReviewDateButton();
   }
@@ -1518,7 +1519,13 @@
   }
 
   function startNextCase() {
-    if (isDailyReviewSource()) resolveReviewPosition();
+    if (isDailyReviewSource()) {
+      resolveReviewPosition();
+      if (shuffledCases !== preloadedReviewCases) {
+        preloadedReviewCases = shuffledCases;
+        preloadReviewPnl(shuffledCases);
+      }
+    }
     if (currentNewsAbortController) currentNewsAbortController.abort();
     document.getElementById('newsPanel').hidden = true;
     currentNews = [];
@@ -1565,7 +1572,7 @@
     document.getElementById('stockNameVal').innerText = '股票名称: --';
     document.getElementById('stockNameVal').style.visibility = 'hidden';
     const requestedCase = activeCase;
-    document.getElementById('testStatus').innerText = `${pendingCaseNotice ? `${pendingCaseNotice}；` : ''}正在回放 ${activeCase.marketCode} ${activeCase.date}`;
+    document.getElementById('testStatus').innerText = `${pendingCaseNotice ? `${pendingCaseNotice}；` : ''}正在回放 ${isDailyReviewSource() ? (activeCase.stockName || activeCase.marketCode) : activeCase.marketCode} ${activeCase.date}`;
     pendingCaseNotice = '';
     setTestButtons(false);
     setDailyReviewButtons();
@@ -1632,6 +1639,32 @@
     updateTestProgress();
   }
 
+  // 买入时向服务端取收益；服务端已在后台排队预算，算好的直接返回，没算好的优先计算
+  function getReviewPnl(item) {
+    const query = new URLSearchParams({
+      code: item.code,
+      date: item.date,
+      name: item.stockName || '',
+    });
+    return fetch(`/api/review-pnl?${query}`, { cache: 'no-store' })
+      .then(res => res.json())
+      .then(res => {
+        if (res.status_code !== 0) throw new Error(res.msg || '盈亏计算失败');
+        return res;
+      });
+  }
+
+  // 每天开始加载时只提交一次预加载列表，由服务端串行限速异步计算，不占用 K 线请求
+  function preloadReviewPnl(items) {
+    fetch('/api/review-pnl/preload', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        items: items.map(item => ({ code: item.code, date: item.date, name: item.stockName || '' })),
+      }),
+    }).catch(() => {});
+  }
+
   function buyDailyReviewWithPnl() {
     const requestedCase = activeCase;
     const buyIndex = currentIndex - 1;
@@ -1647,17 +1680,8 @@
     document.getElementById('nextCaseButton').disabled = true;
     document.getElementById('testStatus').innerText = '正在获取逐笔成交并计算盈亏...';
 
-    const query = new URLSearchParams({
-      code: requestedCase.code,
-      date: buyCandle.date,
-      name: requestedCase.stockName || '',
-    });
-    fetch(`/api/review-pnl?${query}`, { cache: 'no-store' })
-      .then(res => res.json())
-      .then(res => {
-        if (res.status_code !== 0) throw new Error(res.msg || '盈亏计算失败');
-        return res;
-      })
+    const entryDate = buyCandle.date;
+    getReviewPnl(requestedCase)
       .then(res => ({ res }), error => ({ error }))
       .then(({ res, error }) => {
         if (activeCase !== requestedCase) return;

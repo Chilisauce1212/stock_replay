@@ -678,40 +678,115 @@ app.get('/api/kline', async (req, res) => {
   }
 });
 
-app.get('/api/review-pnl', async (req, res) => {
-  const code = String(req.query.code || '').trim();
-  const date = String(req.query.date || '').trim();
-  const name = String(req.query.name || '').trim();
-  if (!/^\d{6}$/.test(code) || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-    return res.status(400).json({ status_code: -1, msg: '参数错误' });
-  }
-  try {
-    res.set('Cache-Control', 'no-store');
-    const kline = processThsValues(await fetchThsKlineData(code, date));
-    const result = await calcReviewPnl({ code, name, date, tradingDates: kline.map(item => item.date) });
+async function computeReviewPnl(code, date, name) {
+  const kline = processThsValues(await fetchThsKlineData(code, date));
+  const result = await calcReviewPnl({ code, name, date, tradingDates: kline.map(item => item.date) });
 
-    // K 线可能经过复权，把逐笔原始价格换算到图表价格
-    const chartFactor = (day) => {
-      const candle = kline.find(item => item.date === day);
-      const raw = result.days.find(item => item.date === day);
-      return candle && raw && raw.close ? Number(candle.close) / raw.close : 1;
-    };
-    const { sell } = result;
-    res.json({
-      status_code: 0,
-      code,
-      date,
-      buyDate: result.buyDate,
-      buyPrice: result.buyPrice,
-      buyChartPrice: Number((result.buyPrice * chartFactor(result.buyDate)).toFixed(3)),
-      sellDate: sell.date,
-      sellPrice: sell.price,
-      sellChartPrice: Number((sell.price * chartFactor(sell.date)).toFixed(3)),
-      sellReason: sell.reason,
-      pnlPct: result.pnlPct,
-      sellTick: { date: sell.date, time: sell.tick.time, price: sell.tick.price, vol: sell.tick.vol, buyorsell: sell.tick.buyorsell },
-      days: result.days,
-    });
+  // K 线可能经过复权，把逐笔原始价格换算到图表价格
+  const chartFactor = (day) => {
+    const candle = kline.find(item => item.date === day);
+    const raw = result.days.find(item => item.date === day);
+    return candle && raw && raw.close ? Number(candle.close) / raw.close : 1;
+  };
+  const { sell } = result;
+  return {
+    status_code: 0,
+    code,
+    date,
+    buyDate: result.buyDate,
+    buyPrice: result.buyPrice,
+    buyChartPrice: Number((result.buyPrice * chartFactor(result.buyDate)).toFixed(3)),
+    sellDate: sell.date,
+    sellPrice: sell.price,
+    sellChartPrice: Number((sell.price * chartFactor(sell.date)).toFixed(3)),
+    sellReason: sell.reason,
+    pnlPct: result.pnlPct,
+    sellTick: { date: sell.date, time: sell.tick.time, price: sell.tick.price, vol: sell.tick.vol, buyorsell: sell.tick.buyorsell },
+    days: result.days,
+  };
+}
+
+// 盈亏任务队列：串行执行并限速，避免预加载抢占 K 线接口；用户主动请求优先
+const pnlJobs = new Map();
+const pnlHighQueue = [];
+const pnlLowQueue = [];
+const PNL_JOB_GAP_MS = 300;
+let pnlRunning = false;
+
+function enqueuePnlJob(code, date, name, highPriority) {
+  const key = `${code}|${date}`;
+  let job = pnlJobs.get(key);
+  if (!job) {
+    job = { key, code, date, name, state: 'queued' };
+    job.promise = new Promise((resolve, reject) => { job.resolve = resolve; job.reject = reject; });
+    job.promise.catch(() => {});
+    pnlJobs.set(key, job);
+    (highPriority ? pnlHighQueue : pnlLowQueue).push(job);
+    runPnlQueue();
+  } else if (highPriority && job.state === 'queued') {
+    const index = pnlLowQueue.indexOf(job);
+    if (index >= 0) {
+      pnlLowQueue.splice(index, 1);
+      pnlHighQueue.push(job);
+    }
+  }
+  return job;
+}
+
+async function runPnlQueue() {
+  if (pnlRunning) return;
+  pnlRunning = true;
+  try {
+    for (;;) {
+      const job = pnlHighQueue.shift() || pnlLowQueue.shift();
+      if (!job) break;
+      job.state = 'running';
+      try {
+        job.result = await computeReviewPnl(job.code, job.date, job.name);
+        job.state = 'done';
+        job.resolve(job.result);
+      } catch (err) {
+        job.state = 'failed';
+        job.error = err.message;
+        pnlJobs.delete(job.key); // 失败不缓存，允许重试
+        job.reject(err);
+      }
+      await new Promise(resolve => setTimeout(resolve, PNL_JOB_GAP_MS));
+    }
+  } finally {
+    pnlRunning = false;
+  }
+}
+
+function parsePnlParams(source) {
+  const code = String(source.code || '').trim();
+  const date = String(source.date || '').trim();
+  const name = String(source.name || '').trim();
+  if (!/^\d{6}$/.test(code) || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return null;
+  return { code, date, name };
+}
+
+// 预加载：只入队，立即返回
+app.post('/api/review-pnl/preload', express.json({ limit: '1mb' }), (req, res) => {
+  const items = Array.isArray(req.body?.items) ? req.body.items : [];
+  let queued = 0;
+  for (const item of items) {
+    const params = parsePnlParams(item);
+    if (!params) continue;
+    enqueuePnlJob(params.code, params.date, params.name, false);
+    queued++;
+  }
+  res.json({ status_code: 0, queued });
+});
+
+// 查询：已算好直接返回，否则插队到优先队列并等待结果
+app.get('/api/review-pnl', async (req, res) => {
+  const params = parsePnlParams(req.query);
+  if (!params) return res.status(400).json({ status_code: -1, msg: '参数错误' });
+  res.set('Cache-Control', 'no-store');
+  try {
+    const job = enqueuePnlJob(params.code, params.date, params.name, true);
+    res.json(await job.promise);
   } catch (err) {
     res.status(502).json({ status_code: -1, msg: `盈亏计算失败: ${err.message}` });
   }

@@ -337,4 +337,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { Worker, HOSTS };
+module.exports = { Worker, HOSTS, healthyHosts };

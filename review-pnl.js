@@ -1,9 +1,23 @@
 // daily-review 盈亏计算：按逐笔成交（通达信）模拟涨停买入后的卖出点。
-const { Worker, HOSTS } = require('./tdx_tick');
+const { Worker, healthyHosts } = require('./tdx_tick');
 
 const TICK_CACHE_LIMIT = 60;
 const MAX_STREAK_DAYS = 15;
 const tickCache = new Map();
+
+// 只连接探测可用的通达信服务器，并复用同一个连接（盈亏任务由服务端串行执行）
+let sharedWorkerPromise = null;
+async function getWorker() {
+  if (!sharedWorkerPromise) {
+    sharedWorkerPromise = healthyHosts()
+      .then(hosts => new Worker(hosts, 0, 0.05))
+      .catch(error => {
+        sharedWorkerPromise = null;
+        throw error;
+      });
+  }
+  return sharedWorkerPromise;
+}
 
 const round2 = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
 const TOL = 0.005;
@@ -18,13 +32,8 @@ function limitRatio(code, name = '') {
 async function fetchTrades(code, date) {
   const key = `${code}|${date}`;
   if (tickCache.has(key)) return tickCache.get(key);
-  const worker = new Worker(HOSTS, Math.floor(Math.random() * HOSTS.length), 0.05);
-  let rows;
-  try {
-    rows = await worker.run(code, parseInt(date.replace(/-/g, ''), 10));
-  } finally {
-    worker.close();
-  }
+  const worker = await getWorker();
+  const rows = await worker.run(code, parseInt(date.replace(/-/g, ''), 10));
   if (!rows.length) throw new Error(`${date} 没有逐笔成交数据`);
   const csvRows = rows.map(r => ({ date, ...r }));
   if (tickCache.size >= TICK_CACHE_LIMIT) tickCache.delete(tickCache.keys().next().value);
