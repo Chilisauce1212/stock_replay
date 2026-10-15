@@ -819,8 +819,16 @@
       return;
     }
     for (;;) {
-      while (casePosition < shuffledCases.length && isReviewCaseDone(shuffledCases[casePosition])) casePosition++;
-      if (casePosition < shuffledCases.length) return;
+      if (shuffledCases.length) {
+        const startPosition = ((casePosition % shuffledCases.length) + shuffledCases.length) % shuffledCases.length;
+        for (let offset = 0; offset < shuffledCases.length; offset++) {
+          const nextPosition = (startPosition + offset) % shuffledCases.length;
+          if (!isReviewCaseDone(shuffledCases[nextPosition])) {
+            casePosition = nextPosition;
+            return;
+          }
+        }
+      }
       const nextDate = reviewDates.find(date => date > selectedReviewDate
         && getReviewCasesForDate(date).some(item => !isReviewCaseDone(item)));
       if (!nextDate) return;
