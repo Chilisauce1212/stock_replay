@@ -143,6 +143,8 @@
     .chart-area .legend {
       flex: 0 0 auto;
       position: relative;
+      margin-bottom: 0;
+      padding-bottom: 0;
     }
     #reviewWheelToggle {
       position: absolute;
@@ -291,18 +293,15 @@
       font-weight: bold;
     }
     #newsButton {
-      position: absolute;
-      z-index: 7;
-      top: 38px;
-      right: 84px;
-      padding: 5px 9px;
-      background: rgba(17, 20, 25, 0.92);
+      margin-left: auto;
+      padding: 2px 7px;
+      font-size: 12px;
       color: #b7d7ff;
     }
     #newsPanel {
       position: absolute;
       z-index: 5;
-      top: 72px;
+      top: 28px;
       right: 0;
       bottom: 0;
       width: min(620px, 100%);
@@ -528,14 +527,13 @@
       </div>
       <div class="legend">
         <span id="codeVal" style="color: #f0b90b;">股票代码: --</span>
-        <span id="dateVal" style="color: #fff;">日期: --</span>
         <span id="amountVal" style="color: #b0b8c4;">成交金额: --</span>
         <span id="successBoard" class="result-board">成功: <span id="successCount">0</span></span>
         <span id="failureBoard" class="result-board">失败: <span id="failureCount">0</span></span>
         <span id="totalBoard" class="result-board">总数: <span id="totalCount">0</span><span id="dailyRecordStatus"></span></span>
         <span id="reviewPnlBoard" class="result-board" hidden>当日盈亏: <span id="reviewDayPnl">--</span> 累计盈亏: <span id="reviewTotalPnl">--</span></span>
+        <button id="newsButton" type="button" onclick="toggleNewsPanel()" aria-label="显示新闻" title="显示新闻">新闻</button>
       </div>
-      <button id="newsButton" type="button" onclick="toggleNewsPanel()" aria-label="显示新闻" title="显示新闻">新闻</button>
       <div id="newsPanel" hidden>
         <div id="newsList" class="news-list"></div>
       </div>
@@ -1323,7 +1321,6 @@
 
       if (candle) {
         document.getElementById('codeVal').innerText = displayCodeLabel();
-        document.getElementById('dateVal').innerText = `日期: ${param.time}`;
         const hoveredData = fullData.find(item => item.date === param.time);
         document.getElementById('amountVal').innerText = formatAmount(hoveredData?.amount);
       }
@@ -1405,7 +1402,6 @@
     const last = displayData[displayData.length - 1];
     if (last) {
       document.getElementById('codeVal').innerText = displayCodeLabel();
-      document.getElementById('dateVal').innerText = `日期: ${last.date}`;
       document.getElementById('amountVal').innerText = formatAmount(last.amount);
     }
   }
