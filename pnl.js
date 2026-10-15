@@ -1,7 +1,7 @@
 // 本地预计算 daily-review 每只股票买入后的盈亏，结果直接写入每条记录的 pnl 字段，再用 npm run upload 上传 R2。
-// 用法: npm run pnl -- [文件名...] [--force] [--workers 6] [--delay 0.1]
+// 用法: npm run pnl -- [文件名...] [--force-overwrite] [--workers 6] [--delay 0.1]
 //   不带文件名则处理 daily-review/ 下全部 JSON；文件名可只写关键字，如 2025 或 2025.json
-//   默认跳过已有且规则版本一致的记录；--force 强制全部重算（规则变更时使用）
+//   默认跳过已有且规则版本一致的记录；--force-overwrite 强制重算（--force 为兼容别名）
 require('dotenv').config();
 
 const fs = require('fs');
@@ -16,10 +16,26 @@ const REVIEW_DIR = path.join(__dirname, 'daily-review');
 function parseArgs(argv) {
   const opt = { workers: 6, delay: 0.1, force: false, names: [] };
   for (let i = 0; i < argv.length; i++) {
-    if (argv[i] === '--force') opt.force = true;
-    else if (argv[i] === '--workers') opt.workers = Math.max(1, parseInt(argv[++i], 10) || 1);
-    else if (argv[i] === '--delay') opt.delay = Math.max(0, parseFloat(argv[++i]) || 0);
-    else opt.names.push(argv[i]);
+    const arg = argv[i];
+    if (arg === '--force' || arg === '--force-overwrite') {
+      opt.force = true;
+    } else if (arg === '--workers') {
+      const value = argv[++i];
+      if (value === undefined || !/^\d+$/.test(value) || Number(value) < 1) {
+        throw new Error('--workers 需要一个大于 0 的整数');
+      }
+      opt.workers = Number(value);
+    } else if (arg === '--delay') {
+      const value = argv[++i];
+      if (value === undefined || !Number.isFinite(Number(value)) || Number(value) < 0) {
+        throw new Error('--delay 需要一个大于或等于 0 的秒数');
+      }
+      opt.delay = Number(value);
+    } else if (arg.startsWith('--')) {
+      throw new Error(`未知选项: ${arg}`);
+    } else {
+      opt.names.push(arg);
+    }
   }
   return opt;
 }
@@ -62,7 +78,17 @@ async function main() {
 
   const stores = files.map(file => {
     const data = loadData(file);
-    return { file, data, cases: toCases(data), done: 0, failed: 0, cached: 0, dirty: false };
+    const cases = toCases(data);
+    return {
+      file,
+      data,
+      cases,
+      invalid: data.length - cases.length,
+      done: 0,
+      failed: 0,
+      cached: 0,
+      dirty: false,
+    };
   });
 
   // 同一只股票同一天出现在多个文件时只算一次
@@ -84,7 +110,7 @@ async function main() {
   const total = [...tasks.values()].reduce((sum, task) => sum + task.stores.length, 0);
   console.log(`规则版本 ${RULES_VERSION}${opt.force ? '（强制重算）' : ''}`);
   for (const store of stores) {
-    console.log(`  ${store.file}: 共 ${store.cases.length} 条，已有 ${store.cached} 条，待计算 ${store.cases.length - store.cached} 条`);
+    console.log(`  ${store.file}: 有效 ${store.cases.length} 条，跳过 ${store.cached} 条，待计算 ${store.cases.length - store.cached} 条，格式无效 ${store.invalid} 条`);
   }
   if (!tasks.size) {
     console.log('没有需要计算的记录。');
@@ -159,7 +185,7 @@ async function main() {
   process.stdout.write('\n');
 
   console.log(`完成，用时 ${Math.round((Date.now() - startedAt) / 1000)}s，失败 ${failures.length} 条`);
-  failures.forEach(line => console.log(`  失败 ${line}`));
+  failures.forEach(line => console.log(`  失败（原有 pnl 未覆盖）${line}`));
   console.log('结果已写入 daily-review/ 的原 JSON（pnl 字段），上传请运行 npm run upload');
 }
 

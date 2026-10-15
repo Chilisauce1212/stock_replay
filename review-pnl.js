@@ -29,6 +29,16 @@ function limitRatio(code, name = '') {
   return 0.1;
 }
 
+function observedLimitRatio(day, previousClose, fallback) {
+  if (!Number.isFinite(previousClose) || previousClose <= 0) return fallback;
+  const high = Math.max(...day.trades.map(trade => trade.price));
+  const candidates = [0.05, 0.1, 0.2, 0.3]
+    .map(ratio => ({ ratio, limitPrice: round2(previousClose * (1 + ratio)) }))
+    .sort((left, right) => Math.abs(left.limitPrice - high) - Math.abs(right.limitPrice - high));
+  const closest = candidates[0];
+  return Math.abs(closest.limitPrice - high) <= 0.01 ? closest.ratio : fallback;
+}
+
 async function fetchTrades(code, date, worker) {
   const key = `${code}|${date}`;
   if (tickCache.has(key)) return tickCache.get(key);
@@ -52,6 +62,7 @@ async function loadDay(code, date, worker) {
     trades,
     open: (auction || trades[0]).price,
     close: trades[trades.length - 1].price,
+    high: Math.max(...trades.map(trade => trade.price)),
     amount,
   };
 }
@@ -77,15 +88,18 @@ async function calcReviewPnl({ code, name, date, tradingDates, worker }) {
   if (idx + 1 >= tradingDates.length) throw new Error('没有后续交易日');
   const buyDate = tradingDates[idx];
 
-  const ratio = limitRatio(code, name);
-  const limitOf = (prevClose) => round2(prevClose * (1 + ratio));
   const days = {};
   const getDay = async (d) => (days[d] = days[d] || await loadDay(code, d, worker));
 
-  const prev = await getDay(tradingDates[idx - 1]);
-  const signal = await getDay(buyDate);
-  const cost = limitOf(prev.close);
-  const signalLimitUp = signal.close >= cost - TOL;
+  const fallbackRatio = limitRatio(code, name);
+  const signalDay = await getDay(date);
+  const previousSignalDay = signalIdx > 0 ? await getDay(tradingDates[signalIdx - 1]) : null;
+  const ratio = observedLimitRatio(signalDay, previousSignalDay && previousSignalDay.close, fallbackRatio);
+  const limitOf = (prevClose) => round2(prevClose * (1 + ratio));
+  const previousBuyDay = await getDay(tradingDates[idx - 1]);
+  const buyDay = await getDay(buyDate);
+  const cost = limitOf(previousBuyDay.close);
+  const signalLimitUp = buyDay.close >= cost - TOL;
 
   let sell;
   let nextDate = tradingDates[idx + 1];
@@ -99,7 +113,7 @@ async function calcReviewPnl({ code, name, date, tradingDates, worker }) {
       ? { date: nextDate, tick: hit, price: cost, reason: '次日低开后回到成本线，按成本卖出' }
       : { date: nextDate, tick: next.trades[next.trades.length - 1], price: next.close, reason: '次日低开未回成本线，按收盘价卖出' };
   } else {
-    let prevClose = signal.close;
+    let prevClose = buyDay.close;
     for (let k = idx + 1; k < tradingDates.length && k <= idx + MAX_STREAK_DAYS; k++) {
       const day = await getDay(tradingDates[k]);
       const closedLimitUp = day.close >= limitOf(prevClose) - TOL;
@@ -130,6 +144,6 @@ async function calcReviewPnl({ code, name, date, tradingDates, worker }) {
 }
 
 // 盈亏规则变更时递增，已缓存且版本不同的结果会被视为过期并重算
-const RULES_VERSION = 1;
+const RULES_VERSION = 2;
 
 module.exports = { calcReviewPnl, RULES_VERSION };
