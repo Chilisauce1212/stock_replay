@@ -293,11 +293,17 @@
       color: #b7d7ff;
     }
     #newsButton,
-    .portfolio-button { flex: 0 0 auto; }
+    .portfolio-button,
+    .chain-stocks-button { flex: 0 0 auto; }
     .portfolio-button {
       padding: 2px 7px;
       font-size: 12px;
       color: #f0b90b;
+    }
+    .chain-stocks-button {
+      padding: 2px 7px;
+      font-size: 12px;
+      color: #8bd5ff;
     }
     #portfolioOverlay[hidden] { display: none; }
     #portfolioOverlay {
@@ -361,6 +367,25 @@
     .portfolio-table td:first-child { text-align: left; }
     .portfolio-empty { padding: 16px; color: #8994a2; text-align: center; }
     #portfolioSaveStatus { min-height: 18px; margin-top: 8px; color: #8994a2; font-size: 12px; }
+    #chainStocksOverlay[hidden] { display: none; }
+    #chainStocksOverlay {
+      position: fixed;
+      z-index: 21;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 12px;
+      box-sizing: border-box;
+      background: rgba(0, 0, 0, 0.72);
+      white-space: normal;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    .chain-stocks-dialog { width: min(760px, 100%); }
+    .chain-stocks-table th,
+    .chain-stocks-table td { white-space: normal; }
+    .chain-stocks-table th:nth-child(2),
+    .chain-stocks-table td:nth-child(2) { width: 90px; text-align: center; }
     #newsPanel {
       position: absolute;
       z-index: 5;
@@ -606,6 +631,7 @@
         <span id="totalBoard" class="result-board">总数: <span id="totalCount">0</span><span id="dailyRecordStatus"></span></span>
         <span id="reviewPnlBoard" class="result-board" hidden>累计盈亏: <span id="reviewTotalPnl">--</span></span>
         <button id="portfolioButton" class="portfolio-button" type="button" hidden onclick="openPortfolioDialog('account')">账户</button>
+        <button id="chainStocksButton" class="chain-stocks-button" type="button" hidden onclick="openChainStocksDialog()">连板股票</button>
         <button id="newsButton" type="button" onclick="toggleNewsPanel()" aria-label="显示新闻" title="显示新闻">新闻</button>
       </div>
       <div id="newsPanel" hidden>
@@ -656,6 +682,20 @@
               </table>
             </div>
             <div id="portfolioSaveStatus" aria-live="polite"></div>
+          </div>
+        </section>
+      </div>
+      <div id="chainStocksOverlay" hidden onclick="closeChainStocksDialog(event)">
+        <section class="portfolio-dialog chain-stocks-dialog" role="dialog" aria-modal="true" aria-labelledby="chainStocksTitle" onclick="event.stopPropagation()">
+          <div class="portfolio-dialog-head">
+            <strong id="chainStocksTitle">连板股票</strong>
+            <button type="button" onclick="closeChainStocksDialog()">关闭</button>
+          </div>
+          <div class="portfolio-table-wrap">
+            <table class="portfolio-table chain-stocks-table">
+              <thead><tr><th>股票名称</th><th>连板个数</th><th>涨停原因</th></tr></thead>
+              <tbody id="chainStocksRows"></tbody>
+            </table>
           </div>
         </section>
       </div>
@@ -710,6 +750,10 @@
   let currentNewsLoading = false;
   let currentNewsError = '';
   let currentNewsAbortController = null;
+  let chainStocks = [];
+  let chainStocksLoaded = false;
+  let chainStocksLoading = false;
+  let chainStocksError = '';
 
   function isDailyReviewSource() {
     return document.getElementById('dataSource').value === 'dailyReview';
@@ -717,7 +761,10 @@
 
   function loadFilesForSource() {
     const source = document.getElementById('dataSource').value;
-    if (source === 'dailyReview') return loadDailyReviewFiles();
+    if (source === 'dailyReview') {
+      loadChainStocks();
+      return loadDailyReviewFiles();
+    }
     if (source === 'testcases') return loadTestCaseFiles();
   }
 
@@ -734,12 +781,84 @@
     document.getElementById('reviewDateButton').disabled = reviewDates.length <= 1;
     document.getElementById('reviewWheelToggle').hidden = !dailyReview;
     document.getElementById('portfolioButton').hidden = !dailyReview || !portfolioFile;
+    updateChainStocksButton();
     if (!dailyReview) {
       toggleReviewWheel(false);
       toggleReviewCalendar(false);
+      closeChainStocksDialog();
     }
     document.getElementById('favoriteButton').disabled = dailyReview || !activeCase;
     document.getElementById('favoriteButton').hidden = dailyReview;
+  }
+
+  function updateChainStocksButton() {
+    const button = document.getElementById('chainStocksButton');
+    button.hidden = !isDailyReviewSource() || !chainStocksLoaded;
+    button.disabled = !selectedReviewDate;
+  }
+
+  function loadChainStocks() {
+    chainStocksLoading = true;
+    chainStocksLoaded = false;
+    chainStocksError = '';
+    updateChainStocksButton();
+    fetch(`/api/chain-stocks?ts=${Date.now()}`, { cache: 'no-store' })
+      .then(async response => {
+        const result = await response.json();
+        if (!response.ok || result.status_code !== 0) throw new Error(result.msg || `HTTP ${response.status}`);
+        return result;
+      })
+      .then(result => {
+        chainStocks = Array.isArray(result.data) ? result.data : [];
+        chainStocksLoaded = true;
+      })
+      .catch(error => {
+        chainStocks = [];
+        chainStocksError = error.message;
+      })
+      .finally(() => {
+        chainStocksLoading = false;
+        updateChainStocksButton();
+        if (!document.getElementById('chainStocksOverlay').hidden) renderChainStocks();
+      });
+  }
+
+  function renderChainStocks() {
+    const title = document.getElementById('chainStocksTitle');
+    const body = document.getElementById('chainStocksRows');
+    title.textContent = `连板股票 ${selectedReviewDate || ''}`.trim();
+    body.replaceChildren();
+    const rows = chainStocks
+      .filter(item => String(item.date || '') === selectedReviewDate)
+      .sort((left, right) => Number(right.consecutiveBoards) - Number(left.consecutiveBoards));
+    if (chainStocksLoading || chainStocksError || !rows.length) {
+      const row = body.insertRow();
+      const cell = row.insertCell();
+      cell.colSpan = 3;
+      cell.className = 'portfolio-empty';
+      cell.textContent = chainStocksLoading
+        ? '正在加载连板股票...'
+        : chainStocksError || '当天没有符合条件的连板股票';
+      return;
+    }
+    rows.forEach(item => {
+      const row = body.insertRow();
+      [item.stockName || '--', `${item.consecutiveBoards || '--'}板`, item.limitUpReason || '暂无'].forEach(text => {
+        const cell = row.insertCell();
+        cell.textContent = text;
+      });
+    });
+  }
+
+  function openChainStocksDialog() {
+    if (!isDailyReviewSource() || !chainStocksLoaded) return;
+    renderChainStocks();
+    document.getElementById('chainStocksOverlay').hidden = false;
+  }
+
+  function closeChainStocksDialog(event) {
+    if (event && event.target !== document.getElementById('chainStocksOverlay')) return;
+    document.getElementById('chainStocksOverlay').hidden = true;
   }
 
   function displayCodeLabel() {

@@ -13,6 +13,7 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const USE_LOCAL_JSON = process.env.USE_LOCAL_JSON === 'true';
 const DAILY_REVIEW_DIR = path.join(__dirname, 'daily-review');
+const CHAIN_STOCKS_FILE = '连板股票.json';
 const TEST_CASE_DIR = path.join(__dirname, 'test-cases');
 const FAVORITES_FILE = path.join(__dirname, 'favorites.json');
 const REPLAY_BEFORE_COUNT = 500;
@@ -154,6 +155,24 @@ function listLocalJson(directory) {
     .map(entry => entry.name);
 }
 
+async function parseChainStocks() {
+  const fileName = CHAIN_STOCKS_FILE;
+  if (!USE_LOCAL_JSON && sharedR2Client) {
+    try {
+      const data = await readJson(`daily-review/${fileName}`);
+      if (!Array.isArray(data)) throw new Error('连板股票 JSON 格式错误');
+      return data;
+    } catch (error) {
+      if (error.name !== 'NoSuchKey' && error.$metadata?.httpStatusCode !== 404) throw error;
+    }
+  }
+  const filePath = path.join(DAILY_REVIEW_DIR, fileName);
+  if (!fs.existsSync(filePath)) return [];
+  const data = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+  if (!Array.isArray(data)) throw new Error('连板股票 JSON 格式错误');
+  return data;
+}
+
 async function parseDailyReview(fileName) {
   if (!USE_LOCAL_JSON && sharedR2Client && fileName.toLowerCase().endsWith('.json')) {
     const key = safeDailyReviewKey(fileName);
@@ -213,18 +232,30 @@ app.get('/api/daily-review', async (req, res) => {
     let files;
     if (!USE_LOCAL_JSON && sharedR2Client) {
       const keys = await listJsonKeys('daily-review/');
-      files = keys.map(key => key.slice('daily-review/'.length));
+      files = keys.map(key => key.slice('daily-review/'.length))
+        .filter(file => file !== CHAIN_STOCKS_FILE);
     } else {
       syncJsonTestCases();
       files = fs.existsSync(DAILY_REVIEW_DIR)
           ? fs.readdirSync(DAILY_REVIEW_DIR, { withFileTypes: true })
             .filter(entry => entry.isFile() && entry.name.toLowerCase().endsWith('.json'))
+            .filter(entry => entry.name !== CHAIN_STOCKS_FILE)
             .map(entry => entry.name)
           : [];
     }
     res.json({ status_code: 0, files });
   } catch (error) {
     res.status(500).json({ status_code: -1, msg: `读取每日复盘失败: ${error.message}` });
+  }
+});
+
+app.get('/api/chain-stocks', async (req, res) => {
+  try {
+    const records = await parseChainStocks();
+    res.set('Cache-Control', 'no-store');
+    res.json({ status_code: 0, data: records });
+  } catch (error) {
+    res.status(500).json({ status_code: -1, msg: `读取连板股票失败: ${error.message}` });
   }
 });
 
