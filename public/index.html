@@ -517,11 +517,10 @@
     }
     @media (max-width: 900px) and (orientation: landscape) {
       body {
-        padding: 8px;
-        padding-bottom: 0;
+        padding: 0 8px;
       }
       .container {
-        height: calc(100dvh - 8px);
+        height: 100dvh;
       }
       .test-panel {
         display: grid;
@@ -1391,9 +1390,7 @@
     if (board.hidden) return;
     const model = simulatePortfolio(portfolioTrades);
     const value = document.getElementById('reviewTotalPnl');
-    value.textContent = portfolioTrades.length
-      ? `${money(model.profitAmount)} (${formatPnl(model.profitPct)})`
-      : '--';
+    value.textContent = portfolioTrades.length ? formatPnl(model.profitPct) : '--';
     value.style.color = !portfolioTrades.length || model.profitPct === 0
       ? ''
       : model.profitPct > 0 ? '#d9363e' : '#1f9d55';
