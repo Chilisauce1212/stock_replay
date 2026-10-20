@@ -1,0 +1,668 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <meta name="theme-color" content="#0b0e11">
+  <title>筹码标注</title>
+  <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
+  <style>
+    html, body {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      overflow: hidden;
+    }
+    body {
+      background: #0b0e11;
+      color: #cccccc;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      font-size: 14px;
+      box-sizing: border-box;
+      padding: 8px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    button, input, select, textarea {
+      font: inherit;
+      color: #e6e6e6;
+      background: #1e232a;
+      border: 1px solid #2b2f36;
+      border-radius: 4px;
+      padding: 5px 8px;
+    }
+    button { cursor: pointer; }
+    button:disabled { opacity: 0.45; cursor: default; }
+    button.primary { background: #f0b90b; color: #111419; border-color: #f0b90b; }
+    button.active { background: #4cc9f0; color: #111419; border-color: #4cc9f0; }
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 6px;
+    }
+    .toolbar input[type="text"] { width: 76px; }
+    #stockName { width: 90px; }
+    #status { color: #818998; margin-left: 4px; }
+    #status.error { color: #ff6b6b; }
+    .main {
+      flex: 1;
+      min-height: 0;
+      display: flex;
+      gap: 8px;
+    }
+    #chartWrap {
+      position: relative;
+      flex: 1;
+      min-width: 0;
+    }
+    #chartContainer { position: absolute; inset: 0; }
+    #chartWrap.selecting #chartContainer { cursor: col-resize; touch-action: none; }
+    #hoverInfo {
+      position: absolute;
+      top: 6px;
+      left: 8px;
+      z-index: 3;
+      pointer-events: none;
+      color: #b0b8c4;
+      font-size: 12px;
+    }
+    .side {
+      width: 340px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      min-height: 0;
+    }
+    .panel {
+      background: #111419;
+      border: 1px solid #1e232a;
+      border-radius: 6px;
+      padding: 10px;
+    }
+    #editor[hidden] { display: none; }
+    #editor h3, .list-head { margin: 0 0 8px; font-size: 14px; color: #f0b90b; font-weight: 600; }
+    .label-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+    .label-chips button { padding: 3px 8px; border-left-width: 4px; }
+    .label-chips button.selected { color: #111419; }
+    #editorNote { width: 100%; box-sizing: border-box; min-height: 64px; resize: vertical; }
+    .editor-actions { display: flex; gap: 6px; margin-top: 8px; }
+    .editor-actions .spacer { flex: 1; }
+    #rangeList {
+      flex: 1;
+      min-height: 0;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .range-item {
+      border-left: 4px solid #818998;
+      background: #161a20;
+      border-radius: 4px;
+      padding: 6px 8px;
+      cursor: pointer;
+    }
+    .range-item.current { outline: 1px solid #f0b90b; }
+    .range-item .row { display: flex; align-items: center; gap: 6px; }
+    .range-item .tag { font-weight: 600; }
+    .range-item .dates { color: #818998; font-size: 12px; }
+    .range-item .stats { color: #b0b8c4; font-size: 12px; margin-top: 2px; }
+    .range-item .note { margin-top: 3px; font-size: 13px; white-space: pre-wrap; }
+    .range-item .copy { margin-left: auto; padding: 1px 6px; font-size: 12px; }
+    .empty { color: #818998; font-size: 13px; }
+    .hint { color: #818998; font-size: 12px; margin-top: 6px; line-height: 1.5; }
+    @media (max-width: 900px) {
+      body { overflow-y: auto; height: auto; min-height: 100%; }
+      html { overflow-y: auto; }
+      .main { flex-direction: column; }
+      #chartWrap { flex: none; height: 62vh; }
+      .side { width: auto; }
+      #rangeList { max-height: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="toolbar">
+    <input id="codeInput" type="text" inputmode="numeric" maxlength="6" placeholder="代码">
+    <input id="boardDateInput" type="date" title="首板日">
+    <input id="stockName" type="text" placeholder="股票名称" onchange="if (doc) persist()">
+    <button class="primary" type="button" onclick="loadCase()">加载</button>
+    <select id="caseSelect" onchange="pickCase()">
+      <option value="">已标注案例</option>
+    </select>
+    <button id="selectModeButton" type="button" onclick="toggleSelectMode()" disabled>框选区间</button>
+    <a href="/" style="color:#818998;">回放</a>
+    <span id="status"></span>
+  </div>
+  <div class="main">
+    <div id="chartWrap">
+      <div id="hoverInfo"></div>
+      <div id="chartContainer"></div>
+    </div>
+    <div class="side">
+      <div id="editor" class="panel" hidden>
+        <h3 id="editorTitle">新标注</h3>
+        <div class="label-chips" id="labelChips"></div>
+        <textarea id="editorNote" placeholder="一句话描述：为什么这么判断"></textarea>
+        <div class="editor-actions">
+          <button class="primary" type="button" onclick="saveEditor()">保存</button>
+          <button type="button" onclick="closeEditor()">取消</button>
+          <span class="spacer"></span>
+          <button id="deleteButton" type="button" onclick="deleteEditing()">删除</button>
+        </div>
+      </div>
+      <div class="panel" style="flex:1; min-height:0; display:flex; flex-direction:column;">
+        <div class="list-head">标注区间</div>
+        <div id="rangeList"><div class="empty">加载股票后，点「框选区间」在图上拖出一段 K 线。</div></div>
+        <div class="hint">
+          统计口径：涨跌 = 区间末收盘 ÷ 区间前一日收盘；量比 = 区间日均量 ÷ 区间前 20 日均量。<br>
+          首板日之后的 K 线变暗显示，只用来看结果，不能标注。
+        </div>
+      </div>
+    </div>
+  </div>
+
+<script>
+  const HISTORY_COUNT = 800;
+  const BASELINE_DAYS = 20;
+  const LABEL_COLORS = {
+    尖刺放量: '#ff6b6b',
+    温和放量吸筹: '#4cc9f0',
+    集中放量吸筹: '#4361ee',
+    缩量: '#8d99ae',
+    承接放量: '#f0b90b',
+    洗盘: '#2ec4b6',
+    首板拉升: '#ff3333',
+    其他: '#b5838d',
+  };
+  const PREVIEW_COLOR = '#ffffff';
+
+  let chart, candleSeries, volumeSeries, shadeSeries, ma5Series, ma10Series, ma20Series, markerController;
+  let bars = [];
+  let doc = null;
+  let selectMode = false;
+  let dragStart = null;
+  let preview = null;
+  let editing = null; // { id?, start, end, label, note }
+
+  const $ = id => document.getElementById(id);
+
+  function setStatus(text, isError) {
+    $('status').textContent = text;
+    $('status').classList.toggle('error', Boolean(isError));
+  }
+
+  function labelColor(label) {
+    return LABEL_COLORS[label] || LABEL_COLORS.其他;
+  }
+
+  function initChart() {
+    const container = $('chartContainer');
+    chart = LightweightCharts.createChart(container, {
+      width: container.clientWidth,
+      height: container.clientHeight,
+      layout: { background: { type: 'solid', color: '#111419' }, textColor: '#818998' },
+      grid: { vertLines: { color: '#1e232a' }, horzLines: { color: '#1e232a' } },
+      crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+      rightPriceScale: { borderColor: '#2b2f36' },
+      timeScale: { borderColor: '#2b2f36', timeVisible: false },
+    });
+    new ResizeObserver(() => chart.resize(container.clientWidth, container.clientHeight)).observe(container);
+
+    // 区间底色：独立价格轴、占满整个高度，先加入所以画在 K 线下面
+    shadeSeries = chart.addSeries(LightweightCharts.HistogramSeries, {
+      priceScaleId: 'shade',
+      priceLineVisible: false,
+      lastValueVisible: false,
+      base: 0,
+    });
+    chart.priceScale('shade').applyOptions({ visible: false, scaleMargins: { top: 0, bottom: 0 } });
+
+    candleSeries = chart.addSeries(LightweightCharts.CandlestickSeries, {
+      upColor: '#ff3333',
+      downColor: '#00b050',
+      borderVisible: false,
+      wickUpColor: '#ff3333',
+      wickDownColor: '#00b050',
+    });
+    chart.priceScale('right').applyOptions({ scaleMargins: { top: 0.05, bottom: 0.3 } });
+
+    const lineOptions = color => ({ color, lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
+    ma5Series = chart.addSeries(LightweightCharts.LineSeries, lineOptions('#ffb000'));
+    ma10Series = chart.addSeries(LightweightCharts.LineSeries, lineOptions('#00a0e9'));
+    ma20Series = chart.addSeries(LightweightCharts.LineSeries, lineOptions('#e4007f'));
+
+    volumeSeries = chart.addSeries(LightweightCharts.HistogramSeries, {
+      priceFormat: { type: 'volume' },
+      priceScaleId: 'volume',
+      priceLineVisible: false,
+      lastValueVisible: false,
+    });
+    chart.priceScale('volume').applyOptions({ scaleMargins: { top: 0.8, bottom: 0 } });
+    markerController = LightweightCharts.createSeriesMarkers(candleSeries, []);
+
+    chart.subscribeCrosshairMove(param => {
+      const bar = param.time ? bars.find(item => item.date === param.time) : null;
+      $('hoverInfo').textContent = bar ? describeBar(bar) : '';
+    });
+
+    container.addEventListener('pointerdown', onPointerDown);
+    container.addEventListener('pointermove', onPointerMove);
+    container.addEventListener('pointerup', onPointerUp);
+    container.addEventListener('pointercancel', () => { dragStart = null; });
+  }
+
+  function describeBar(bar) {
+    const index = bars.indexOf(bar);
+    const previous = bars[index - 1];
+    const change = previous ? `${((bar.close / previous.close - 1) * 100).toFixed(2)}%` : '--';
+    return `${bar.date}  开 ${bar.open}  高 ${bar.high}  低 ${bar.low}  收 ${bar.close}  ${change}  量 ${formatVolume(bar.volume)}  额 ${formatAmount(bar.amount)}`;
+  }
+
+  function formatVolume(value) {
+    const number = Number(value) || 0;
+    return number >= 1e8 ? `${(number / 1e8).toFixed(2)}亿` : `${(number / 1e4).toFixed(0)}万`;
+  }
+
+  function formatAmount(value) {
+    const number = Number(value) || 0;
+    return number >= 1e8 ? `${(number / 1e8).toFixed(2)}亿` : `${(number / 1e4).toFixed(0)}万`;
+  }
+
+  // ---------- 框选 ----------
+
+  function indexAtX(x) {
+    const logical = chart.timeScale().coordinateToLogical(x);
+    if (logical === null || !bars.length) return null;
+    return Math.max(0, Math.min(bars.length - 1, Math.round(logical)));
+  }
+
+  function lastLabelableIndex() {
+    let index = bars.length - 1;
+    while (index >= 0 && bars[index].date > doc.boardDate) index -= 1;
+    return index;
+  }
+
+  function pointerIndex(event) {
+    const rect = $('chartContainer').getBoundingClientRect();
+    const index = indexAtX(event.clientX - rect.left);
+    return index === null ? null : Math.min(index, lastLabelableIndex());
+  }
+
+  function toggleSelectMode(force) {
+    selectMode = typeof force === 'boolean' ? force : !selectMode;
+    $('selectModeButton').classList.toggle('active', selectMode);
+    $('selectModeButton').textContent = selectMode ? '框选中（拖动选择）' : '框选区间';
+    $('chartWrap').classList.toggle('selecting', selectMode);
+    chart.applyOptions({
+      handleScroll: !selectMode,
+      handleScale: !selectMode,
+    });
+  }
+
+  function onPointerDown(event) {
+    if (!selectMode) return;
+    const index = pointerIndex(event);
+    if (index === null || index < 0) return;
+    dragStart = index;
+    preview = { start: bars[index].date, end: bars[index].date };
+    $('chartContainer').setPointerCapture(event.pointerId);
+    renderShade();
+  }
+
+  function onPointerMove(event) {
+    if (!selectMode || dragStart === null) return;
+    const index = pointerIndex(event);
+    if (index === null || index < 0) return;
+    const [from, to] = dragStart <= index ? [dragStart, index] : [index, dragStart];
+    preview = { start: bars[from].date, end: bars[to].date };
+    renderShade();
+  }
+
+  function onPointerUp() {
+    if (!selectMode || dragStart === null) return;
+    dragStart = null;
+    toggleSelectMode(false);
+    openEditor({ start: preview.start, end: preview.end, label: '', note: '' });
+  }
+
+  // ---------- 编辑 ----------
+
+  function renderLabelChips() {
+    $('labelChips').innerHTML = '';
+    Object.keys(LABEL_COLORS).forEach(label => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = label;
+      button.style.borderLeftColor = labelColor(label);
+      const selected = editing && editing.label === label;
+      button.classList.toggle('selected', selected);
+      button.style.background = selected ? labelColor(label) : '';
+      button.onclick = () => {
+        editing.label = label;
+        renderLabelChips();
+      };
+      $('labelChips').appendChild(button);
+    });
+  }
+
+  function openEditor(range) {
+    editing = { ...range };
+    preview = { start: range.start, end: range.end };
+    const days = countBars(range.start, range.end);
+    $('editorTitle').textContent = `${range.id ? '编辑' : '新标注'}：${range.start}${range.start === range.end ? '' : ` ~ ${range.end}`}（${days} 根）`;
+    $('editorNote').value = range.note || '';
+    $('deleteButton').hidden = !range.id;
+    $('editor').hidden = false;
+    renderLabelChips();
+    renderShade();
+    renderRangeList();
+  }
+
+  function closeEditor() {
+    editing = null;
+    preview = null;
+    $('editor').hidden = true;
+    renderShade();
+    renderRangeList();
+  }
+
+  function saveEditor() {
+    if (!editing.label) {
+      setStatus('先选一个标签', true);
+      return;
+    }
+    const range = {
+      id: editing.id || `${editing.start}_${Date.now().toString(36)}`,
+      start: editing.start,
+      end: editing.end,
+      label: editing.label,
+      note: $('editorNote').value.trim(),
+    };
+    const index = doc.ranges.findIndex(item => item.id === range.id);
+    if (index >= 0) doc.ranges[index] = range;
+    else doc.ranges.push(range);
+    closeEditor();
+    persist();
+  }
+
+  function deleteEditing() {
+    if (!editing?.id || !confirm('删除这条标注？')) return;
+    doc.ranges = doc.ranges.filter(item => item.id !== editing.id);
+    closeEditor();
+    persist();
+  }
+
+  async function persist() {
+    setStatus('保存中…');
+    try {
+      const response = await fetch(`/api/labels/${doc.code}/${doc.boardDate}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: $('stockName').value.trim(), note: doc.note || '', ranges: doc.ranges }),
+      });
+      const result = await response.json();
+      if (result.status_code !== 0) throw new Error(result.msg);
+      doc = result.data;
+      setStatus(`已保存 ${new Date().toLocaleTimeString()}`);
+      renderAll();
+      loadCaseList();
+    } catch (error) {
+      setStatus(`保存失败：${error.message}`, true);
+    }
+  }
+
+  // ---------- 渲染 ----------
+
+  function countBars(start, end) {
+    return bars.filter(bar => bar.date >= start && bar.date <= end).length;
+  }
+
+  function rangeStats(range) {
+    const from = bars.findIndex(bar => bar.date >= range.start);
+    let to = -1;
+    bars.forEach((bar, index) => { if (bar.date <= range.end) to = index; });
+    if (from < 0 || to < from) return null;
+    const inside = bars.slice(from, to + 1);
+    const baseline = bars.slice(Math.max(0, from - BASELINE_DAYS), from);
+    const average = list => list.reduce((sum, bar) => sum + Number(bar.volume), 0) / list.length;
+    const before = bars[from - 1];
+    const high = Math.max(...inside.map(bar => bar.high));
+    const low = Math.min(...inside.map(bar => bar.low));
+    return {
+      days: inside.length,
+      change: before ? (inside[inside.length - 1].close / before.close - 1) * 100 : null,
+      amplitude: (high / low - 1) * 100,
+      volumeRatio: baseline.length ? average(inside) / average(baseline) : null,
+    };
+  }
+
+  function formatStats(stats) {
+    if (!stats) return '区间不在已加载的 K 线内';
+    const parts = [`${stats.days} 根`];
+    if (stats.change !== null) parts.push(`涨跌 ${stats.change >= 0 ? '+' : ''}${stats.change.toFixed(1)}%`);
+    parts.push(`振幅 ${stats.amplitude.toFixed(1)}%`);
+    if (stats.volumeRatio !== null) parts.push(`量比 ${stats.volumeRatio.toFixed(2)}`);
+    return parts.join(' · ');
+  }
+
+  function referenceText(range) {
+    return `@${doc.code} ${range.start === range.end ? range.start : `${range.start}~${range.end}`}`;
+  }
+
+  function renderRangeList() {
+    const list = $('rangeList');
+    list.innerHTML = '';
+    if (!doc || !doc.ranges.length) {
+      list.innerHTML = '<div class="empty">还没有标注。点「框选区间」在图上拖出一段 K 线。</div>';
+      return;
+    }
+    doc.ranges.forEach(range => {
+      const item = document.createElement('div');
+      item.className = 'range-item';
+      item.classList.toggle('current', editing?.id === range.id);
+      item.style.borderLeftColor = labelColor(range.label);
+      item.innerHTML = `
+        <div class="row">
+          <span class="tag"></span>
+          <span class="dates"></span>
+          <button class="copy" type="button" title="复制引用，发到对话里">复制引用</button>
+        </div>
+        <div class="stats"></div>
+        <div class="note"></div>`;
+      item.querySelector('.tag').textContent = range.label;
+      item.querySelector('.tag').style.color = labelColor(range.label);
+      item.querySelector('.dates').textContent = range.start === range.end ? range.start : `${range.start} ~ ${range.end}`;
+      item.querySelector('.stats').textContent = formatStats(rangeStats(range));
+      item.querySelector('.note').textContent = range.note;
+      item.querySelector('.copy').onclick = event => {
+        event.stopPropagation();
+        copyText(referenceText(range));
+      };
+      item.onclick = () => {
+        focusRange(range);
+        openEditor(range);
+      };
+      list.appendChild(item);
+    });
+  }
+
+  async function copyText(text) {
+    try {
+      await navigator.clipboard.writeText(text);
+      setStatus(`已复制：${text}`);
+    } catch {
+      prompt('复制这段引用：', text);
+    }
+  }
+
+  function focusRange(range) {
+    const from = bars.findIndex(bar => bar.date >= range.start);
+    const to = bars.findIndex(bar => bar.date > range.end);
+    if (from < 0) return;
+    const end = to < 0 ? bars.length - 1 : to - 1;
+    const padding = Math.max(20, Math.round((end - from) * 0.6));
+    chart.timeScale().setVisibleLogicalRange({ from: from - padding, to: end + padding });
+  }
+
+  function renderShade() {
+    const colorByDate = new Map();
+    (doc?.ranges || []).forEach(range => {
+      bars.forEach(bar => {
+        if (bar.date >= range.start && bar.date <= range.end) colorByDate.set(bar.date, `${labelColor(range.label)}2e`);
+      });
+    });
+    if (preview) {
+      bars.forEach(bar => {
+        if (bar.date >= preview.start && bar.date <= preview.end) colorByDate.set(bar.date, `${PREVIEW_COLOR}26`);
+      });
+    }
+    shadeSeries.setData(bars.map(bar => colorByDate.has(bar.date)
+      ? { time: bar.date, value: 1, color: colorByDate.get(bar.date) }
+      : { time: bar.date }));
+  }
+
+  function renderMarkers() {
+    const markers = (doc?.ranges || [])
+      .filter(range => bars.some(bar => bar.date >= range.start && bar.date <= range.end))
+      .map(range => ({
+        time: bars.find(bar => bar.date >= range.start).date,
+        position: 'aboveBar',
+        color: labelColor(range.label),
+        shape: 'arrowDown',
+        text: range.label,
+      }));
+    const board = bars.find(bar => bar.date === doc?.boardDate);
+    if (board) markers.push({ time: board.date, position: 'belowBar', color: '#f0b90b', shape: 'arrowUp', text: '首板' });
+    markers.sort((left, right) => left.time.localeCompare(right.time));
+    markerController.setMarkers(markers);
+  }
+
+  function renderBars() {
+    const candleColors = {
+      'limit-up': '#f0b90b',
+      'touch-limit-up-up': '#ff69b4',
+      'touch-limit-up-down': '#c2185b',
+      'limit-down': '#8e44ad',
+    };
+    const candles = [];
+    const volumes = [];
+    bars.forEach(bar => {
+      let color = candleColors[bar.limitStatus] || (bar.close >= bar.open ? '#ff3333' : '#00b050');
+      if (bar.date > doc.boardDate) color = `${color}55`;
+      candles.push({ time: bar.date, open: bar.open, high: bar.high, low: bar.low, close: bar.close, color, borderColor: color, wickColor: color });
+      volumes.push({ time: bar.date, value: Number(bar.volume), color: bar.date > doc.boardDate ? `${color.slice(0, 7)}33` : `${color}80` });
+    });
+    candleSeries.setData(candles);
+    volumeSeries.setData(volumes);
+    const maData = key => bars.filter(bar => bar[key] !== null && bar[key] !== undefined).map(bar => ({ time: bar.date, value: Number(bar[key]) }));
+    ma5Series.setData(maData('ma5'));
+    ma10Series.setData(maData('ma10'));
+    ma20Series.setData(maData('ma20'));
+  }
+
+  function renderAll() {
+    renderShade();
+    renderMarkers();
+    renderRangeList();
+  }
+
+  // ---------- 加载 ----------
+
+  async function loadCaseList() {
+    try {
+      const result = await (await fetch('/api/labels')).json();
+      const select = $('caseSelect');
+      select.innerHTML = '<option value="">已标注案例</option>';
+      result.cases.forEach(item => {
+        const option = document.createElement('option');
+        option.value = `${item.code}|${item.boardDate}`;
+        option.textContent = `${item.code} ${item.name} ${item.boardDate}（${item.count}）`;
+        select.appendChild(option);
+      });
+      if (doc) select.value = `${doc.code}|${doc.boardDate}`;
+    } catch (error) {
+      setStatus(`读取案例列表失败：${error.message}`, true);
+    }
+  }
+
+  function pickCase() {
+    const value = $('caseSelect').value;
+    if (!value) return;
+    const [code, boardDate] = value.split('|');
+    $('codeInput').value = code;
+    $('boardDateInput').value = boardDate;
+    loadCase();
+  }
+
+  async function loadCase() {
+    const code = $('codeInput').value.trim();
+    const boardDate = $('boardDateInput').value;
+    if (!/^\d{6}$/.test(code) || !boardDate) {
+      setStatus('请输入 6 位代码和首板日', true);
+      return;
+    }
+    setStatus('加载中…');
+    closeEditor();
+    toggleSelectMode(false);
+    try {
+      const [klineResult, labelResult] = await Promise.all([
+        fetch(`/api/kline?code=${code}&cutoffDate=${boardDate}&history=${HISTORY_COUNT}`).then(response => response.json()),
+        fetch(`/api/labels/${code}/${boardDate}`).then(response => response.json()),
+      ]);
+      if (klineResult.status_code !== 0) throw new Error(klineResult.msg || 'K 线获取失败');
+      if (labelResult.status_code !== 0) throw new Error(labelResult.msg || '标注读取失败');
+      bars = klineResult.data.map(bar => ({
+        ...bar,
+        open: Number(bar.open),
+        high: Number(bar.high),
+        low: Number(bar.low),
+        close: Number(bar.close),
+      }));
+      if (!bars.length) throw new Error('没有 K 线数据');
+      doc = labelResult.data;
+      doc.ranges = doc.ranges || [];
+      if (doc.name) $('stockName').value = doc.name;
+      else if (!$('stockName').dataset.code || $('stockName').dataset.code !== code) $('stockName').value = '';
+      $('stockName').dataset.code = code;
+      if (!bars.some(bar => bar.date === boardDate)) {
+        setStatus(`注意：${boardDate} 不是交易日或不在数据里`, true);
+      } else {
+        setStatus(`${bars[0].date} ~ ${bars[bars.length - 1].date}，共 ${bars.length} 根`);
+      }
+      history.replaceState(null, '', `?code=${code}&date=${boardDate}`);
+      $('selectModeButton').disabled = false;
+      renderBars();
+      renderAll();
+      const boardIndex = bars.findIndex(bar => bar.date >= boardDate);
+      // 只多露出首板后 3 根，避免后面的连板把纵轴撑高、压扁首板前的走势
+      const end = boardIndex < 0 ? bars.length - 1 : Math.min(bars.length - 1, boardIndex + 3);
+      chart.timeScale().setVisibleLogicalRange({ from: Math.max(0, end - 360), to: end + 3 });
+      $('caseSelect').value = `${code}|${boardDate}`;
+    } catch (error) {
+      setStatus(`加载失败：${error.message}`, true);
+    }
+  }
+
+  initChart();
+  loadCaseList();
+  const params = new URLSearchParams(location.search);
+  if (params.get('code') && params.get('date')) {
+    $('codeInput').value = params.get('code');
+    $('boardDateInput').value = params.get('date');
+    loadCase();
+  }
+  document.addEventListener('keydown', event => {
+    if (event.target.matches('input, textarea')) return;
+    if (event.key === 'Escape') {
+      toggleSelectMode(false);
+      closeEditor();
+    } else if (event.key === 'b' && !$('selectModeButton').disabled) {
+      toggleSelectMode();
+    }
+  });
+</script>
+</body>
+</html>

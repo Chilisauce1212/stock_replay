@@ -19,6 +19,9 @@ const FAVORITES_FILE = path.join(__dirname, 'favorites.json');
 const REPLAY_BEFORE_COUNT = 500;
 const REPLAY_AFTER_COUNT = 30;
 const HISTORY_REQUEST_COUNT = 300;
+const MAX_HISTORY_COUNT = 1500;
+const LABELS_DIR = path.join(__dirname, 'labels');
+const CHIP_LABELS = ['尖刺放量', '温和放量吸筹', '集中放量吸筹', '缩量', '承接放量', '洗盘', '首板拉升', '其他'];
 const TRADE_DAY_URL = 'https://data.10jqka.com.cn/dataapi/limit_up/trade_day';
 const TIMELINE_URL = 'https://m.10jqka.com.cn/app/timeline/v2/list';
 const THS_COOKIE = String(process.env.THS_COOKIE || '').trim();
@@ -524,7 +527,7 @@ app.get('/api/news', async (req, res) => {
   }
 });
 
-async function fetchThsKlineData(code = "000620", cutoffDate) {
+async function fetchThsKlineData(code = "000620", cutoffDate, requestCount = HISTORY_REQUEST_COUNT) {
   const url = 'https://quota-h.10jqka.com.cn/fuyao/common_hq_aggr/quote/v1/single_kline';
   
   // 动态获取市场代码
@@ -551,7 +554,7 @@ async function fetchThsKlineData(code = "000620", cutoffDate) {
     // trade_date=-1 表示使用当前数据，end_time 使用回测日期后一个月的时间戳。
     trade_date: -1,
     // 预留额外缓冲，避免接口按自身交易日规则返回时前置数据不足。
-    begin_time: -(HISTORY_REQUEST_COUNT + 50),
+    begin_time: -(requestCount + 50),
     end_time: endTime,
     adjust_type: "forward",
     gpid: 1
@@ -684,19 +687,23 @@ app.get('/api/kline', async (req, res) => {
   const cutoffDate = /^\d{8}$/.test(rawCutoffDate)
     ? `${rawCutoffDate.slice(0, 4)}-${rawCutoffDate.slice(4, 6)}-${rawCutoffDate.slice(6, 8)}`
     : rawCutoffDate || undefined;
+  // 标注页需要首板前更长的历史：history 指定回放日期之前保留的 K 线根数
+  const history = Math.min(Number(req.query.history) || 0, MAX_HISTORY_COUNT);
+  const beforeCount = history > 0 ? history : REPLAY_BEFORE_COUNT;
 
   try {
     res.set('Cache-Control', 'no-store');
-    const rawValues = await fetchThsKlineData(code, cutoffDate);
+    // end_time 是回放日期后一个月，多取约 30 根补上这段
+    const rawValues = await fetchThsKlineData(code, cutoffDate, history > 0 ? history + 30 : HISTORY_REQUEST_COUNT);
     const allProcessedData = processThsValues(rawValues);
     let processedData = allProcessedData;
 
-    // 指定回放日期时，只保留该日期前 240 根、当日和之后 20 根 K 线。
+    // 指定回放日期时，只保留该日期前 beforeCount 根、当日和之后 REPLAY_AFTER_COUNT 根 K 线。
     // MA 已经基于完整历史计算，再截取窗口不会影响均线值。
     if (cutoffDate && allProcessedData.length > 0) {
       const targetIndex = allProcessedData.findIndex(item => item.date >= cutoffDate);
       if (targetIndex >= 0) {
-        const from = Math.max(0, targetIndex - REPLAY_BEFORE_COUNT);
+        const from = Math.max(0, targetIndex - beforeCount);
         const to = Math.min(allProcessedData.length, targetIndex + REPLAY_AFTER_COUNT + 1);
         processedData = allProcessedData.slice(from, to);
       }
@@ -706,7 +713,7 @@ app.get('/api/kline', async (req, res) => {
       status_code: 0,
       code: code,
       startDate: cutoffDate || null,
-      beforeCount: REPLAY_BEFORE_COUNT,
+      beforeCount,
       afterCount: REPLAY_AFTER_COUNT,
       total: processedData.length,
       data: processedData
@@ -872,6 +879,72 @@ app.get('/api/review-pnl', async (req, res) => {
   } catch (err) {
     res.status(502).json({ status_code: -1, msg: `盈亏计算失败: ${err.message}` });
   }
+});
+
+// 筹码标注：每个案例（股票 + 首板日）一个 JSON 文件，存在 labels/ 下随仓库提交
+function labelFilePath(code, boardDate) {
+  if (!/^\d{6}$/.test(code) || !/^\d{4}-\d{2}-\d{2}$/.test(boardDate)) return null;
+  return path.join(LABELS_DIR, `${code}_${boardDate}.json`);
+}
+
+function normalizeLabelRange(range, index) {
+  const start = toDateString(range?.start);
+  const end = toDateString(range?.end);
+  const label = String(range?.label || '').trim();
+  if (!start || !end || !CHIP_LABELS.includes(label)) return null;
+  return {
+    id: String(range.id || `${start}_${index}_${Date.now().toString(36)}`),
+    start: start <= end ? start : end,
+    end: start <= end ? end : start,
+    label,
+    note: String(range.note || '').trim(),
+  };
+}
+
+app.get('/api/labels', (req, res) => {
+  const cases = fs.existsSync(LABELS_DIR)
+    ? fs.readdirSync(LABELS_DIR)
+      .filter(name => /^\d{6}_\d{4}-\d{2}-\d{2}\.json$/.test(name))
+      .map(name => {
+        const doc = JSON.parse(fs.readFileSync(path.join(LABELS_DIR, name), 'utf8'));
+        return { code: doc.code, name: doc.name || '', boardDate: doc.boardDate, count: (doc.ranges || []).length };
+      })
+      .sort((left, right) => right.boardDate.localeCompare(left.boardDate))
+    : [];
+  res.json({ status_code: 0, labels: CHIP_LABELS, cases });
+});
+
+app.get('/api/labels/:code/:boardDate', (req, res) => {
+  const filePath = labelFilePath(req.params.code, req.params.boardDate);
+  if (!filePath) return res.status(400).json({ status_code: -1, msg: '股票代码或首板日期格式无效' });
+  const doc = fs.existsSync(filePath)
+    ? JSON.parse(fs.readFileSync(filePath, 'utf8'))
+    : { code: req.params.code, name: '', boardDate: req.params.boardDate, ranges: [] };
+  res.set('Cache-Control', 'no-store');
+  res.json({ status_code: 0, data: doc });
+});
+
+app.put('/api/labels/:code/:boardDate', (req, res) => {
+  const { code, boardDate } = req.params;
+  const filePath = labelFilePath(code, boardDate);
+  if (!filePath) return res.status(400).json({ status_code: -1, msg: '股票代码或首板日期格式无效' });
+  const ranges = (Array.isArray(req.body?.ranges) ? req.body.ranges : []).map(normalizeLabelRange);
+  if (ranges.some(range => !range)) return res.status(400).json({ status_code: -1, msg: '标注区间格式无效' });
+  if (ranges.some(range => range.end > boardDate)) {
+    return res.status(400).json({ status_code: -1, msg: '标注区间不能晚于首板日' });
+  }
+
+  const doc = {
+    code,
+    name: String(req.body?.name || '').trim(),
+    boardDate,
+    note: String(req.body?.note || '').trim(),
+    updatedAt: new Date().toISOString(),
+    ranges: ranges.sort((left, right) => left.start.localeCompare(right.start) || left.end.localeCompare(right.end)),
+  };
+  fs.mkdirSync(LABELS_DIR, { recursive: true });
+  fs.writeFileSync(filePath, `${JSON.stringify(doc, null, 2)}\n`, 'utf8');
+  res.json({ status_code: 0, data: doc });
 });
 
 if (require.main === module) {
