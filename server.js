@@ -21,7 +21,7 @@ const REPLAY_AFTER_COUNT = 30;
 const HISTORY_REQUEST_COUNT = 300;
 const MAX_HISTORY_COUNT = 1500;
 const LABELS_DIR = path.join(__dirname, 'labels');
-const CHIP_LABELS = ['尖刺放量', '温和放量吸筹', '集中放量吸筹', '缩量', '承接放量', '洗盘', '首板拉升', '其他'];
+const CHIP_LABELS = ['尖刺放量', '温和放量吸筹', '集中放量吸筹', '缩量', '承接放量', '洗盘', '首板拉升', '高抛低吸', '其他'];
 const TRADE_DAY_URL = 'https://data.10jqka.com.cn/dataapi/limit_up/trade_day';
 const TIMELINE_URL = 'https://m.10jqka.com.cn/app/timeline/v2/list';
 const THS_COOKIE = String(process.env.THS_COOKIE || '').trim();
@@ -945,6 +945,44 @@ app.put('/api/labels/:code/:boardDate', (req, res) => {
   fs.mkdirSync(LABELS_DIR, { recursive: true });
   fs.writeFileSync(filePath, `${JSON.stringify(doc, null, 2)}\n`, 'utf8');
   res.json({ status_code: 0, data: doc });
+});
+
+// 标注抽样：从本地一进二回测样本里抽，只取模式范围内的票（主板、非 ST、买入价 30 元以下），
+// 盈利和不盈利各一半；结果不随抽样返回，标完再单独查看，避免先看结果再标注
+let labelSamplePool = null;
+
+function loadLabelSamplePool() {
+  if (labelSamplePool) return labelSamplePool;
+  const files = fs.existsSync(DAILY_REVIEW_DIR)
+    ? fs.readdirSync(DAILY_REVIEW_DIR).filter(name => /^一进二回测_.*\.json$/.test(name))
+    : [];
+  labelSamplePool = files.flatMap(name => JSON.parse(fs.readFileSync(path.join(DAILY_REVIEW_DIR, name), 'utf8')))
+    .filter(item => item?.pnl?.status_code === 0
+      && /^(60|00)\d{4}$/.test(item.code)
+      && !/ST/i.test(item.stockName || '')
+      && item.pnl.buyPrice < 30)
+    .map(item => ({ code: item.code, stockName: item.stockName || '', date: toDateString(item.date), pnl: item.pnl }));
+  return labelSamplePool;
+}
+
+app.get('/api/label-samples/random', (req, res) => {
+  const pool = loadLabelSamplePool();
+  const labeled = new Set(fs.existsSync(LABELS_DIR) ? fs.readdirSync(LABELS_DIR).map(name => name.replace(/\.json$/, '')) : []);
+  const candidates = pool.filter(item => !labeled.has(`${item.code}_${item.date}`));
+  const wantWin = Math.random() < 0.5;
+  const group = candidates.filter(item => (item.pnl.pnlPct > 0) === wantWin);
+  const source = group.length ? group : candidates;
+  if (!source.length) return res.status(404).json({ status_code: -1, msg: '没有可抽的样本，请检查 daily-review 下的一进二回测文件' });
+  const { pnl, ...sample } = source[Math.floor(Math.random() * source.length)];
+  res.set('Cache-Control', 'no-store');
+  res.json({ status_code: 0, data: sample, remaining: candidates.length });
+});
+
+app.get('/api/label-samples/outcome', (req, res) => {
+  const code = String(req.query.code || '').trim();
+  const date = toDateString(req.query.date);
+  const sample = loadLabelSamplePool().find(item => item.code === code && item.date === date);
+  res.json({ status_code: 0, data: sample ? sample.pnl : null });
 });
 
 if (require.main === module) {

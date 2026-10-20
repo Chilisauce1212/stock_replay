@@ -129,10 +129,12 @@
     <input id="boardDateInput" type="date" title="首板日">
     <input id="stockName" type="text" placeholder="股票名称" onchange="if (doc) persist()">
     <button class="primary" type="button" onclick="loadCase()">加载</button>
+    <button type="button" onclick="drawSample()" title="从一进二回测样本里随机抽一只（盈利、不盈利各一半），先不显示结果">抽案例</button>
     <select id="caseSelect" onchange="pickCase()">
       <option value="">已标注案例</option>
     </select>
     <button id="selectModeButton" type="button" onclick="toggleSelectMode()" disabled>框选区间</button>
+    <button id="resultButton" type="button" onclick="toggleResult()" disabled>显示结果</button>
     <a href="/" style="color:#818998;">回放</a>
     <span id="status"></span>
   </div>
@@ -158,7 +160,7 @@
         <div id="rangeList"><div class="empty">加载股票后，点「框选区间」在图上拖出一段 K 线。</div></div>
         <div class="hint">
           统计口径：涨跌 = 区间末收盘 ÷ 区间前一日收盘；量比 = 区间日均量 ÷ 区间前 20 日均量。<br>
-          首板日之后的 K 线变暗显示，只用来看结果，不能标注。
+          首板日之后的 K 线默认隐藏，标完再点「显示结果」，避免结果影响判断。
         </div>
       </div>
     </div>
@@ -175,12 +177,15 @@
     承接放量: '#f0b90b',
     洗盘: '#2ec4b6',
     首板拉升: '#ff3333',
+    高抛低吸: '#9b5de5',
     其他: '#b5838d',
   };
   const PREVIEW_COLOR = '#ffffff';
 
   let chart, candleSeries, volumeSeries, shadeSeries, ma5Series, ma10Series, ma20Series, markerController;
   let bars = [];
+  let allBars = [];
+  let showResult = false;
   let doc = null;
   let selectMode = false;
   let dragStart = null;
@@ -569,6 +574,60 @@
     renderRangeList();
   }
 
+  // ---------- 结果 ----------
+
+  function applyResultVisibility() {
+    bars = showResult ? allBars : allBars.filter(bar => bar.date <= doc.boardDate);
+    $('resultButton').textContent = showResult ? '隐藏结果' : '显示结果';
+    renderBars();
+    renderAll();
+  }
+
+  async function toggleResult() {
+    showResult = !showResult;
+    applyResultVisibility();
+    if (showResult) showOutcome();
+    else setStatus('');
+  }
+
+  function countBoards() {
+    let index = allBars.findIndex(bar => bar.date === doc.boardDate);
+    if (index < 0) return 0;
+    let boards = 0;
+    while (index < allBars.length && allBars[index].limitStatus === 'limit-up') {
+      boards += 1;
+      index += 1;
+    }
+    return boards;
+  }
+
+  async function showOutcome() {
+    const parts = [`连板 ${countBoards()} 个`];
+    try {
+      const result = await (await fetch(`/api/label-samples/outcome?code=${doc.code}&date=${doc.boardDate}`)).json();
+      const pnl = result.data;
+      if (pnl) parts.push(`回测 ${pnl.pnlPct >= 0 ? '+' : ''}${pnl.pnlPct}%（${pnl.sellDate} ${pnl.sellReason}）`);
+    } catch {
+      // 回测结果只是补充信息，取不到时只显示连板数
+    }
+    setStatus(`结果：${parts.join('；')}`);
+  }
+
+  async function drawSample() {
+    setStatus('抽样中…');
+    try {
+      const result = await (await fetch('/api/label-samples/random')).json();
+      if (result.status_code !== 0) throw new Error(result.msg);
+      $('codeInput').value = result.data.code;
+      $('boardDateInput').value = result.data.date;
+      $('stockName').value = result.data.stockName;
+      $('stockName').dataset.code = result.data.code;
+      await loadCase();
+    } catch (error) {
+      setStatus(`抽样失败：${error.message}`, true);
+    }
+  }
+
   // ---------- 加载 ----------
 
   async function loadCaseList() {
@@ -614,28 +673,29 @@
       ]);
       if (klineResult.status_code !== 0) throw new Error(klineResult.msg || 'K 线获取失败');
       if (labelResult.status_code !== 0) throw new Error(labelResult.msg || '标注读取失败');
-      bars = klineResult.data.map(bar => ({
+      allBars = klineResult.data.map(bar => ({
         ...bar,
         open: Number(bar.open),
         high: Number(bar.high),
         low: Number(bar.low),
         close: Number(bar.close),
       }));
-      if (!bars.length) throw new Error('没有 K 线数据');
+      if (!allBars.length) throw new Error('没有 K 线数据');
       doc = labelResult.data;
       doc.ranges = doc.ranges || [];
       if (doc.name) $('stockName').value = doc.name;
       else if (!$('stockName').dataset.code || $('stockName').dataset.code !== code) $('stockName').value = '';
       $('stockName').dataset.code = code;
-      if (!bars.some(bar => bar.date === boardDate)) {
+      if (!allBars.some(bar => bar.date === boardDate)) {
         setStatus(`注意：${boardDate} 不是交易日或不在数据里`, true);
       } else {
-        setStatus(`${bars[0].date} ~ ${bars[bars.length - 1].date}，共 ${bars.length} 根`);
+        setStatus(`首板前共 ${allBars.filter(bar => bar.date < boardDate).length} 根`);
       }
       history.replaceState(null, '', `?code=${code}&date=${boardDate}`);
       $('selectModeButton').disabled = false;
-      renderBars();
-      renderAll();
+      $('resultButton').disabled = false;
+      showResult = false;
+      applyResultVisibility();
       const boardIndex = bars.findIndex(bar => bar.date >= boardDate);
       // 只多露出首板后 3 根，避免后面的连板把纵轴撑高、压扁首板前的走势
       const end = boardIndex < 0 ? bars.length - 1 : Math.min(bars.length - 1, boardIndex + 3);
