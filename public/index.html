@@ -146,10 +146,93 @@
       margin-bottom: 0;
       padding-bottom: 0;
     }
+    .volume-pile-toolbar {
+      position: relative;
+      z-index: 9;
+      display: flex;
+      flex: 0 0 auto;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 12px;
+      min-height: 26px;
+      padding: 2px 4px;
+      color: #aeb8c5;
+      font-size: 11px;
+      background: rgba(17, 20, 25, 0.88);
+    }
+    .volume-pile-toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      white-space: nowrap;
+      color: #f0b90b;
+    }
+    .volume-pile-toggle input { margin: 0; }
+    .volume-pile-toolbar > button {
+      padding: 3px 7px;
+      font-size: 10px;
+      white-space: nowrap;
+    }
+    .volume-pile-toolbar > button.is-active {
+      border-color: #f0b90b;
+      color: #f0b90b;
+    }
+    #volumePileSettings summary {
+      color: #b7d7ff;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .volume-pile-panel {
+      position: absolute;
+      z-index: 8;
+      top: calc(100% + 4px);
+      left: 0;
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 9px 14px;
+      width: min(520px, calc(100vw - 32px));
+      max-height: min(70dvh, 520px);
+      overflow: auto;
+      padding: 12px;
+      box-sizing: border-box;
+      border: 1px solid #526176;
+      background: rgba(17, 20, 25, 0.98);
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+    }
+    .volume-pile-field {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      align-items: center;
+      gap: 3px 8px;
+      min-width: 0;
+    }
+    .volume-pile-field label { color: #aeb8c5; }
+    .volume-pile-field output {
+      color: #f2f4f7;
+      font-family: monospace;
+    }
+    .volume-pile-field input { grid-column: 1 / -1; width: 100%; margin: 0; }
+    .volume-pile-field input[type="range"] { padding: 0; border: 0; background: transparent; }
+    .volume-pile-panel > button {
+      grid-column: 1 / -1;
+      justify-self: start;
+    }
+    .volume-pile-help {
+      grid-column: 1 / -1;
+      color: #8994a2;
+      line-height: 1.4;
+    }
+    #volumePileInfo {
+      min-width: 0;
+      overflow: hidden;
+      color: #aeb8c5;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
     #reviewWheelToggle {
       position: absolute;
       z-index: 7;
-      top: 38px;
+      top: 70px;
       left: 8px;
       padding: 5px 9px;
       background: rgba(17, 20, 25, 0.92);
@@ -158,7 +241,7 @@
     #reviewStockWheel {
       position: absolute;
       z-index: 7;
-      top: 76px;
+      top: 108px;
       left: 8px;
       width: min(240px, calc(100vw - 32px));
       padding: 9px;
@@ -168,7 +251,7 @@
       box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
       display: flex;
       flex-direction: column;
-      max-height: calc(100% - 84px);
+      max-height: calc(100% - 116px);
     }
     #reviewDateButton {
       flex: 1 1 0;
@@ -462,11 +545,14 @@
       flex: 1 1 auto;
       min-height: 0;
       border: 1px solid #2b2f36;
+      background: #111419;
       position: relative;
       box-sizing: border-box;
       overflow: hidden;
       touch-action: none;
     }
+    .volume-pile-band.is-profit { background: rgba(240, 82, 152, 0.18); }
+    .volume-pile-band.is-candidate { background: rgba(71, 183, 239, 0.18); }
     @media (max-width: 700px) {
       body {
         padding-bottom: 0;
@@ -514,6 +600,9 @@
         text-overflow: ellipsis;
         white-space: nowrap;
       }
+      .volume-pile-toolbar { gap: 9px; font-size: 10px; }
+      .volume-pile-panel { grid-template-columns: 1fr; }
+      #volumePileInfo { flex: 1 1 100%; }
     }
     @media (max-width: 900px) and (orientation: landscape) {
       body {
@@ -633,6 +722,70 @@
         <button id="chainStocksButton" class="chain-stocks-button" type="button" hidden onclick="openChainStocksDialog()">连板股票</button>
         <button id="newsButton" type="button" onclick="toggleNewsPanel()" aria-label="显示新闻" title="显示新闻">新闻</button>
       </div>
+      <div class="volume-pile-toolbar">
+        <label class="volume-pile-toggle">
+          <input id="volumePileEnabled" type="checkbox" onchange="updateVolumePileSettings()">
+          <span>量堆标注</span>
+        </label>
+        <details id="volumePileSettings">
+          <summary>调整参数</summary>
+          <div class="volume-pile-panel">
+            <div class="volume-pile-field">
+              <label for="volumePileQuantile">全局底噪分位数</label>
+              <output id="volumePileQuantileValue" for="volumePileQuantile">25%</output>
+              <input id="volumePileQuantile" type="range" min="5" max="45" step="5" value="25" oninput="updateVolumePileSettings()">
+            </div>
+            <div class="volume-pile-field">
+              <label for="volumePileMultiple">候选放量倍数</label>
+              <output id="volumePileMultipleValue" for="volumePileMultiple">1.8×</output>
+              <input id="volumePileMultiple" type="range" min="1.2" max="4" step="0.1" value="1.8" oninput="updateVolumePileSettings()">
+            </div>
+            <div class="volume-pile-field">
+              <label for="volumePileMedianMultiple">最低量/全局中位量</label>
+              <output id="volumePileMedianMultipleValue" for="volumePileMedianMultiple">1.5×</output>
+              <input id="volumePileMedianMultiple" type="range" min="1" max="3" step="0.1" value="1.5" oninput="updateVolumePileSettings()">
+            </div>
+            <div class="volume-pile-field">
+              <label for="volumePilePeakShare">量堆内最低有效量/峰值</label>
+              <output id="volumePilePeakShareValue" for="volumePilePeakShare">27%</output>
+              <input id="volumePilePeakShare" type="range" min="10" max="80" step="1" value="27" oninput="updateVolumePileSettings()">
+            </div>
+            <div class="volume-pile-field">
+              <label for="volumePileGap">合并间隔（交易日）</label>
+              <output id="volumePileGapValue" for="volumePileGap">7</output>
+              <input id="volumePileGap" type="range" min="0" max="10" step="1" value="7" oninput="updateVolumePileSettings()">
+            </div>
+            <div class="volume-pile-field">
+              <label for="volumePileMinWidth">最短量堆宽度（交易日）</label>
+              <output id="volumePileMinWidthValue" for="volumePileMinWidth">3</output>
+              <input id="volumePileMinWidth" type="range" min="1" max="10" step="1" value="3" oninput="updateVolumePileSettings()">
+            </div>
+            <div class="volume-pile-field">
+              <label for="volumePileStrongPeak">短簇强峰保留倍数</label>
+              <output id="volumePileStrongPeakValue" for="volumePileStrongPeak">3.5×</output>
+              <input id="volumePileStrongPeak" type="range" min="2" max="8" step="0.5" value="3.5" oninput="updateVolumePileSettings()">
+            </div>
+            <div class="volume-pile-field">
+              <label for="volumePileProfitThreshold">获利兑现涨幅阈值</label>
+              <output id="volumePileProfitThresholdValue" for="volumePileProfitThreshold">20%</output>
+              <input id="volumePileProfitThreshold" type="range" min="5" max="50" step="1" value="20" oninput="updateVolumePileSettings()">
+            </div>
+            <div class="volume-pile-field">
+              <label for="volumePileAnchorDrop">前置锚点收盘价低幅</label>
+              <output id="volumePileAnchorDropValue" for="volumePileAnchorDrop">6%</output>
+              <input id="volumePileAnchorDrop" type="range" min="1" max="20" step="1" value="6" oninput="updateVolumePileSettings()">
+            </div>
+            <button type="button" onclick="copyVolumePileSettings()">复制当前参数</button>
+            <div class="volume-pile-help">从首个有效放量日向前逐根检查；前一根收盘价低至少 6% 就纳入区间并继续，否则停止。锚点不计入有效量和中枢。</div>
+          </div>
+        </details>
+        <button id="copyVolumePilesButton" type="button" onclick="copyVolumePileData()">复制量堆数据</button>
+        <button id="toggleKlineSelectionButton" type="button" aria-pressed="false" onclick="toggleKlineSelectionMode()">选择 K 线</button>
+        <button id="copySelectedKlinesButton" type="button" onclick="copySelectedKlines()" disabled>复制选中 K 线（0）</button>
+        <button id="clearSelectedKlinesButton" type="button" onclick="clearSelectedKlines()" disabled>清除选择</button>
+        <span id="volumePileInfo" aria-live="polite" hidden></span>
+        <span id="chartExportStatus" aria-live="polite"></span>
+      </div>
       <div id="newsPanel" hidden>
         <div id="newsList" class="news-list"></div>
       </div>
@@ -706,9 +859,49 @@
 <script>
   let fullData = [];
   let currentIndex = 0; // 当前推演到的索引位置
+  let klineSelectionMode = false;
+  const selectedKlineDates = new Set();
   const DEFAULT_VISIBLE_CANDLE_COUNT = 120;
+  const VOLUME_PILE_STORAGE_KEY = 'kline-volume-pile-settings:v8';
+  const LEGACY_VOLUME_PILE_STORAGE_KEYS = [
+    'kline-volume-pile-settings:v7',
+    'kline-volume-pile-settings:v6',
+    'kline-volume-pile-settings:v5',
+    'kline-volume-pile-settings:v4',
+    'kline-volume-pile-settings:v3',
+    'kline-volume-pile-settings:v2',
+    'kline-volume-pile-settings:v1',
+  ];
+  const VOLUME_PILE_DEFAULTS = {
+    enabled: false,
+    baselineQuantile: 25,
+    volumeMultiple: 1.8,
+    medianMultiple: 1.5,
+    minimumPeakShare: 27,
+    mergeGap: 7,
+    minimumWidth: 3,
+    strongPeakMultiple: 3.5,
+    profitThresholdPct: 20,
+    priceAnchorDropPct: 6,
+  };
+  const VOLUME_PILE_FIELDS = [
+    { key: 'baselineQuantile', id: 'volumePileQuantile', output: 'volumePileQuantileValue', format: value => `${value}%` },
+    { key: 'volumeMultiple', id: 'volumePileMultiple', output: 'volumePileMultipleValue', format: value => `${Number(value).toFixed(1)}×` },
+    { key: 'medianMultiple', id: 'volumePileMedianMultiple', output: 'volumePileMedianMultipleValue', format: value => `${Number(value).toFixed(1)}×` },
+    { key: 'minimumPeakShare', id: 'volumePilePeakShare', output: 'volumePilePeakShareValue', format: value => `${value}%` },
+    { key: 'mergeGap', id: 'volumePileGap', output: 'volumePileGapValue', format: value => String(value) },
+    { key: 'minimumWidth', id: 'volumePileMinWidth', output: 'volumePileMinWidthValue', format: value => String(value) },
+    { key: 'strongPeakMultiple', id: 'volumePileStrongPeak', output: 'volumePileStrongPeakValue', format: value => `${Number(value).toFixed(1)}×` },
+    { key: 'profitThresholdPct', id: 'volumePileProfitThreshold', output: 'volumePileProfitThresholdValue', format: value => `${value}%` },
+    { key: 'priceAnchorDropPct', id: 'volumePileAnchorDrop', output: 'volumePileAnchorDropValue', format: value => `${value}%` },
+  ];
+  let volumePileSettings = { ...VOLUME_PILE_DEFAULTS };
+  let volumePileAnalysis = { piles: [], byDate: new Map(), anchorByDate: new Map(), auditByDate: new Map() };
+  let volumePileBandLayer = null;
   
   let chart, candlestickSeries, volumeSeries, ma5Series, ma10Series, ma20Series;
+  const volumePileCenterSeries = { profit: [], candidate: [], shortCluster: [] };
+  const volumePileCenterMarkers = { profit: [], candidate: [], shortCluster: [] };
   let priceLine = null;
   let sellPriceLine = null;
   let reviewPnlResults = new Map();
@@ -753,6 +946,738 @@
   let chainStocksLoaded = false;
   let chainStocksLoading = false;
   let chainStocksError = '';
+
+  function initializeVolumePileSettings() {
+    let saved = null;
+    let migratedLegacySettings = false;
+    try {
+      const currentSettings = localStorage.getItem(VOLUME_PILE_STORAGE_KEY);
+      if (currentSettings) {
+        saved = JSON.parse(currentSettings);
+      } else {
+        for (const storageKey of LEGACY_VOLUME_PILE_STORAGE_KEYS) {
+          const legacySettings = localStorage.getItem(storageKey);
+          if (!legacySettings) continue;
+          saved = JSON.parse(legacySettings);
+          migratedLegacySettings = true;
+          break;
+        }
+      }
+    } catch (error) {
+      console.warn(`读取量堆指标参数失败: ${error.message}`);
+    }
+    volumePileSettings = { ...VOLUME_PILE_DEFAULTS };
+    if (saved && typeof saved === 'object') {
+      volumePileSettings.enabled = saved.enabled === true;
+      for (const field of VOLUME_PILE_FIELDS) {
+        const input = document.getElementById(field.id);
+        const value = Number(saved[field.key]);
+        if (Number.isFinite(value)) {
+          volumePileSettings[field.key] = Math.min(Number(input.max), Math.max(Number(input.min), value));
+        }
+      }
+      if (!Number.isFinite(Number(saved.profitThresholdPct))
+        && Number.isFinite(Number(saved.migrationThreshold))) {
+        const input = document.getElementById('volumePileProfitThreshold');
+        volumePileSettings.profitThresholdPct = Math.min(
+          Number(input.max),
+          Math.max(Number(input.min), Number(saved.migrationThreshold)),
+        );
+      }
+      if (migratedLegacySettings) {
+        if (Number(saved.mergeGap) === 2) volumePileSettings.mergeGap = VOLUME_PILE_DEFAULTS.mergeGap;
+        if (Number(saved.strongPeakMultiple) === 3) {
+          volumePileSettings.strongPeakMultiple = VOLUME_PILE_DEFAULTS.strongPeakMultiple;
+        }
+        if ([35, 50].includes(Number(saved.minimumPeakShare))) {
+          volumePileSettings.minimumPeakShare = VOLUME_PILE_DEFAULTS.minimumPeakShare;
+        }
+      }
+    }
+    document.getElementById('volumePileEnabled').checked = volumePileSettings.enabled;
+    for (const field of VOLUME_PILE_FIELDS) {
+      const input = document.getElementById(field.id);
+      input.value = String(volumePileSettings[field.key]);
+      document.getElementById(field.output).textContent = field.format(volumePileSettings[field.key]);
+    }
+    if (migratedLegacySettings) {
+      try {
+        localStorage.setItem(VOLUME_PILE_STORAGE_KEY, JSON.stringify(volumePileSettings));
+      } catch (error) {
+        console.warn(`迁移量堆指标参数失败: ${error.message}`);
+      }
+    }
+  }
+
+  function updateVolumePileSettings() {
+    volumePileSettings.enabled = document.getElementById('volumePileEnabled').checked;
+    for (const field of VOLUME_PILE_FIELDS) {
+      const value = Number(document.getElementById(field.id).value);
+      if (!Number.isFinite(value)) continue;
+      volumePileSettings[field.key] = value;
+      document.getElementById(field.output).textContent = field.format(value);
+    }
+    try {
+      localStorage.setItem(VOLUME_PILE_STORAGE_KEY, JSON.stringify(volumePileSettings));
+    } catch (error) {
+      console.warn(`保存量堆指标参数失败: ${error.message}`);
+    }
+    updateChartData();
+    updateVolumePileBands();
+  }
+
+  function quantile(values, fraction) {
+    if (!values.length) return NaN;
+    const sorted = [...values].sort((left, right) => left - right);
+    const position = (sorted.length - 1) * fraction;
+    const lower = Math.floor(position);
+    const upper = Math.ceil(position);
+    return sorted[lower] + (sorted[upper] - sorted[lower]) * (position - lower);
+  }
+
+  function computeVolumePiles(data, settings) {
+    const points = data.map((item, index) => {
+      const volume = Number(item.volume);
+      const open = Number(item.open);
+      const high = Number(item.high);
+      const low = Number(item.low);
+      const close = Number(item.close);
+      const amount = item.amount === null || item.amount === undefined || item.amount === ''
+        ? NaN
+        : Number(item.amount);
+      return {
+        index,
+        date: String(item.date || '').split('T')[0],
+        volume: Number.isFinite(volume) && volume > 0 ? volume : 0,
+        amount,
+        open,
+        high,
+        low,
+        close,
+        typicalPrice: (high + low + close) / 3,
+        globalBaseline: NaN,
+        globalMedian: NaN,
+        excess: 0,
+        ratio: NaN,
+        medianRatio: NaN,
+      };
+    });
+
+    const allVolumes = points.map(point => point.volume).filter(volume => volume > 0);
+    const globalBaseline = quantile(allVolumes, settings.baselineQuantile / 100);
+    const globalMedian = quantile(allVolumes, 0.5);
+    if (globalBaseline > 0 && globalMedian > 0) {
+      for (const point of points) {
+        point.globalBaseline = globalBaseline;
+        point.globalMedian = globalMedian;
+        point.excess = Math.max(point.volume - globalBaseline, 0);
+        point.ratio = point.volume / globalBaseline;
+        point.medianRatio = point.volume / globalMedian;
+      }
+    }
+
+    const candidateIndices = points
+      .filter(point => (
+        point.ratio >= settings.volumeMultiple
+        && point.medianRatio >= settings.medianMultiple
+      ))
+      .map(point => point.index);
+    const candidateIndexSet = new Set(candidateIndices);
+    const timeGroups = [];
+    for (const index of candidateIndices) {
+      const group = timeGroups[timeGroups.length - 1];
+      if (group && index - group.endIndex <= settings.mergeGap + 1) {
+        group.endIndex = index;
+        group.candidateIndices.push(index);
+      } else {
+        timeGroups.push({ startIndex: index, endIndex: index, candidateIndices: [index] });
+      }
+    }
+
+    const groups = [];
+    for (const timeGroup of timeGroups) {
+      const peakExcess = Math.max(...timeGroup.candidateIndices.map(index => points[index].excess));
+      const significantIndices = timeGroup.candidateIndices.filter(index => (
+        points[index].excess >= peakExcess * settings.minimumPeakShare / 100
+      ));
+      let group = null;
+      for (const index of significantIndices) {
+        if (group && index - group.endIndex > settings.mergeGap + 1) {
+          groups.push(group);
+          group = null;
+        }
+        if (!group) group = { startIndex: index, endIndex: index, candidateIndices: [] };
+        group.endIndex = index;
+        group.candidateIndices.push(index);
+      }
+      if (group) groups.push(group);
+    }
+
+    const piles = [];
+    const volumePileByDate = new Map();
+    const priceAnchorByDate = new Map();
+    for (const group of groups) {
+      const groupCandidates = group.candidateIndices.map(index => points[index]);
+      const peakExcess = Math.max(...groupCandidates.map(point => point.excess));
+      const members = groupCandidates.filter(point => (
+        point.excess >= peakExcess * settings.minimumPeakShare / 100
+      ));
+      if (!members.length) continue;
+      const peak = members.reduce((highest, point) => (
+        point.volume > highest.volume ? point : highest
+      ));
+      const shortCluster = members.length < settings.minimumWidth;
+      if (shortCluster && peak.ratio < settings.strongPeakMultiple) continue;
+      const candidateSet = new Set(group.candidateIndices);
+      const includedSet = new Set(members.map(point => point.index));
+      const weightedCenter = members.reduce((sum, point) => (
+        sum + point.typicalPrice * point.excess
+      ), 0);
+      const excessTotal = members.reduce((sum, point) => sum + point.excess, 0);
+      const centerPrice = excessTotal > 0 ? weightedCenter / excessTotal : NaN;
+      const firstVolumeMember = members[0];
+      const priceAnchorBars = [];
+      let firstRangeMember = firstVolumeMember;
+      while (firstRangeMember.index > 0) {
+        const previous = points[firstRangeMember.index - 1];
+        const anchorFloor = firstRangeMember.close * (1 - settings.priceAnchorDropPct / 100);
+        if (!Number.isFinite(previous.close) || !Number.isFinite(anchorFloor)
+          || !(firstRangeMember.close > 0) || previous.close > anchorFloor) break;
+        firstRangeMember = previous;
+        priceAnchorBars.push(previous);
+      }
+      const priceAnchorIndexSet = new Set(priceAnchorBars.map(point => point.index));
+      const startIndex = firstRangeMember.index;
+      const endIndex = members[members.length - 1].index;
+      const auditBars = points.slice(startIndex, endIndex + 1).map(point => ({
+        date: point.date,
+        open: point.open,
+        high: point.high,
+        low: point.low,
+        close: point.close,
+        volume: point.volume,
+        amount: Number.isFinite(point.amount) ? point.amount : null,
+        globalBaselineVolume: Number.isFinite(point.globalBaseline) ? point.globalBaseline : null,
+        effectiveVolume: point.excess,
+        relativeToGlobalBaseline: Number.isFinite(point.ratio) ? point.ratio : null,
+        globalMedianVolume: Number.isFinite(point.globalMedian) ? point.globalMedian : null,
+        relativeToGlobalMedian: Number.isFinite(point.medianRatio) ? point.medianRatio : null,
+        isVolumeCandidate: candidateSet.has(point.index),
+        meetsGlobalMedianFilter: point.medianRatio >= settings.medianMultiple,
+        isPriceAnchor: priceAnchorIndexSet.has(point.index),
+        includedInPile: includedSet.has(point.index),
+      }));
+      const firstBarMidPrice = (firstRangeMember.high + firstRangeMember.low) / 2;
+      const firstVolumeBarMidPrice = (firstVolumeMember.high + firstVolumeMember.low) / 2;
+      const peakMidPrice = (peak.high + peak.low) / 2;
+      const peakMidVsFirstMidPct = Number.isFinite(firstBarMidPrice) && firstBarMidPrice > 0
+        ? Number(((peakMidPrice / firstBarMidPrice - 1) * 100).toFixed(4))
+        : NaN;
+      const profitTaking = Number.isFinite(peakMidVsFirstMidPct)
+        && peakMidPrice >= firstBarMidPrice * (1 + settings.profitThresholdPct / 100);
+      const pile = {
+        startDate: points[startIndex].date,
+        firstVolumeDate: firstVolumeMember.date,
+        firstVolumeBarMidPrice,
+        endDate: points[endIndex].date,
+        durationDays: members.length,
+        peakDate: peak.date,
+        peakVolume: peak.volume,
+        peakRatio: peak.ratio,
+        peakMedianRatio: peak.medianRatio,
+        centerPrice,
+        firstRangeMidPrice: firstBarMidPrice,
+        priceAnchorDate: priceAnchorBars.length ? firstRangeMember.date : null,
+        priceAnchorMidPrice: priceAnchorBars.length ? firstBarMidPrice : null,
+        priceAnchorCount: priceAnchorBars.length,
+        priceAnchorDates: [...priceAnchorBars].reverse().map(point => point.date),
+        priceAnchorDropPct: settings.priceAnchorDropPct,
+        peakMidPrice,
+        peakMidVsFirstMidPct,
+        profitThresholdPct: settings.profitThresholdPct,
+        shortCluster,
+        auditBars,
+        kind: profitTaking ? 'profit-taking' : 'accumulation-candidate',
+      };
+      piles.push(pile);
+      for (const point of members) volumePileByDate.set(point.date, pile);
+      for (const point of priceAnchorBars) priceAnchorByDate.set(point.date, pile);
+    }
+    const auditByDate = new Map(points.map(point => {
+      const pile = volumePileByDate.get(point.date);
+      const anchorPile = priceAnchorByDate.get(point.date);
+      const auditPile = pile || anchorPile;
+      const firstVolumeBar = auditPile?.auditBars.find(bar => bar.date === auditPile.firstVolumeDate);
+      const isVolumeCandidate = candidateIndexSet.has(point.index);
+      const filterResult = anchorPile && !pile
+        ? 'price-anchor-only'
+        : !Number.isFinite(point.globalBaseline)
+        ? 'insufficient-history'
+        : point.ratio < settings.volumeMultiple
+            ? 'below-global-low-quantile-threshold'
+            : point.medianRatio < settings.medianMultiple
+              ? 'below-global-median-threshold'
+            : pile
+              ? 'included'
+              : 'filtered-by-cluster-rules';
+      return [point.date, {
+        globalBaselineVolume: Number.isFinite(point.globalBaseline) ? point.globalBaseline : null,
+        globalMedianVolume: Number.isFinite(point.globalMedian) ? point.globalMedian : null,
+        effectiveVolume: point.excess,
+        relativeToGlobalBaseline: Number.isFinite(point.ratio) ? point.ratio : null,
+        relativeToGlobalMedian: Number.isFinite(point.medianRatio) ? point.medianRatio : null,
+        isVolumeCandidate,
+        includedInPile: Boolean(pile),
+        isPriceAnchor: Boolean(anchorPile && !pile),
+        priceAnchorForPileStart: anchorPile?.startDate || null,
+        filterResult,
+        classification: auditPile
+          ? auditPile.kind === 'profit-taking' ? '获利兑现倾向' : '吸筹/承接倾向候选'
+          : null,
+        maximumVolumeDate: auditPile?.peakDate || null,
+        firstPileBarMidPrice: Number.isFinite(auditPile?.firstRangeMidPrice)
+          ? auditPile.firstRangeMidPrice
+          : null,
+        firstVolumeDate: auditPile?.firstVolumeDate || null,
+        firstVolumeBarMidPrice: Number.isFinite(auditPile?.firstVolumeBarMidPrice)
+          ? auditPile.firstVolumeBarMidPrice
+          : null,
+        maximumVolumeBarMidPrice: Number.isFinite(auditPile?.peakMidPrice)
+          ? auditPile.peakMidPrice
+          : null,
+        maximumMidVsFirstMidPct: Number.isFinite(auditPile?.peakMidVsFirstMidPct)
+          ? auditPile.peakMidVsFirstMidPct
+          : null,
+        requiredProfitRisePct: settings.profitThresholdPct,
+        priceAnchorDropPct: settings.priceAnchorDropPct,
+        priceAnchorDate: auditPile?.priceAnchorDate || null,
+        priceAnchorCount: auditPile?.priceAnchorCount || 0,
+        priceAnchorDates: auditPile?.priceAnchorDates || [],
+        priceAnchorMidPrice: Number.isFinite(auditPile?.priceAnchorMidPrice)
+          ? auditPile.priceAnchorMidPrice
+          : null,
+        firstVolumeBarClose: Number.isFinite(firstVolumeBar?.close) ? firstVolumeBar.close : null,
+        profitRuleMet: auditPile?.kind === 'profit-taking',
+      }];
+    }));
+    return { piles, byDate: volumePileByDate, anchorByDate: priceAnchorByDate, auditByDate };
+  }
+
+  function updateVolumePileInfo(time) {
+    const info = document.getElementById('volumePileInfo');
+    if (!volumePileSettings.enabled) {
+      info.hidden = true;
+      return;
+    }
+    info.hidden = false;
+    const date = typeof time === 'string'
+      ? time
+      : time && typeof time === 'object'
+        ? `${time.year}-${String(time.month).padStart(2, '0')}-${String(time.day).padStart(2, '0')}`
+        : '';
+    const pile = volumePileAnalysis.byDate.get(date) || volumePileAnalysis.anchorByDate.get(date);
+    if (!pile) {
+      info.textContent = '量堆：当前日期未识别为量堆';
+      info.style.color = '#8994a2';
+      return;
+    }
+    const label = pile.kind === 'profit-taking' ? '获利兑现倾向' : '吸筹/承接倾向候选';
+    const priceRise = Number.isFinite(pile.peakMidVsFirstMidPct)
+      ? `${pile.peakMidVsFirstMidPct.toFixed(1)}%`
+      : '无法计算';
+    const anchorText = pile.priceAnchorCount
+      ? `递推锚点 ${pile.priceAnchorCount}根（至 ${pile.priceAnchorDate}）`
+      : `无满足低 ${pile.priceAnchorDropPct}% 的连续前置锚点`;
+    info.textContent = `${label}${pile.shortCluster ? '（短簇强峰）' : ''} ${pile.startDate}～${pile.endDate}（${pile.durationDays}个有效量日） | ${anchorText} | 区间首K中间价 ${pile.firstRangeMidPrice.toFixed(2)} | 最大量日 ${pile.peakDate} 中间价 ${pile.peakMidPrice.toFixed(2)} | 中间价涨幅 ${priceRise} / 阈值 ${pile.profitThresholdPct}% | 加权中枢 ${pile.centerPrice.toFixed(2)}`;
+    info.style.color = pile.kind === 'profit-taking' ? '#f05298' : '#47b7ef';
+  }
+
+  function chartDate(value) {
+    return String(value || '').split('T')[0];
+  }
+
+  function exportNumber(value) {
+    if (value === null || value === undefined || value === '') return null;
+    const number = Number(value);
+    return Number.isFinite(number) ? number : null;
+  }
+
+  function getChartExportContext() {
+    return {
+      source: document.getElementById('dataSource').value,
+      file: document.getElementById('testCaseFile').value,
+      code: String(activeCase?.code || ''),
+      marketCode: String(activeCase?.marketCode || ''),
+      stockName: String(activeCase?.stockName || activeCase?.name || ''),
+      signalDate: String(activeCase?.date || ''),
+      asOfDate: chartDate(fullData[Math.max(0, currentIndex - 1)]?.date),
+    };
+  }
+
+  function buildVolumePileExport() {
+    return {
+      schema: 'volume-pile-export-v1',
+      context: getChartExportContext(),
+      settings: { ...volumePileSettings },
+      screeningSummary: {
+        candidateBars: [...volumePileAnalysis.auditByDate.values()].filter(item => item.isVolumeCandidate).length,
+        includedBars: [...volumePileAnalysis.auditByDate.values()].filter(item => item.includedInPile).length,
+        medianFilteredBars: [...volumePileAnalysis.auditByDate.values()]
+          .filter(item => item.filterResult === 'below-global-median-threshold').length,
+      },
+      piles: volumePileAnalysis.piles.map(pile => ({
+        classification: pile.kind === 'profit-taking' ? '获利兑现倾向' : '吸筹/承接倾向候选',
+        startDate: pile.startDate,
+        firstVolumeDate: pile.firstVolumeDate,
+        endDate: pile.endDate,
+        effectiveDays: pile.durationDays,
+        peakDate: pile.peakDate,
+        peakVolume: pile.peakVolume,
+        peakBaselineRatio: pile.peakRatio,
+        peakMedianRatio: pile.peakMedianRatio,
+        centerPrice: Number.isFinite(pile.centerPrice) ? pile.centerPrice : null,
+        firstRangeMidPrice: Number.isFinite(pile.firstRangeMidPrice) ? pile.firstRangeMidPrice : null,
+        firstVolumeBarMidPrice: Number.isFinite(pile.firstVolumeBarMidPrice) ? pile.firstVolumeBarMidPrice : null,
+        priceAnchorDate: pile.priceAnchorDate,
+        priceAnchorMidPrice: Number.isFinite(pile.priceAnchorMidPrice) ? pile.priceAnchorMidPrice : null,
+        priceAnchorCount: pile.priceAnchorCount,
+        priceAnchorDates: pile.priceAnchorDates,
+        priceAnchorDropPct: pile.priceAnchorDropPct,
+        peakMidPrice: Number.isFinite(pile.peakMidPrice) ? pile.peakMidPrice : null,
+        peakMidVsFirstMidPct: Number.isFinite(pile.peakMidVsFirstMidPct)
+          ? pile.peakMidVsFirstMidPct
+          : null,
+        profitThresholdPct: pile.profitThresholdPct,
+        profitRuleMet: pile.kind === 'profit-taking',
+        shortCluster: pile.shortCluster,
+        bars: pile.auditBars,
+      })),
+    };
+  }
+
+  function buildSelectedKlineExport() {
+    const visibleData = fullData.slice(0, currentIndex);
+    const volumePileAuditByDate = computeVolumePiles(visibleData, volumePileSettings).auditByDate;
+    const bars = visibleData
+      .filter(item => selectedKlineDates.has(chartDate(item.date)))
+      .map(item => {
+        const date = chartDate(item.date);
+        return {
+          date,
+          open: exportNumber(item.open),
+          high: exportNumber(item.high),
+          low: exportNumber(item.low),
+          close: exportNumber(item.close),
+          volume: exportNumber(item.volume),
+          amount: exportNumber(item.amount),
+          limitStatus: item.limitStatus || null,
+          ma5: exportNumber(item.ma5),
+          ma10: exportNumber(item.ma10),
+          ma20: exportNumber(item.ma20),
+          volumePileAudit: volumePileAuditByDate.get(date) || null,
+        };
+      });
+    if (!bars.length) throw new Error('请先在图表中选择至少一根当前可见的 K 线');
+    return {
+      schema: 'selected-kline-export-v1',
+      context: getChartExportContext(),
+      volumePileSettings: { ...volumePileSettings },
+      volumePileAuditComputed: true,
+      selectedCount: bars.length,
+      bars,
+    };
+  }
+
+  async function writeTextToClipboard(text) {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return;
+    }
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.setAttribute('readonly', '');
+    textarea.style.position = 'fixed';
+    textarea.style.opacity = '0';
+    document.body.appendChild(textarea);
+    let copied;
+    try {
+      textarea.select();
+      copied = document.execCommand('copy');
+    } finally {
+      textarea.remove();
+    }
+    if (!copied) throw new Error('浏览器未授权剪贴板访问，请检查站点剪贴板权限');
+  }
+
+  async function copyExportToClipboard(payload, label) {
+    const status = document.getElementById('chartExportStatus');
+    status.textContent = '正在复制到剪贴板...';
+    status.style.color = '#aeb8c5';
+    try {
+      await writeTextToClipboard(JSON.stringify(payload, null, 2));
+      status.textContent = `已复制${label}`;
+      status.style.color = '#52c41a';
+    } catch (error) {
+      console.error(`复制${label}失败: ${error.message}`);
+      status.textContent = `复制失败：${error.message}`;
+      status.style.color = '#ff7875';
+    }
+  }
+
+  function copyVolumePileData() {
+    if (!volumePileSettings.enabled) {
+      const status = document.getElementById('chartExportStatus');
+      status.textContent = '请先开启量堆标注，再复制量堆数据';
+      status.style.color = '#f0b90b';
+      return;
+    }
+    if (!fullData.length || currentIndex < 1) {
+      const status = document.getElementById('chartExportStatus');
+      status.textContent = '当前没有可导出的 K 线和量堆数据';
+      status.style.color = '#f0b90b';
+      return;
+    }
+    const payload = buildVolumePileExport();
+    copyExportToClipboard(payload, `${payload.piles.length} 个量堆及逐日审计数据`);
+  }
+
+  function copyVolumePileSettings() {
+    copyExportToClipboard({
+      schema: 'volume-pile-settings-v1',
+      context: getChartExportContext(),
+      settings: { ...volumePileSettings },
+    }, '量堆参数');
+  }
+
+  function updateKlineSelectionControls() {
+    const count = selectedKlineDates.size;
+    const toggle = document.getElementById('toggleKlineSelectionButton');
+    toggle.textContent = klineSelectionMode ? '结束选择' : '选择 K 线';
+    toggle.classList.toggle('is-active', klineSelectionMode);
+    toggle.setAttribute('aria-pressed', String(klineSelectionMode));
+    document.getElementById('copySelectedKlinesButton').textContent = `复制选中 K 线（${count}）`;
+    document.getElementById('copySelectedKlinesButton').disabled = count === 0;
+    document.getElementById('clearSelectedKlinesButton').disabled = count === 0;
+  }
+
+  function getSelectedKlineMarkers() {
+    return fullData
+      .slice(0, currentIndex)
+      .filter(item => selectedKlineDates.has(chartDate(item.date)))
+      .map(item => ({
+        time: chartDate(item.date),
+        position: 'aboveBar',
+        color: '#ffffff',
+        shape: 'circle',
+        text: '选',
+      }));
+  }
+
+  function renderCandleMarkers() {
+    if (!candlestickSeries) return;
+    const markers = [...candleMarkers, ...getSelectedKlineMarkers()];
+    markers.sort((left, right) => (
+      String(left.time).localeCompare(String(right.time))
+      || String(left.position).localeCompare(String(right.position))
+    ));
+    setCandleMarkers(markers);
+  }
+
+  function toggleKlineSelectionMode() {
+    if (!fullData.length || currentIndex < 1) {
+      const status = document.getElementById('chartExportStatus');
+      status.textContent = '当前没有可供选择的 K 线';
+      status.style.color = '#f0b90b';
+      return;
+    }
+    klineSelectionMode = !klineSelectionMode;
+    updateKlineSelectionControls();
+    const status = document.getElementById('chartExportStatus');
+    status.textContent = klineSelectionMode
+      ? '选择模式已开启：点击 K 线可多选或取消'
+      : `选择模式已结束，当前选中 ${selectedKlineDates.size} 根 K 线`;
+    status.style.color = '#aeb8c5';
+  }
+
+  function selectKlineAt(time, point) {
+    if (!klineSelectionMode || !time || !point) return;
+    const container = document.getElementById('chartContainer');
+    if (point.y > container.clientHeight * 0.72) {
+      const status = document.getElementById('chartExportStatus');
+      status.textContent = '请点击 K 线区域选择，不要点击底部成交量柱';
+      status.style.color = '#f0b90b';
+      return;
+    }
+    const date = typeof time === 'string'
+      ? time
+      : `${time.year}-${String(time.month).padStart(2, '0')}-${String(time.day).padStart(2, '0')}`;
+    const candle = fullData.slice(0, currentIndex).find(item => chartDate(item.date) === date);
+    if (!candle) return;
+    if (selectedKlineDates.has(date)) selectedKlineDates.delete(date);
+    else selectedKlineDates.add(date);
+    renderCandleMarkers();
+    updateKlineSelectionControls();
+    const status = document.getElementById('chartExportStatus');
+    status.textContent = `已选 ${selectedKlineDates.size} 根 K 线；再次点击可取消`;
+    status.style.color = '#aeb8c5';
+  }
+
+  function copySelectedKlines() {
+    try {
+      const payload = buildSelectedKlineExport();
+      copyExportToClipboard(payload, `${payload.selectedCount} 根选中 K 线`);
+    } catch (error) {
+      const status = document.getElementById('chartExportStatus');
+      status.textContent = error.message;
+      status.style.color = '#f0b90b';
+    }
+  }
+
+  function clearSelectedKlines() {
+    selectedKlineDates.clear();
+    renderCandleMarkers();
+    updateKlineSelectionControls();
+    const status = document.getElementById('chartExportStatus');
+    status.textContent = '已清除 K 线选择';
+    status.style.color = '#aeb8c5';
+  }
+
+  function resetKlineSelection() {
+    selectedKlineDates.clear();
+    klineSelectionMode = false;
+    renderCandleMarkers();
+    updateKlineSelectionControls();
+  }
+
+  function setVolumePileMarkers(series, controller, markers) {
+    if (typeof series.setMarkers === 'function') {
+      series.setMarkers(markers);
+      return controller;
+    }
+    if (!LightweightCharts.createSeriesMarkers) return controller;
+    if (!controller) return LightweightCharts.createSeriesMarkers(series, markers);
+    controller.setMarkers(markers);
+    return controller;
+  }
+
+  function getVolumePileCenterSegments(data, kind, color) {
+    const segments = [];
+    let current = null;
+    const finish = () => {
+      if (!current) return;
+      const lastPoint = current.data[current.data.length - 1];
+      const markers = lastPoint.time === current.pile.endDate
+        ? [{
+          time: lastPoint.time,
+          position: 'inBar',
+          color,
+          shape: 'circle',
+          text: `中枢 ${current.pile.centerPrice.toFixed(2)}`,
+        }]
+        : [];
+      segments.push({ data: current.data, markers });
+      current = null;
+    };
+
+    for (const [index, item] of data.entries()) {
+      const time = String(item.date || '').split('T')[0];
+      const pile = volumePileAnalysis.byDate.get(time);
+      const matches = pile && (
+        kind === 'profit'
+          ? pile.kind === 'profit-taking'
+          : kind === 'shortCluster'
+            ? pile.kind !== 'profit-taking' && pile.shortCluster
+            : pile.kind !== 'profit-taking' && !pile.shortCluster
+      );
+      if (!matches || !Number.isFinite(pile.centerPrice)) {
+        finish();
+        continue;
+      }
+      if (!current || current.pile !== pile || current.lastIndex !== index - 1) {
+        finish();
+        current = { pile, lastIndex: index, data: [] };
+      }
+      current.data.push({ time, value: pile.centerPrice });
+      current.lastIndex = index;
+    }
+    finish();
+    return segments;
+  }
+
+  function updateVolumePileCenterLines(data) {
+    const configs = [
+      { key: 'profit', color: '#f05298' },
+      { key: 'candidate', color: '#47b7ef' },
+      { key: 'shortCluster', color: '#47b7ef' },
+    ];
+    for (const config of configs) {
+      const segments = getVolumePileCenterSegments(data, config.key, config.color);
+      const seriesPool = volumePileCenterSeries[config.key];
+      const markerPool = volumePileCenterMarkers[config.key];
+      while (seriesPool.length < segments.length) {
+        seriesPool.push(chart.addSeries(LightweightCharts.LineSeries, {
+          color: config.color,
+          lineWidth: 2,
+          priceScaleId: 'right',
+          priceLineVisible: false,
+          lastValueVisible: false,
+          crosshairMarkerVisible: false,
+        }));
+        markerPool.push(null);
+      }
+      for (let index = 0; index < seriesPool.length; index++) {
+        const segment = segments[index];
+        seriesPool[index].setData(segment ? segment.data : []);
+        markerPool[index] = setVolumePileMarkers(
+          seriesPool[index],
+          markerPool[index],
+          segment ? segment.markers : [],
+        );
+      }
+    }
+  }
+
+  function updateVolumePileBands() {
+    if (!volumePileBandLayer || !chart || !volumeSeries) return;
+    const chartContainer = document.getElementById('chartContainer');
+    const canvases = [...chartContainer.querySelectorAll('canvas')];
+    if (!canvases.length) return;
+    const paneCanvas = canvases.reduce((largest, canvas) => (
+        canvas.clientWidth * canvas.clientHeight > largest.clientWidth * largest.clientHeight
+          ? canvas
+          : largest
+      ));
+    const paneWidth = paneCanvas?.clientWidth || chartContainer.clientWidth;
+    const paneHeight = paneCanvas?.clientHeight || chartContainer.clientHeight;
+    volumePileBandLayer.style.width = `${paneWidth}px`;
+    volumePileBandLayer.style.height = `${paneHeight}px`;
+    volumePileBandLayer.replaceChildren();
+    if (!volumePileSettings.enabled || !volumePileAnalysis.piles.length) return;
+
+    const displayed = fullData.slice(0, currentIndex);
+    const maxVolume = Math.max(...displayed.map(item => Number(item.volume) || 0));
+    if (!(maxVolume > 0)) return;
+    const zeroY = volumeSeries.priceToCoordinate(0);
+    const maxY = volumeSeries.priceToCoordinate(maxVolume);
+    if (!Number.isFinite(zeroY) || !Number.isFinite(maxY)) return;
+    const top = Math.max(0, Math.min(paneHeight, Math.floor(Math.min(zeroY, maxY))));
+    const bottom = Math.max(0, Math.min(paneHeight, Math.ceil(Math.max(zeroY, maxY))));
+    if (bottom <= top) return;
+    const barSpacing = chart.timeScale().options().barSpacing || 6;
+
+    for (const pile of volumePileAnalysis.piles) {
+      const start = chart.timeScale().timeToCoordinate(pile.startDate);
+      const end = chart.timeScale().timeToCoordinate(pile.endDate);
+      if (!Number.isFinite(start) || !Number.isFinite(end)) continue;
+      const left = Math.max(0, Math.floor(Math.min(start, end) - barSpacing / 2));
+      const right = Math.min(paneWidth, Math.ceil(Math.max(start, end) + barSpacing / 2));
+      if (right <= left) continue;
+      const band = document.createElement('div');
+      band.className = `volume-pile-band ${pile.kind === 'profit-taking' ? 'is-profit' : 'is-candidate'}`;
+      band.style.cssText = `position:absolute;left:${left}px;top:${top}px;width:${right - left}px;height:${bottom - top}px;pointer-events:none;`;
+      volumePileBandLayer.appendChild(band);
+    }
+  }
 
   function isDailyReviewSource() {
     return document.getElementById('dataSource').value === 'dailyReview';
@@ -1879,7 +2804,7 @@
     priceLine = null;
     sellPriceLine = null;
     candleMarkers = [];
-    if (candlestickSeries) setCandleMarkers(candleMarkers);
+    renderCandleMarkers();
   }
 
   function setCandleMarkers(markers) {
@@ -1895,7 +2820,6 @@
   }
 
   function drawTradeMarker() {
-    if (!activeTrade) return;
     if (priceLine && candlestickSeries) {
       candlestickSeries.removePriceLine(priceLine);
       priceLine = null;
@@ -1904,39 +2828,42 @@
       candlestickSeries.removePriceLine(sellPriceLine);
       sellPriceLine = null;
     }
-    candleMarkers = [{
-      time: activeTrade.buyDate,
-      position: 'belowBar',
-      color: '#f0b90b',
-      shape: 'arrowUp',
-      text: 'B',
-    }];
-    if (activeTrade.sellDate) {
+    candleMarkers = [];
+    if (activeTrade) {
       candleMarkers.push({
-        time: activeTrade.sellDate,
-        position: 'aboveBar',
-        color: '#4cc9f0',
-        shape: 'arrowDown',
-        text: 'S',
+        time: activeTrade.buyDate,
+        position: 'belowBar',
+        color: '#f0b90b',
+        shape: 'arrowUp',
+        text: 'B',
       });
-      sellPriceLine = candlestickSeries.createPriceLine({
-        price: activeTrade.sellPrice,
-        color: '#4cc9f0',
+      if (activeTrade.sellDate) {
+        candleMarkers.push({
+          time: activeTrade.sellDate,
+          position: 'aboveBar',
+          color: '#4cc9f0',
+          shape: 'arrowDown',
+          text: 'S',
+        });
+        sellPriceLine = candlestickSeries.createPriceLine({
+          price: activeTrade.sellPrice,
+          color: '#4cc9f0',
+          lineWidth: 2,
+          lineStyle: 2,
+          axisLabelVisible: true,
+          title: '卖出',
+        });
+      }
+      priceLine = candlestickSeries.createPriceLine({
+        price: activeTrade.buyPrice,
+        color: '#f0b90b',
         lineWidth: 2,
         lineStyle: 2,
         axisLabelVisible: true,
-        title: '卖出',
+        title: '买入',
       });
     }
-    setCandleMarkers(candleMarkers);
-    priceLine = candlestickSeries.createPriceLine({
-      price: activeTrade.buyPrice,
-      color: '#f0b90b',
-      lineWidth: 2,
-      lineStyle: 2,
-      axisLabelVisible: true,
-      title: '买入',
-    });
+    renderCandleMarkers();
   }
 
   function initChart() {
@@ -1946,7 +2873,7 @@
       width: container.clientWidth,
       height: container.clientHeight,
       layout: {
-        background: { type: 'solid', color: '#111419' },
+        background: { type: 'solid', color: '#11141900' },
         textColor: '#818998',
       },
       grid: {
@@ -1977,11 +2904,23 @@
       },
     });
 
-    const resizeChart = () => chart.resize(container.clientWidth, container.clientHeight);
+    const chartWidget = container.querySelector('.tv-lightweight-charts');
+    if (!chartWidget) throw new Error('K 线图容器初始化失败');
+    chartWidget.style.position = 'relative';
+    volumePileBandLayer = document.createElement('div');
+    volumePileBandLayer.setAttribute('aria-hidden', 'true');
+    volumePileBandLayer.style.cssText = 'position:absolute;z-index:0;left:0;top:0;overflow:hidden;pointer-events:none;';
+    chartWidget.insertBefore(volumePileBandLayer, chartWidget.firstChild);
+
+    const resizeChart = () => {
+      chart.resize(container.clientWidth, container.clientHeight);
+      updateVolumePileBands();
+    };
     window.addEventListener('resize', resizeChart);
     if (window.ResizeObserver) {
       new ResizeObserver(resizeChart).observe(container);
     }
+    chart.timeScale().subscribeVisibleLogicalRangeChange(updateVolumePileBands);
 
     // 1. K 线主图层
     candlestickSeries = chart.addSeries(LightweightCharts.CandlestickSeries, {
@@ -2019,7 +2958,6 @@
       priceLineVisible: false,
       lastValueVisible: false,
     });
-
     // 2. 成交量图层 (给它单独指定 priceScaleId: 'volume')
     volumeSeries = chart.addSeries(LightweightCharts.HistogramSeries, {
       priceFormat: { type: 'volume' },
@@ -2045,9 +2983,18 @@
 
       if (candle) {
         document.getElementById('codeVal').innerText = displayCodeLabel();
-        const hoveredData = fullData.find(item => item.date === param.time);
+        const date = typeof param.time === 'string'
+          ? param.time
+          : `${param.time.year}-${String(param.time.month).padStart(2, '0')}-${String(param.time.day).padStart(2, '0')}`;
+        const hoveredData = fullData.find(item => String(item.date || '').split('T')[0] === date);
         document.getElementById('amountVal').innerText = formatAmount(hoveredData?.amount);
+        updateVolumePileInfo(param.time);
       }
+    });
+    chart.subscribeClick(param => {
+      if (!klineSelectionMode || !param.time || !param.point || !param.seriesData) return;
+      if (!param.seriesData.get(candlestickSeries)) return;
+      selectKlineAt(param.time, param.point);
     });
   }
 
@@ -2055,7 +3002,11 @@
   function updateChartData() {
     const displayData = fullData.slice(0, currentIndex);
 
-    if (displayData.length === 0) return;
+    if (displayData.length === 0) {
+      volumePileAnalysis = { piles: [], byDate: new Map(), anchorByDate: new Map(), auditByDate: new Map() };
+      updateVolumePileBands();
+      return;
+    }
 
     // 格式化 TradingView 所需数据结构（确保 date 格式为字符串 "YYYY-MM-DD"）
     const candles = [];
@@ -2063,6 +3014,9 @@
     const ma5Data = [];
     const ma10Data = [];
     const ma20Data = [];
+    volumePileAnalysis = volumePileSettings.enabled
+      ? computeVolumePiles(displayData, volumePileSettings)
+      : { piles: [], byDate: new Map(), anchorByDate: new Map(), auditByDate: new Map() };
 
     displayData.forEach(d => {
       // 提取纯 YYYY-MM-DD 日期
@@ -2111,7 +3065,9 @@
     ma5Series.setData(ma5Data);
     ma10Series.setData(ma10Data);
     ma20Series.setData(ma20Data);
+    updateVolumePileCenterLines(displayData);
     if (activeTrade) drawTradeMarker();
+    else renderCandleMarkers();
 
     // 【修正缩放】：使用 setVisibleRange 代替 Range index
     if (candles.length > 0) {
@@ -2121,12 +3077,14 @@
         to: candles[candles.length - 1].time,
       });
     }
+    requestAnimationFrame(updateVolumePileBands);
 
     // 更新 Legend
     const last = displayData[displayData.length - 1];
     if (last) {
       document.getElementById('codeVal').innerText = displayCodeLabel();
       document.getElementById('amountVal').innerText = formatAmount(last.amount);
+      updateVolumePileInfo(String(last.date || '').split('T')[0]);
     }
   }
 
@@ -2384,6 +3342,7 @@
     currentNewsLoading = false;
     currentNewsError = '';
     document.getElementById('newsButton').disabled = !activeCase;
+    resetKlineSelection();
     clearTradeDrawing();
     activeTrade = null;
     caseResolved = false;
@@ -2708,6 +3667,7 @@
   }
 
   window.onload = () => {
+    initializeVolumePileSettings();
     initChart();
     loadFilesForSource();
     updateSourceMode();
