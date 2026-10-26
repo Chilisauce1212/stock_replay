@@ -57,13 +57,28 @@ http://localhost:3000
 
 如果 Render 或其他平台提供了 `PORT` 环境变量，服务器会自动使用该端口。
 
-`npm start` 默认从 R2 读取 `daily-review/` 和 `test-cases/` 数据，适合 Render 部署。需要使用项目本地 JSON 时，显式设置：
+`npm start` 默认从 R2 读取 `daily-review/` 和 `test-cases/` 数据，适合 Render 部署。需要使用项目本地 JSON 时，在 `.env` 中显式设置：
 
 ```dotenv
 USE_LOCAL_JSON=true
 ```
 
-R2 环境变量配置见 [R2_SETUP.md](R2_SETUP.md)。本地 JSON 模式只在 `USE_LOCAL_JSON=true` 时启用；收藏数据仍可按服务端配置使用本地文件或 R2。
+修改后需要重启服务才能生效。也可以只在本次启动时临时开启：
+
+```text
+# Git Bash
+USE_LOCAL_JSON=true npm start
+
+# PowerShell（npm.ps1 被执行策略拦截时改用 npm.cmd）
+$env:USE_LOCAL_JSON='true'; npm.cmd start
+
+# cmd
+set USE_LOCAL_JSON=true && npm start
+```
+
+本地模式下，`test-cases/`、`daily-review/` 的文件列表和内容都从项目目录读取，盈亏缓存也从本地 `daily-review/` 读取。收藏夹仍按 `.env` 中的 R2 配置读写；要让收藏夹也只使用本地 `favorites.json`，需要移除或清空 `R2_*` 配置后再启动。
+
+`npm run start` 与 `npm start` 等价。R2 环境变量配置见 [R2_SETUP.md](R2_SETUP.md)。本地 JSON 模式只在 `USE_LOCAL_JSON=true` 时启用。
 
 ## 3. 运行回测数据生成脚本
 
@@ -367,6 +382,72 @@ npm audit fix
 ```
 
 执行后应检查 [package.json](package.json) 和 [package-lock.json](package-lock.json) 是否发生变化，并重新运行项目验证兼容性。
+
+## 13. 导出量堆统计 CSV
+
+先运行网站服务，再指定一个或多个每日复盘 JSON：
+
+```text
+npm start
+npm run volume-pile-report -- 一进二回测_20260106_20261231.json
+npm run volume-pile-report -- daily-review/文件A.json daily-review/文件B.json --out reports/量堆汇总.csv
+```
+
+脚本对每条股票信号记录扫描信号日之前的历史 K 线，输出吸筹/承接候选量堆数、获利兑现倾向量堆数、最新量堆类型和该记录的收益率。固定检测配置见 [volume-pile-report.js](volume-pile-report.js)。文件可以指定为路径或 `daily-review/` 下的文件名。
+
+可选参数：
+
+```text
+--workers 3                      并发 K 线请求数（范围 1–16，默认 3）
+--base-url http://localhost:3000 网站服务地址
+--out reports/summary.csv        输出 CSV 路径；省略时自动生成文件名
+```
+
+收益按 [review-pnl.js](review-pnl.js) 的逐笔成交规则实时重算，不读 JSON 中的 `pnl` 缓存，也不修改输入文件。脚本会连接通达信逐笔行情服务器，因此网络行情不可用时会在收益计算错误列注明；量堆检测或收益计算失败的记录仍写入 CSV，脚本结束时以非零状态提醒存在失败项。
+
+CSV 使用不带双引号的逗号分隔格式：字段内的换行改为空格、双引号改为单引号、英文逗号改为全角逗号；`量堆检测参数` 列写成 `key=value;key=value`，因此每行都可以直接用英文逗号切分。旧版带引号的 CSV 仍可被下一节的转换脚本读取。
+
+需要把导出的 CSV 转成回测页面可直接加载的 JSON 时，见下一节。
+
+## 14. 将量堆统计 CSV 转换为回测 JSON
+
+将上一节导出的 CSV 转换成回测用例 JSON：
+
+```text
+npm run volume-pile-backtest -- volume-pile-report-20261026_101051.csv
+```
+
+默认输出 `test-cases/volume-pile-report-20261026_101051.json`。输出文件已存在时命令会报错；确认覆盖请加 `--force`，或用 `--out` 指定其他路径。生成的 JSON 会出现在页面的测试用例下拉框中，直接选择即可回测。
+
+转换规则：
+
+- 只保留 `股票代码`、`市场代码`、`信号日期` 有效的记录，其余行跳过并在命令结束时汇总；
+- 每条记录保留回测页面需要的 `id`、`date`、`code`、`marketCode`、`stockName`，并补充 `source`（原始每日复盘文件名）；
+- `volumePile` 保存量堆统计：检测状态与错误、全局基线和全局中位量、吸筹/承接与获利兑现数量、最近量堆类型、起止日、峰值日、缩量 Top50 均值比；
+- `pnl` 保存 CSV 中已算好的收益结果（`pnlPct`、买入/卖出日期和价格、计算状态与错误），便于离线核对；页面回放时仍按逐笔行情实时重算，不读取该字段；
+- 量堆检测参数保留在源 CSV 的 `量堆检测参数` 列（`key=value;...`），转换结果不重复写入；
+- 兼容旧版全字段带引号的 CSV、Excel 另存的混合格式（表头不带引号、含逗号的字段仍带引号）以及新版完全不带引号的 CSV；`2024/2/8` 这类日期会统一写成 `2024-02-08`；
+- 多个 CSV 可以一起传入，按 `市场代码|信号日期` 去重，重复项保留第一次出现的记录。
+
+可选参数：
+
+| 参数 | 说明 |
+| --- | --- |
+| `--out <路径>` | 指定输出 JSON 路径；省略时写入 `test-cases/<第一个CSV文件名>.json` |
+| `--latest-type 吸筹\|获利兑现\|无量堆` | 只导出最近量堆类型匹配的记录，也接受 `accumulation` / `profit-taking` / `none` |
+| `--min-piles <数量>` | 只导出量堆总数不少于该值的记录 |
+| `--strict` | 只导出 `量堆检测状态=成功` 且 `收益计算状态=实时计算成功` 的记录 |
+| `--force` | 覆盖已存在的输出文件 |
+| `--help` | 显示命令说明 |
+
+示例：
+
+```text
+npm run volume-pile-backtest -- volume-pile-report-20261026_101051.csv --latest-type 获利兑现 --out test-cases/获利兑现回测.json
+npm run volume-pile-backtest -- reports/量堆汇总.csv --min-piles 6 --strict
+```
+
+转换完成后终端会输出读取行数、跳过和重复数量、导出条数、各量堆类型数量以及输出路径。`test-cases/` 已加入 [.gitignore](.gitignore)，生成的 JSON 不会提交到 Git。
 
 ## 提交前约定
 

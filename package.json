@@ -13,6 +13,8 @@
     "add-news": "node add-news.js",
     "keep-render": "node keep-render.js",
     "pnl": "node pnl.js",
+    "volume-pile-report": "node volume-pile-report.js",
+    "volume-pile-backtest": "node volume-pile-backtest.js",
     "download:r2": "node download-r2.js",
     "upload": "node upload-r2.js",
     "restore:r2-layout": "node restore-r2-layout.js",

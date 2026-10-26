@@ -806,13 +806,8 @@
               <output id="volumePileProfitThresholdValue" for="volumePileProfitThreshold">20%</output>
               <input id="volumePileProfitThreshold" type="range" min="5" max="50" step="1" value="20" oninput="updateVolumePileSettings()">
             </div>
-            <div class="volume-pile-field">
-              <label for="volumePileAnchorDrop">前置锚点收盘价低幅</label>
-              <output id="volumePileAnchorDropValue" for="volumePileAnchorDrop">6%</output>
-              <input id="volumePileAnchorDrop" type="range" min="1" max="20" step="1" value="6" oninput="updateVolumePileSettings()">
-            </div>
             <button type="button" onclick="copyVolumePileSettings()">复制当前参数</button>
-            <div class="volume-pile-help">量堆与前一量堆之间（首个量堆则从当前已显示历史开头）的非放量段作对比，分别取区间成交量最高的 50% 交易日求均值；低于设定倍数的量堆会被过滤。全局中位量是已显示历史成交量的第 50 百分位，用于过滤普通量，不是底噪线。Q25 底噪线可单独开关。前置锚点逐根递推；低量锚点不计入有效量和中枢。</div>
+            <div class="volume-pile-help">量堆与前一量堆之间（首个量堆则从当前已显示历史开头）的非放量段作对比，分别取区间成交量最高的 50% 交易日求均值；低于设定倍数的量堆会被过滤。全局中位量是已显示历史成交量的第 50 百分位，用于过滤普通量，不是底噪线。Q25 底噪线可单独开关。若放量区间前紧邻连续涨停板（至少一根），以这段连续涨停板的第一根作为区间首根 K 线；锚点不计入有效量和中枢。获利兑现看两个涨幅任一达到阈值：区间内收盘价最低 K 线中间价到加权中枢的涨幅，或区间最后一根 K 线中间价对加权中枢的涨幅。</div>
           </div>
         </details>
         <button id="copyVolumePilesButton" type="button" onclick="copyVolumePileData()">复制量堆数据</button>
@@ -930,7 +925,6 @@
     minimumWidth: 3,
     strongPeakMultiple: 3.5,
     profitThresholdPct: 20,
-    priceAnchorDropPct: 6,
   };
   const VOLUME_PILE_FIELDS = [
     { key: 'baselineQuantile', id: 'volumePileQuantile', output: 'volumePileQuantileValue', format: value => `${value}%` },
@@ -942,7 +936,6 @@
     { key: 'minimumWidth', id: 'volumePileMinWidth', output: 'volumePileMinWidthValue', format: value => String(value) },
     { key: 'strongPeakMultiple', id: 'volumePileStrongPeak', output: 'volumePileStrongPeakValue', format: value => `${Number(value).toFixed(1)}×` },
     { key: 'profitThresholdPct', id: 'volumePileProfitThreshold', output: 'volumePileProfitThresholdValue', format: value => `${value}%` },
-    { key: 'priceAnchorDropPct', id: 'volumePileAnchorDrop', output: 'volumePileAnchorDropValue', format: value => `${value}%` },
   ];
   let volumePileSettings = { ...VOLUME_PILE_DEFAULTS };
   let volumePileAnalysis = { piles: [], byDate: new Map(), anchorByDate: new Map(), auditByDate: new Map() };
@@ -1112,6 +1105,29 @@
     };
   }
 
+  function roundPrice(price) {
+    return Math.round((price + Number.EPSILON) * 100) / 100;
+  }
+
+  const LIMIT_UP_PERCENTS = [5, 10, 20, 30];
+
+  function isLimitUpBar(points, index) {
+    if (index <= 0) return false;
+    const point = points[index];
+    const previous = points[index - 1];
+    if (!Number.isFinite(point.close) || !Number.isFinite(point.high)
+      || !Number.isFinite(previous.close) || previous.close <= 0) return false;
+    // 涨停板必须收在最高价；盘中触板但回落的 K 线不算。
+    if (Math.abs(point.close - point.high) >= 0.000001) return false;
+    if (point.limitStatus === 'limit-up') return true;
+    return LIMIT_UP_PERCENTS.some(percent => {
+      const limitPrice = roundPrice(previous.close * (1 + percent / 100));
+      const diff = point.close - limitPrice;
+      // 允许复权造成的轻微低估，但不接受明显高于理论涨停价的收盘，避免把 +5.48% 这类高收盘误判为 5% 涨停。
+      return diff >= -0.011 && diff <= 0.002;
+    });
+  }
+
   function computeVolumePiles(data, settings) {
     const points = data.map((item, index) => {
       const volume = Number(item.volume);
@@ -1131,6 +1147,7 @@
         high,
         low,
         close,
+        limitStatus: item.limitStatus || '',
         typicalPrice: (high + low + close) / 3,
         globalBaseline: NaN,
         globalMedian: NaN,
@@ -1247,9 +1264,9 @@
       let firstRangeMember = firstVolumeMember;
       while (firstRangeMember.index > 0) {
         const previous = points[firstRangeMember.index - 1];
-        const anchorFloor = firstRangeMember.close * (1 - settings.priceAnchorDropPct / 100);
-        if (!Number.isFinite(previous.close) || !Number.isFinite(anchorFloor)
-          || !(firstRangeMember.close > 0) || previous.close > anchorFloor) break;
+        if (volumePileByDate.has(previous.date)
+          || priceAnchorByDate.has(previous.date)
+          || !isLimitUpBar(points, previous.index)) break;
         firstRangeMember = previous;
         priceAnchorBars.push(previous);
       }
@@ -1281,8 +1298,24 @@
       const peakMidVsFirstMidPct = Number.isFinite(firstBarMidPrice) && firstBarMidPrice > 0
         ? Number(((peakMidPrice / firstBarMidPrice - 1) * 100).toFixed(4))
         : NaN;
-      const profitTaking = Number.isFinite(peakMidVsFirstMidPct)
-        && peakMidPrice >= firstBarMidPrice * (1 + settings.profitThresholdPct / 100);
+      const rangeBars = points.slice(startIndex, endIndex + 1);
+      const lowestCloseBar = rangeBars.reduce((lowest, point) => (
+        Number.isFinite(point.close) && (!lowest || point.close < lowest.close) ? point : lowest
+      ), null);
+      const lowestCloseMid = lowestCloseBar
+        ? (lowestCloseBar.high + lowestCloseBar.low) / 2
+        : NaN;
+      const lowestToCenterPct = Number.isFinite(lowestCloseMid) && lowestCloseMid > 0
+        ? (centerPrice / lowestCloseMid - 1) * 100
+        : NaN;
+      const lastBarMid = (points[endIndex].high + points[endIndex].low) / 2;
+      const lastBarToCenterPct = Number.isFinite(centerPrice) && centerPrice > 0
+        ? (lastBarMid / centerPrice - 1) * 100
+        : NaN;
+      const profitTaking = (Number.isFinite(lowestToCenterPct)
+        && lowestToCenterPct >= settings.profitThresholdPct)
+        || (Number.isFinite(lastBarToCenterPct)
+          && lastBarToCenterPct >= settings.profitThresholdPct);
       const pile = {
         startDate: points[startIndex].date,
         firstVolumeDate: firstVolumeMember.date,
@@ -1300,10 +1333,16 @@
         priceAnchorMidPrice: priceAnchorBars.length ? firstBarMidPrice : null,
         priceAnchorCount: priceAnchorBars.length,
         priceAnchorDates: [...priceAnchorBars].reverse().map(point => point.date),
-        priceAnchorDropPct: settings.priceAnchorDropPct,
         peakMidPrice,
         peakMidVsFirstMidPct,
+        lowestCloseDate: lowestCloseBar?.date || null,
+        lowestCloseMidPrice: Number.isFinite(lowestCloseMid) ? lowestCloseMid : null,
+        lowestCloseToCenterPct: Number.isFinite(lowestToCenterPct) ? lowestToCenterPct : null,
+        lastBarDate: points[endIndex].date,
+        lastBarMidPrice: Number.isFinite(lastBarMid) ? lastBarMid : null,
+        lastBarToCenterPct: Number.isFinite(lastBarToCenterPct) ? lastBarToCenterPct : null,
         profitThresholdPct: settings.profitThresholdPct,
+        profitRuleMet: profitTaking,
         shortCluster,
         auditBars,
         kind: profitTaking ? 'profit-taking' : 'accumulation-candidate',
@@ -1380,8 +1419,22 @@
         maximumMidVsFirstMidPct: Number.isFinite(auditPile?.peakMidVsFirstMidPct)
           ? auditPile.peakMidVsFirstMidPct
           : null,
+        centerPrice: Number.isFinite(auditPile?.centerPrice) ? auditPile.centerPrice : null,
+        lowestCloseDate: auditPile?.lowestCloseDate || null,
+        lowestCloseMidPrice: Number.isFinite(auditPile?.lowestCloseMidPrice)
+          ? auditPile.lowestCloseMidPrice
+          : null,
+        lowestCloseToCenterPct: Number.isFinite(auditPile?.lowestCloseToCenterPct)
+          ? auditPile.lowestCloseToCenterPct
+          : null,
+        lastBarDate: auditPile?.lastBarDate || null,
+        lastBarMidPrice: Number.isFinite(auditPile?.lastBarMidPrice)
+          ? auditPile.lastBarMidPrice
+          : null,
+        lastBarToCenterPct: Number.isFinite(auditPile?.lastBarToCenterPct)
+          ? auditPile.lastBarToCenterPct
+          : null,
         requiredProfitRisePct: settings.profitThresholdPct,
-        priceAnchorDropPct: settings.priceAnchorDropPct,
         priceAnchorDate: auditPile?.priceAnchorDate || null,
         priceAnchorCount: auditPile?.priceAnchorCount || 0,
         priceAnchorDates: auditPile?.priceAnchorDates || [],
@@ -1460,17 +1513,35 @@
       return;
     }
     const label = pile.kind === 'profit-taking' ? '获利兑现倾向' : '吸筹/承接倾向候选';
-    const priceRise = Number.isFinite(pile.peakMidVsFirstMidPct)
+    const lowestRise = Number.isFinite(pile.lowestCloseToCenterPct)
+      ? `${pile.lowestCloseToCenterPct.toFixed(1)}%`
+      : '无法计算';
+    const lastRise = Number.isFinite(pile.lastBarToCenterPct)
+      ? `${pile.lastBarToCenterPct.toFixed(1)}%`
+      : '无法计算';
+    const lowestMidText = Number.isFinite(pile.lowestCloseMidPrice)
+      ? pile.lowestCloseMidPrice.toFixed(2)
+      : '--';
+    const lastMidText = Number.isFinite(pile.lastBarMidPrice)
+      ? pile.lastBarMidPrice.toFixed(2)
+      : '--';
+    const firstMidText = Number.isFinite(pile.firstRangeMidPrice)
+      ? pile.firstRangeMidPrice.toFixed(2)
+      : '--';
+    const peakMidText = Number.isFinite(pile.peakMidPrice)
+      ? pile.peakMidPrice.toFixed(2)
+      : '--';
+    const peakVsFirst = Number.isFinite(pile.peakMidVsFirstMidPct)
       ? `${pile.peakMidVsFirstMidPct.toFixed(1)}%`
       : '无法计算';
     const anchorText = pile.priceAnchorCount
-      ? `递推锚点 ${pile.priceAnchorCount}根（至 ${pile.priceAnchorDate}）`
-      : `无满足低 ${pile.priceAnchorDropPct}% 的连续前置锚点`;
+      ? `连续涨停锚点 ${pile.priceAnchorCount}根（首根 ${pile.priceAnchorDate}）`
+      : '放量区间前没有紧邻的连续涨停板';
     const contrastText = Number.isFinite(pile.contrastRatio)
       ? `放/缩 top50均值比 ${pile.contrastRatio.toFixed(2)}× / 要求 ${pile.contrastThresholdMultiple.toFixed(1)}×`
       : '前置缩量段暂无可比成交量';
-    info.textContent = `${label}${pile.shortCluster ? '（短簇强峰）' : ''} ${pile.startDate}～${pile.endDate}（${pile.durationDays}个有效量日） | ${contrastText} | ${anchorText} | 区间首K中间价 ${pile.firstRangeMidPrice.toFixed(2)} | 最大量日 ${pile.peakDate} 中间价 ${pile.peakMidPrice.toFixed(2)} | 中间价涨幅 ${priceRise} / 阈值 ${pile.profitThresholdPct}% | 加权中枢 ${pile.centerPrice.toFixed(2)}`;
-    info.title = `${contrastText}${Number.isFinite(pile.pileTopHalfAverageVolume) && Number.isFinite(pile.contractionTopHalfAverageVolume)
+    info.textContent = `${label}${pile.shortCluster ? '（短簇强峰）' : ''} ${pile.startDate}～${pile.endDate}（${pile.durationDays}个有效量日） | ${contrastText} | ${anchorText} | 最低收盘K ${pile.lowestCloseDate || '--'}（中间价 ${lowestMidText}）到中枢 ${lowestRise}；末根 ${pile.lastBarDate || '--'}（中间价 ${lastMidText}）对中枢 ${lastRise}；阈值 ${pile.profitThresholdPct}% | 加权中枢 ${pile.centerPrice.toFixed(2)}`;
+    info.title = `区间首K中间价 ${firstMidText}；最大量日 ${pile.peakDate} 中间价 ${peakMidText}；峰值/首根涨幅 ${peakVsFirst}（仅供参考）。${contrastText}${Number.isFinite(pile.pileTopHalfAverageVolume) && Number.isFinite(pile.contractionTopHalfAverageVolume)
       ? `（放量段 Top ${pile.pileTopHalfDayCount}/${pile.pileVolumeValidDays}日均值 ${pile.pileTopHalfAverageVolume.toFixed(0)}；前置缩量段 Top ${pile.contractionTopHalfDayCount}/${pile.contractionVolumeValidDays}日均值 ${pile.contractionTopHalfAverageVolume.toFixed(0)}；参考 ${pile.contrastReferenceStartDate}～${pile.contrastReferenceEndDate}）`
       : ''}`;
     info.style.color = pile.kind === 'profit-taking' ? '#f05298' : '#47b7ef';
@@ -1544,10 +1615,21 @@
         priceAnchorMidPrice: Number.isFinite(pile.priceAnchorMidPrice) ? pile.priceAnchorMidPrice : null,
         priceAnchorCount: pile.priceAnchorCount,
         priceAnchorDates: pile.priceAnchorDates,
-        priceAnchorDropPct: pile.priceAnchorDropPct,
         peakMidPrice: Number.isFinite(pile.peakMidPrice) ? pile.peakMidPrice : null,
         peakMidVsFirstMidPct: Number.isFinite(pile.peakMidVsFirstMidPct)
           ? pile.peakMidVsFirstMidPct
+          : null,
+        lowestCloseDate: pile.lowestCloseDate,
+        lowestCloseMidPrice: Number.isFinite(pile.lowestCloseMidPrice)
+          ? pile.lowestCloseMidPrice
+          : null,
+        lowestCloseToCenterPct: Number.isFinite(pile.lowestCloseToCenterPct)
+          ? pile.lowestCloseToCenterPct
+          : null,
+        lastBarDate: pile.lastBarDate,
+        lastBarMidPrice: Number.isFinite(pile.lastBarMidPrice) ? pile.lastBarMidPrice : null,
+        lastBarToCenterPct: Number.isFinite(pile.lastBarToCenterPct)
+          ? pile.lastBarToCenterPct
           : null,
         profitThresholdPct: pile.profitThresholdPct,
         profitRuleMet: pile.kind === 'profit-taking',
