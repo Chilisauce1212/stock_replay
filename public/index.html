@@ -3102,7 +3102,7 @@
       ? (activeCase.stockName || activeCase.marketCode || activeCase.code || '')
       : (dailyReview && shuffledCases.length ? '每日复盘完成' : '');
     const size = Math.round(Math.min(container.clientHeight * 0.2, container.clientWidth * 0.7 / Math.max(title.length, 2)));
-    const lines = title ? [{ text: title, color: 'rgba(240, 185, 11, 0.12)', fontSize: size, fontStyle: 'bold' }] : [];
+    const lines = title ? [{ text: title, color: 'rgba(174, 184, 197, 0.14)', fontSize: size, fontStyle: 'bold' }] : [];
     if (title && dailyReview) {
       lines.push({ text: document.getElementById('totalCount').innerText, color: 'rgba(174, 184, 197, 0.24)', fontSize: Math.round(size * 0.5) });
     }
