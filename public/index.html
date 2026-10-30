@@ -1923,7 +1923,7 @@
     if (currentNewsLoading) {
       const loading = document.createElement('div');
       loading.className = 'news-title';
-      loading.textContent = '正在加载回测日前5个交易日新闻...';
+      loading.textContent = `正在加载回测日前${newsTradingDays()}个交易日新闻...`;
       list.appendChild(loading);
       return;
     }
@@ -1937,7 +1937,7 @@
     if (!currentNews.length) {
       const empty = document.createElement('div');
       empty.className = 'news-title';
-      empty.textContent = '当前股票在回测日前5个交易日没有新闻';
+      empty.textContent = `当前股票在回测日前${newsTradingDays()}个交易日没有新闻`;
       list.appendChild(empty);
       return;
     }
@@ -1990,12 +1990,17 @@
     updateNewsDisplay();
   }
 
+  // 每日复盘和新闻审计（news-theme-table.js）同口径：首板日及前一个交易日；其他回放看回测日前 5 个交易日。
+  function newsTradingDays() {
+    return isDailyReviewSource() ? 2 : 5;
+  }
+
   function loadCurrentNews(caseItem) {
     if (currentNewsAbortController) currentNewsAbortController.abort();
     const controller = new AbortController();
     currentNewsAbortController = controller;
     const timeoutId = setTimeout(() => controller.abort(), 30000);
-    fetch(`/api/news?code=${encodeURIComponent(caseItem.code)}&date=${encodeURIComponent(caseItem.date)}&ts=${Date.now()}`, {
+    fetch(`/api/news?code=${encodeURIComponent(caseItem.code)}&date=${encodeURIComponent(caseItem.date)}&days=${newsTradingDays()}&ts=${Date.now()}`, {
       cache: 'no-store',
       signal: controller.signal,
     })
