@@ -5,6 +5,8 @@ const path = require('path');
 const { spawn } = require('child_process');
 const axios = require('axios');
 const { chromium } = require('playwright');
+const { makeTagger, buildDays } = require('./stock-pick');
+const { readLimitUpMonths, updateLimitUpList } = require('./limit-up-list');
 
 const DAILY_REVIEW_DIR = path.join(__dirname, 'daily-review');
 const OUTPUT_FILE = path.join(DAILY_REVIEW_DIR, '连板股票.json');
@@ -229,6 +231,21 @@ function collectDates(argumentsList) {
   return [...dates].sort();
 }
 
+// 全市场涨停名单（reports/全市场涨停原因.json）覆盖的日期直接从名单生成：当天涨停、按每日名单算出的连板数 >= 2、主板、非 ST。
+// 和问财「连续涨停天数>=2,主板,涨幅>9」基本一致；名单还含收盘在涨停价但没封死的票，问财不算
+function recordsFromLimitUpList(date, byDay) {
+  return [...(byDay.get(date)?.values() || [])]
+    .filter(item => item.streak >= 2 && isMainBoard(item.code) && !/ST/i.test(item.name))
+    .map(item => ({
+      date,
+      code: item.code,
+      marketCode: `${item.code}.${item.code.startsWith('6') ? 'SH' : 'SZ'}`,
+      stockName: item.name,
+      consecutiveBoards: item.streak,
+      limitUpReason: item.reason || '',
+    }));
+}
+
 function saveRecords(records) {
   const temporary = `${OUTPUT_FILE}.tmp`;
   fs.writeFileSync(temporary, `${JSON.stringify(records, null, 2)}\n`, 'utf8');
@@ -253,26 +270,36 @@ async function main() {
     }
   });
 
+  const sortRecords = () => [...recordsByDate.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .flatMap(([, items]) => items.sort((left, right) => (
+      Number(right.consecutiveBoards) - Number(left.consecutiveBoards)
+      || String(left.stockName).localeCompare(String(right.stockName), 'zh-CN')
+    )));
+  const todo = dates.filter(date => overwrite || !existingDates.has(date));
+  console.log(`回测日 ${dates.length} 个，已有 ${dates.length - todo.length} 个，待生成 ${todo.length} 个`);
+  if (!todo.length) return;
+
+  const { byDay, days } = buildDays(await updateLimitUpList(todo.at(-1).replaceAll('-', '')), makeTagger());
+  const viaIwencai = [];
+  for (const date of todo) {
+    if (date < days[0] || date > days.at(-1)) viaIwencai.push(date);
+    else recordsByDate.set(date, recordsFromLimitUpList(date, byDay));
+  }
+  saveRecords(sortRecords());
+  console.log(`从全市场涨停名单生成 ${todo.length - viaIwencai.length} 个日期，已写入 ${OUTPUT_FILE}`);
+  if (!viaIwencai.length) return;
+
   await ensureChromeDebugging();
   const browser = await chromium.connectOverCDP('http://127.0.0.1:9222');
   const context = browser.contexts()[0];
   const page = await context.newPage();
   try {
-    for (const [index, date] of dates.entries()) {
-      if (!overwrite && existingDates.has(date)) {
-        console.log(`[${index + 1}/${dates.length}] 跳过已有日期 ${date}`);
-        continue;
-      }
-      process.stdout.write(`[${index + 1}/${dates.length}] 正在查询 ${date} ... `);
+    for (const [index, date] of viaIwencai.entries()) {
+      process.stdout.write(`[${index + 1}/${viaIwencai.length}] 涨停名单没有 ${date}，问财查询中 ... `);
       const records = await queryDate(page, date);
       recordsByDate.set(date, records);
-      const merged = [...recordsByDate.entries()]
-        .sort(([left], [right]) => left.localeCompare(right))
-        .flatMap(([, items]) => items.sort((left, right) => (
-          Number(right.consecutiveBoards) - Number(left.consecutiveBoards)
-          || String(left.stockName).localeCompare(String(right.stockName), 'zh-CN')
-        )));
-      saveRecords(merged);
+      saveRecords(sortRecords());
       console.log(`获取 ${records.length} 条，已写入 ${OUTPUT_FILE}`);
       await sleep(2000);
     }

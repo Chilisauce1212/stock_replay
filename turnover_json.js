@@ -264,6 +264,18 @@ async function syncDailyReviewCopy(records, filename) {
   console.log('新追加的记录还没有预计算盈亏，可运行 npm run pnl 后再上传。');
 }
 
+// 每日复盘页面的「连板股票」按回测日读 daily-review/连板股票.json：补上这些回测日（从全市场涨停名单生成），再更新 R2
+async function syncChainStocks(records) {
+  const dates = [...new Set(records.map(item => item.date).filter(Boolean))].sort();
+  if (!dates.length) return;
+  execFileSync(process.execPath, [path.join(__dirname, 'chain-stocks.js'), ...dates], { stdio: 'inherit' });
+  const localPath = path.join(DAILY_REVIEW_DIR, '连板股票.json');
+  if (r2Client && fs.existsSync(localPath)) {
+    await writeJson('daily-review/连板股票.json', JSON.parse(fs.readFileSync(localPath, 'utf8')));
+    console.log('连板股票已更新到 R2 daily-review/连板股票.json');
+  }
+}
+
 async function run(startArgument, endArgument) {
   const startText = String(startArgument).trim();
   const endText = String(endArgument).trim();
@@ -292,7 +304,10 @@ async function run(startArgument, endArgument) {
   }
   if (startDate > endDate) {
     console.log('已有数据已经覆盖指定日期范围，无需追加。');
-    if (records.length) await syncDailyReviewCopy(records, filename);
+    if (records.length) {
+      await syncDailyReviewCopy(records, filename);
+      await syncChainStocks(records);
+    }
     return;
   }
 
@@ -305,6 +320,7 @@ async function run(startArgument, endArgument) {
   await saveJson(records, filename);
   console.log(`\n>>> 全部完成！请查看文件: ${filename}`);
   await syncDailyReviewCopy(records, filename);
+  await syncChainStocks(records);
 }
 
 async function runTodayFirstBoard() {
