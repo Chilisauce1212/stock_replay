@@ -10,7 +10,7 @@
   <link rel="manifest" href="/manifest.json">
   <title>K线训练与盲盒回放工具 (TradingView Lightweight Charts)</title>
   <!-- 引入 TradingView 开源 lightweight-charts -->
-  <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
+  <script src="https://unpkg.com/lightweight-charts@5.2.1/dist/lightweight-charts.standalone.production.js"></script>
   <style>
     html,
     body {
@@ -395,7 +395,6 @@
       font-weight: bold;
     }
     #newsButton {
-      margin-left: auto;
       padding: 2px 7px;
       font-size: 12px;
       color: #b7d7ff;
@@ -593,8 +592,20 @@
     .test-status { color: #f0b90b; font-family: monospace; }
     .result-board { color: #aeb8c5; font-family: monospace; }
     #dailyRecordStatus { color: #d9363e; }
-    /* 行内容过长时新闻按钮不被挤出可视区域 */
-    .legend #newsButton { position: sticky; right: 0; z-index: 2; flex: 0 0 auto; box-shadow: -8px 0 8px #0b0e11; }
+    /* 连板股票、新闻靠右；行内容过长时不被挤出可视区域 */
+    .legend-right {
+      position: sticky;
+      right: 0;
+      z-index: 2;
+      display: flex;
+      gap: 8px;
+      flex: 0 0 auto;
+      margin-left: auto;
+      background: #0b0e11;
+      box-shadow: -8px 0 8px #0b0e11;
+    }
+    /* 股票名称和总数改为 K 线图底层的水印（updateChartWatermark），不在这一行显示 */
+    #codeVal, #totalBoard { display: none !important; }
     #chartContainer {
       width: 100%;
       max-width: 100%;
@@ -738,8 +749,10 @@
       <label>
         <select id="dataSource" onchange="switchDataSource()">
           <option value="dailyReview">每日复盘 JSON</option>
+          <!-- 测试用例、收藏暂时关闭：一进二要结合新闻、连板梯队和时间序列看，随机抽样没有意义。恢复时去掉注释并把 FAVORITES_ENABLED 改回 true
           <option value="testcases">测试用例 JSON</option>
           <option value="favorites">收藏 JSON</option>
+          -->
           <option value="custom">自定义</option>
         </select>
       </label>
@@ -779,16 +792,18 @@
         <div class="review-calendar-grid" id="reviewCalendarGrid"></div>
       </div>
       <div class="legend">
+        <button id="portfolioButton" class="portfolio-button" type="button" hidden onclick="openPortfolioDialog('account')">账户</button>
+        <button id="volumePilePanelToggle" type="button" aria-expanded="false" aria-controls="volumePilePanel" onclick="toggleVolumePilePanel()">量堆设置</button>
         <span id="codeVal" style="color: #f0b90b;">股票代码: --</span>
         <span id="amountVal" style="color: #b0b8c4;">成交金额: --</span>
         <span id="successBoard" class="result-board">成功: <span id="successCount">0</span></span>
         <span id="failureBoard" class="result-board">失败: <span id="failureCount">0</span></span>
         <span id="totalBoard" class="result-board">总数: <span id="totalCount">0</span><span id="dailyRecordStatus"></span></span>
         <span id="reviewPnlBoard" class="result-board" hidden>累计盈亏: <span id="reviewTotalPnl">--</span></span>
-        <button id="portfolioButton" class="portfolio-button" type="button" hidden onclick="openPortfolioDialog('account')">账户</button>
-        <button id="chainStocksButton" class="chain-stocks-button" type="button" hidden onclick="openChainStocksDialog()">连板股票</button>
-        <button id="volumePilePanelToggle" type="button" aria-expanded="false" aria-controls="volumePilePanel" onclick="toggleVolumePilePanel()">量堆设置</button>
-        <button id="newsButton" type="button" onclick="toggleNewsPanel()" aria-label="显示新闻" title="显示新闻">新闻</button>
+        <div class="legend-right">
+          <button id="chainStocksButton" class="chain-stocks-button" type="button" hidden onclick="openChainStocksDialog()">连板股票</button>
+          <button id="newsButton" type="button" onclick="toggleNewsPanel()" aria-label="显示新闻" title="显示新闻">新闻</button>
+        </div>
       </div>
       <div id="volumePilePanel" hidden>
        <div class="volume-pile-toolbar">
@@ -960,7 +975,7 @@
   ];
   const VOLUME_PILE_DEFAULTS = {
     enabled: false,
-    showGlobalBaseline: false,
+    showGlobalBaseline: true,
     ...window.VolumePile.DEFAULT_SETTINGS,
   };
   const VOLUME_PILE_FIELDS = [
@@ -1747,6 +1762,9 @@
     if (source === 'testcases') return loadTestCaseFiles();
   }
 
+  // 收藏暂时关闭（见数据源下拉框的注释）
+  const FAVORITES_ENABLED = false;
+
   function updateSourceMode() {
     const dailyReview = isDailyReviewSource();
     const custom = isCustomSource();
@@ -1758,8 +1776,8 @@
     document.getElementById('failureBoard').style.display = dailyReview ? 'none' : '';
     document.getElementById('totalBoard').style.display = '';
     document.getElementById('reviewPnlBoard').hidden = !dailyReview;
-    document.getElementById('favoriteGroup').hidden = dailyReview;
-    document.getElementById('newFavoriteGroup').hidden = dailyReview;
+    document.getElementById('favoriteGroup').hidden = dailyReview || !FAVORITES_ENABLED;
+    document.getElementById('newFavoriteGroup').hidden = dailyReview || !FAVORITES_ENABLED;
     document.getElementById('reviewDateButton').hidden = !dailyReview;
     document.getElementById('reviewDateButton').disabled = reviewDates.length <= 1;
     document.getElementById('reviewWheelToggle').hidden = !dailyReview;
@@ -1771,7 +1789,7 @@
       closeChainStocksDialog();
     }
     document.getElementById('favoriteButton').disabled = dailyReview || !activeCase;
-    document.getElementById('favoriteButton').hidden = dailyReview;
+    document.getElementById('favoriteButton').hidden = dailyReview || !FAVORITES_ENABLED;
   }
 
   function updateChainStocksButton() {
@@ -2503,6 +2521,7 @@
     } else {
       document.getElementById('totalCount').innerText = `${Math.min(casePosition + 1, shuffledCases.length)}/${shuffledCases.length}`;
     }
+    updateChartWatermark();
     const recordStatus = document.getElementById('dailyRecordStatus');
     recordStatus.textContent = currentCaseBought ? ' ✓' : '';
     recordStatus.title = currentCaseBought ? '已加入记录' : '';
@@ -3072,6 +3091,24 @@
     renderCandleMarkers();
   }
 
+  // 股票名称和每日复盘进度画在 K 线图底层：半透明大字，字号随图表大小变化，不挡 K 线
+  let chartWatermark = null;
+
+  function updateChartWatermark() {
+    if (!chartWatermark) return;
+    const container = document.getElementById('chartContainer');
+    const dailyReview = isDailyReviewSource();
+    const title = activeCase
+      ? (activeCase.stockName || activeCase.marketCode || activeCase.code || '')
+      : (dailyReview && shuffledCases.length ? '每日复盘完成' : '');
+    const size = Math.round(Math.min(container.clientHeight * 0.2, container.clientWidth * 0.7 / Math.max(title.length, 2)));
+    const lines = title ? [{ text: title, color: 'rgba(240, 185, 11, 0.12)', fontSize: size, fontStyle: 'bold' }] : [];
+    if (title && dailyReview) {
+      lines.push({ text: document.getElementById('totalCount').innerText, color: 'rgba(174, 184, 197, 0.24)', fontSize: Math.round(size * 0.5) });
+    }
+    chartWatermark.applyOptions({ lines });
+  }
+
   function initChart() {
     const container = document.getElementById('chartContainer');
     
@@ -3110,6 +3147,8 @@
       },
     });
 
+    chartWatermark = LightweightCharts.createTextWatermark(chart.panes()[0], { horzAlign: 'center', vertAlign: 'center', lines: [] });
+
     const chartWidget = container.querySelector('.tv-lightweight-charts');
     if (!chartWidget) throw new Error('K 线图容器初始化失败');
     chartWidget.style.position = 'relative';
@@ -3121,6 +3160,7 @@
     const resizeChart = () => {
       chart.resize(container.clientWidth, container.clientHeight);
       scheduleVolumePileBands();
+      updateChartWatermark();
     };
     window.addEventListener('resize', resizeChart);
     if (window.ResizeObserver) {
@@ -3305,6 +3345,7 @@
     if (last) {
       document.getElementById('codeVal').innerText = displayCodeLabel();
       document.getElementById('amountVal').innerText = formatAmount(last.amount);
+      updateChartWatermark();
       updateVolumePileInfo(String(last.date || '').split('T')[0]);
     }
   }
@@ -3587,6 +3628,7 @@
       setTestButtons(false);
       document.getElementById('stockNameVal').innerText = '股票名称: --';
       document.getElementById('codeVal').innerText = isDailyReviewSource() ? '每日复盘完成' : '股票代码: --';
+      updateChartWatermark();
       if (isDailyReviewSource()) {
         document.getElementById('testStatus').innerText = boughtStockNames.length
           ? `买入记录：${boughtStockNames.join(' ')}`
