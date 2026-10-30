@@ -5,21 +5,16 @@ const fs = require('fs');
 const path = require('path');
 const { Worker, healthyHosts } = require('./tdx_tick');
 const { computeReviewPnl } = require('./server');
+const {
+  DEFAULT_SETTINGS,
+  barsBeforeSignal,
+  computeVolumePiles,
+  isLimitUpBar,
+  normalizeDate,
+  summarizeTopHalfVolume,
+} = require('./public/volume-pile');
 
 const REVIEW_DIR = path.join(__dirname, 'daily-review');
-const DEFAULT_SETTINGS = Object.freeze({
-  enabled: true,
-  showGlobalBaseline: true,
-  baselineQuantile: 45,
-  volumeMultiple: 2.0,
-  medianMultiple: 2,
-  minimumPeakShare: 27,
-  contrastThresholdMultiple: 1.5,
-  mergeGap: 7,
-  minimumWidth: 3,
-  strongPeakMultiple: 3.5,
-  profitThresholdPct: 20,
-});
 
 function parseArgs(argv) {
   const options = {
@@ -63,7 +58,7 @@ function helpText() {
   return [
     '用法: npm run volume-pile-report -- <JSON文件...> [--out report.csv] [--base-url http://localhost:3000] [--workers 3]',
     '文件参数可为路径，或 daily-review/ 下的 JSON 文件名。',
-    '量堆检测使用本脚本内固定配置；个股收益每次通过逐笔成交规则实时重算，不读取 pnl 缓存。',
+    '量堆检测使用 public/volume-pile.js 的默认参数（与图表一致），首板当天不参与识别；个股收益每次通过逐笔成交规则实时重算，不读取 pnl 缓存。',
     'CSV 不带双引号：字段内逗号、换行和双引号会分别改写为全角逗号、空格和单引号。',
   ].join('\n');
 }
@@ -79,251 +74,6 @@ function resolveInputFile(input) {
     throw new Error(`输入文件必须是 .json: ${input}`);
   }
   return filePath;
-}
-
-function normalizeDate(value) {
-  const text = String(value || '').trim();
-  if (/^\d{8}$/.test(text)) {
-    return `${text.slice(0, 4)}-${text.slice(4, 6)}-${text.slice(6, 8)}`;
-  }
-  return /^\d{4}-\d{2}-\d{2}$/.test(text) ? text : '';
-}
-
-function quantile(values, fraction) {
-  if (!values.length) return NaN;
-  const sorted = [...values].sort((left, right) => left - right);
-  const position = (sorted.length - 1) * fraction;
-  const lower = Math.floor(position);
-  const upper = Math.ceil(position);
-  return sorted[lower] + (sorted[upper] - sorted[lower]) * (position - lower);
-}
-
-function summarizeTopHalfVolume(points) {
-  const volumes = points
-    .map(point => point.volume)
-    .filter(volume => Number.isFinite(volume) && volume > 0)
-    .sort((left, right) => right - left);
-  const topCount = Math.ceil(volumes.length / 2);
-  return {
-    average: topCount
-      ? volumes.slice(0, topCount).reduce((sum, volume) => sum + volume, 0) / topCount
-      : NaN,
-    validDays: volumes.length,
-    topDays: topCount,
-  };
-}
-
-function roundPrice(price) {
-  return Math.round((price + Number.EPSILON) * 100) / 100;
-}
-
-const LIMIT_UP_PERCENTS = [5, 10, 20, 30];
-
-function isLimitUpBar(points, index) {
-  if (index <= 0) return false;
-  const point = points[index];
-  const previous = points[index - 1];
-  if (!Number.isFinite(point.close) || !Number.isFinite(point.high)
-    || !Number.isFinite(previous.close) || previous.close <= 0) return false;
-  // 涨停板必须收在最高价；盘中触板但回落的 K 线不算。
-  if (Math.abs(point.close - point.high) >= 0.000001) return false;
-  if (point.limitStatus === 'limit-up') return true;
-  return LIMIT_UP_PERCENTS.some(percent => {
-    const limitPrice = roundPrice(previous.close * (1 + percent / 100));
-    const diff = point.close - limitPrice;
-    // 允许复权造成的轻微低估，但不接受明显高于理论涨停价的收盘，避免把 +5.48% 这类高收盘误判为 5% 涨停。
-    return diff >= -0.011 && diff <= 0.002;
-  });
-}
-
-function computeVolumePiles(data, settings = DEFAULT_SETTINGS) {
-  const points = data.map((item, index) => {
-    const volume = Number(item.volume);
-    const open = Number(item.open);
-    const high = Number(item.high);
-    const low = Number(item.low);
-    const close = Number(item.close);
-    const amount = item.amount === null || item.amount === undefined || item.amount === ''
-      ? NaN
-      : Number(item.amount);
-    return {
-      index,
-      date: normalizeDate(item.date),
-      volume: Number.isFinite(volume) && volume > 0 ? volume : 0,
-      amount,
-      open,
-      high,
-      low,
-      close,
-      limitStatus: item.limitStatus || '',
-      typicalPrice: (high + low + close) / 3,
-      globalBaseline: NaN,
-      globalMedian: NaN,
-      excess: 0,
-      ratio: NaN,
-      medianRatio: NaN,
-    };
-  });
-
-  const allVolumes = points.map(point => point.volume).filter(volume => volume > 0);
-  const globalBaseline = quantile(allVolumes, settings.baselineQuantile / 100);
-  const globalMedian = quantile(allVolumes, 0.5);
-  if (globalBaseline > 0 && globalMedian > 0) {
-    for (const point of points) {
-      point.globalBaseline = globalBaseline;
-      point.globalMedian = globalMedian;
-      point.excess = Math.max(point.volume - globalBaseline, 0);
-      point.ratio = point.volume / globalBaseline;
-      point.medianRatio = point.volume / globalMedian;
-    }
-  }
-
-  const candidateIndices = points
-    .filter(point => (
-      point.ratio >= settings.volumeMultiple
-      && point.medianRatio >= settings.medianMultiple
-    ))
-    .map(point => point.index);
-  const candidateIndexSet = new Set(candidateIndices);
-  const timeGroups = [];
-  for (const index of candidateIndices) {
-    const group = timeGroups[timeGroups.length - 1];
-    if (group && index - group.endIndex <= settings.mergeGap + 1) {
-      group.endIndex = index;
-      group.candidateIndices.push(index);
-    } else {
-      timeGroups.push({ startIndex: index, endIndex: index, candidateIndices: [index] });
-    }
-  }
-
-  const groups = [];
-  for (const timeGroup of timeGroups) {
-    const peakExcess = Math.max(...timeGroup.candidateIndices.map(index => points[index].excess));
-    const significantIndices = timeGroup.candidateIndices.filter(index => (
-      points[index].excess >= peakExcess * settings.minimumPeakShare / 100
-    ));
-    let group = null;
-    for (const index of significantIndices) {
-      if (group && index - group.endIndex > settings.mergeGap + 1) {
-        groups.push(group);
-        group = null;
-      }
-      if (!group) group = { startIndex: index, endIndex: index, candidateIndices: [] };
-      group.endIndex = index;
-      group.candidateIndices.push(index);
-    }
-    if (group) groups.push(group);
-  }
-
-  const piles = [];
-  const volumePileByDate = new Map();
-  let previousPileEndIndex = -1;
-  for (const group of groups) {
-    const candidates = group.candidateIndices.map(index => points[index]);
-    const peakExcess = Math.max(...candidates.map(point => point.excess));
-    const members = candidates.filter(point => (
-      point.excess >= peakExcess * settings.minimumPeakShare / 100
-    ));
-    if (!members.length) continue;
-
-    const peak = members.reduce((highest, point) => point.volume > highest.volume ? point : highest);
-    const shortCluster = members.length < settings.minimumWidth;
-    if (shortCluster && peak.ratio < settings.strongPeakMultiple) continue;
-
-    const firstVolumeMember = members[0];
-    const lastVolumeMember = members[members.length - 1];
-    const pileVolumeSummary = summarizeTopHalfVolume(
-      points.slice(firstVolumeMember.index, lastVolumeMember.index + 1),
-    );
-    const contractionPoints = points.slice(previousPileEndIndex + 1, firstVolumeMember.index);
-    const contractionVolumeSummary = summarizeTopHalfVolume(contractionPoints);
-    const contrastRatio = Number.isFinite(pileVolumeSummary.average)
-      && Number.isFinite(contractionVolumeSummary.average)
-      && contractionVolumeSummary.average > 0
-      ? pileVolumeSummary.average / contractionVolumeSummary.average
-      : NaN;
-    if (Number.isFinite(contrastRatio) && contrastRatio < settings.contrastThresholdMultiple) continue;
-
-    const centerVolume = members.reduce((sum, point) => sum + point.excess, 0);
-    const centerPrice = centerVolume > 0
-      ? members.reduce((sum, point) => sum + point.typicalPrice * point.excess, 0) / centerVolume
-      : NaN;
-    const priceAnchors = [];
-    let rangeFirst = firstVolumeMember;
-    while (rangeFirst.index > 0) {
-      const previous = points[rangeFirst.index - 1];
-      if (volumePileByDate.has(previous.date)
-        || !isLimitUpBar(points, previous.index)) break;
-      rangeFirst = previous;
-      priceAnchors.push(previous);
-    }
-    const firstRangeMid = (rangeFirst.high + rangeFirst.low) / 2;
-    const peakMid = (peak.high + peak.low) / 2;
-    const rangeBars = points.slice(rangeFirst.index, lastVolumeMember.index + 1);
-    const lowestCloseBar = rangeBars.reduce((lowest, point) => (
-      Number.isFinite(point.close) && (!lowest || point.close < lowest.close) ? point : lowest
-    ), null);
-    const lowestCloseMid = lowestCloseBar
-      ? (lowestCloseBar.high + lowestCloseBar.low) / 2
-      : NaN;
-    const lowestToCenterPct = Number.isFinite(lowestCloseMid) && lowestCloseMid > 0
-      ? (centerPrice / lowestCloseMid - 1) * 100
-      : NaN;
-    const lastVolumeBarMid = (lastVolumeMember.high + lastVolumeMember.low) / 2;
-    const lastBarToCenterPct = Number.isFinite(centerPrice) && centerPrice > 0
-      ? (lastVolumeBarMid / centerPrice - 1) * 100
-      : NaN;
-    const profitRisePct = Number.isFinite(firstRangeMid) && firstRangeMid > 0
-      ? (peakMid / firstRangeMid - 1) * 100
-      : NaN;
-    const profitTaking = (Number.isFinite(lowestToCenterPct)
-      && lowestToCenterPct >= settings.profitThresholdPct)
-      || (Number.isFinite(lastBarToCenterPct)
-        && lastBarToCenterPct >= settings.profitThresholdPct);
-
-    piles.push({
-      startDate: rangeFirst.date,
-      firstVolumeDate: firstVolumeMember.date,
-      endDate: lastVolumeMember.date,
-      peakDate: peak.date,
-      kind: profitTaking ? 'profit-taking' : 'accumulation-candidate',
-      effectiveDays: members.length,
-      priceCenter: centerPrice,
-      topHalfAverage: pileVolumeSummary.average,
-      topHalfDays: pileVolumeSummary.topDays,
-      volumeDays: pileVolumeSummary.validDays,
-      priorTopHalfAverage: contractionVolumeSummary.average,
-      priorTopHalfDays: contractionVolumeSummary.topDays,
-      priorVolumeDays: contractionVolumeSummary.validDays,
-      contrastRatio,
-      contrastReferenceStartDate: contractionPoints[0]?.date || '',
-      contrastReferenceEndDate: contractionPoints.at(-1)?.date || '',
-      profitRisePct,
-      firstRangeMidPrice: firstRangeMid,
-      peakMidPrice: peakMid,
-      lowestCloseDate: lowestCloseBar?.date || '',
-      lowestCloseMidPrice: lowestCloseMid,
-      lowestCloseToCenterPct: lowestToCenterPct,
-      lastBarDate: lastVolumeMember.date,
-      lastBarMidPrice: lastVolumeBarMid,
-      lastBarToCenterPct,
-      profitRuleMet: profitTaking,
-      anchorDates: [...priceAnchors].reverse().map(point => point.date),
-      settings,
-    });
-    previousPileEndIndex = lastVolumeMember.index;
-    for (const member of members) volumePileByDate.set(member.date, true);
-    for (const anchor of priceAnchors) volumePileByDate.set(anchor.date, true);
-  }
-
-  return {
-    piles,
-    globalBaseline,
-    globalMedian,
-    barCount: points.length,
-    startDate: points[0]?.date || '',
-    endDate: points.at(-1)?.date || '',
-  };
 }
 
 function normalizeStockCode(record) {
@@ -352,15 +102,21 @@ function serializeSettings(settings) {
 function toCsv(rows) {
   const columns = rows.length ? Object.keys(rows[0]) : [
     '文件', '量堆检测参数', '用例ID', '股票代码', '市场代码', '股票名称', '信号日期', '检测K线数量',
-    '检测起始日期', '检测截止日期', '全局Q基线', '全局中位量',
+    '检测起始日期', '检测截止日期', '全局Q基线', '全局中位量', '近20日量能倍数', '近60日放量天数',
     '吸筹承接量堆数', '获利兑现量堆数', '量堆总数', '最近量堆类型',
     '最近量堆开始日期', '最近量堆结束日期', '最近量堆峰值日期',
-    '最近量堆放缩量Top50均值比', '个股收益率百分比', '买入日期', '买入价',
+    '最近量堆放缩量Top50均值比', '最近量堆中枢', '最近量堆高点日期', '最近量堆高点左侧最低收盘日期',
+    '最近量堆最低收盘K到中枢涨幅', '最近量堆末根K对中枢涨幅', '首板量/最近量堆Top50均量',
+    '个股收益率百分比', '买入日期', '买入价',
     '卖出日期', '卖出价', '收益计算状态', '收益计算错误', '量堆检测状态', '量堆检测错误',
   ];
   const lines = [columns.map(plainCsv).join(',')];
   for (const row of rows) lines.push(columns.map(column => plainCsv(row[column])).join(','));
   return `\uFEFF${lines.join('\r\n')}\r\n`;
+}
+
+function roundedOrBlank(value, digits) {
+  return Number.isFinite(value) ? Number(value.toFixed(digits)) : '';
 }
 
 function formatError(error) {
@@ -391,6 +147,8 @@ function resultRow(record, file, analysis, calculatedPnl, detectionError = '', p
     检测截止日期: analysis?.endDate || '',
     全局Q基线: Number.isFinite(analysis?.globalBaseline) ? analysis.globalBaseline : '',
     全局中位量: Number.isFinite(analysis?.globalMedian) ? analysis.globalMedian : '',
+    近20日量能倍数: roundedOrBlank(analysis?.activity?.vol20VsNormal, 4),
+    近60日放量天数: Number.isFinite(analysis?.activity?.spikeDays60) ? analysis.activity.spikeDays60 : '',
     吸筹承接量堆数: piles.filter(pile => pile.kind === 'accumulation-candidate').length,
     获利兑现量堆数: piles.filter(pile => pile.kind === 'profit-taking').length,
     量堆总数: piles.length,
@@ -402,6 +160,14 @@ function resultRow(record, file, analysis, calculatedPnl, detectionError = '', p
     最近量堆峰值日期: latest?.peakDate || '',
     最近量堆放缩量Top50均值比: Number.isFinite(latest?.contrastRatio)
       ? Number(latest.contrastRatio.toFixed(4))
+      : '',
+    最近量堆中枢: roundedOrBlank(latest?.centerPrice, 2),
+    最近量堆高点日期: latest?.highestCloseDate || '',
+    最近量堆高点左侧最低收盘日期: latest?.lowestCloseDate || '',
+    最近量堆最低收盘K到中枢涨幅: roundedOrBlank(latest?.lowestCloseToCenterPct, 2),
+    最近量堆末根K对中枢涨幅: roundedOrBlank(latest?.lastBarToCenterPct, 2),
+    '首板量/最近量堆Top50均量': latest?.pileTopHalfAverageVolume > 0
+      ? roundedOrBlank(analysis.signalVolume / latest.pileTopHalfAverageVolume, 4)
       : '',
     个股收益率百分比: calculatedPnl ? calculatedPnl.pnlPct : '',
     买入日期: calculatedPnl?.buyDate || '',
@@ -536,7 +302,9 @@ async function main(argv = process.argv.slice(2)) {
 
         try {
           const bars = await fetchKline(baseUrl, task.code, task.date);
-          analysis = computeVolumePiles(bars, DEFAULT_SETTINGS);
+          // 首板当天不参与量堆识别，只单独记录首板量，和最近量堆对比。
+          analysis = computeVolumePiles(barsBeforeSignal(bars, task.date), DEFAULT_SETTINGS);
+          analysis.signalVolume = Number(bars.at(-1).volume);
         } catch (error) {
           detectionError = formatError(error);
         }

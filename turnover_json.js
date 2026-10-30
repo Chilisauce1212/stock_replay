@@ -1,8 +1,13 @@
 require('dotenv').config();
 
+// 系统代理会把 127.0.0.1 也转发出去，连接 Chrome 调试端口前要排除本机地址。
+for (const name of ['NO_PROXY', 'no_proxy']) {
+  process.env[name] = [process.env[name], '127.0.0.1', 'localhost'].filter(Boolean).join(',');
+}
+
 const fs = require('fs');
 const path = require('path');
-const { spawn } = require('child_process');
+const { spawn, execFileSync } = require('child_process');
 const axios = require('axios');
 const { chromium } = require('playwright');
 const { r2Client, readJson, writeJson } = require('./r2-storage');
@@ -104,7 +109,7 @@ async function ensureChromeDebugging() {
   const chromePath = process.env.CHROME_PATH || 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
   const userDataDir = 'C:\\chrome_temp';
   try {
-    const response = await axios.get(debugUrl, { timeout: 1000 });
+    const response = await axios.get(debugUrl, { timeout: 1000, proxy: false });
     if (response.status >= 200 && response.status < 300) {
       console.log('>>> 检测到 Chrome 调试端口已启动，直接复用。');
       return;
@@ -117,7 +122,7 @@ async function ensureChromeDebugging() {
   const deadline = Date.now() + 15000;
   while (Date.now() < deadline) {
     try {
-      const response = await axios.get(debugUrl, { timeout: 1000 });
+      const response = await axios.get(debugUrl, { timeout: 1000, proxy: false });
       if (response.status >= 200 && response.status < 300) {
         console.log('>>> Chrome 调试端口启动成功。');
         return;
@@ -227,6 +232,38 @@ async function saveJson(records, filename, { alsoLocal = false } = {}) {
   saveLocalJson(records, filename);
 }
 
+// 每日复盘页面读 daily-review/ 下的同名文件（带 npm run pnl 预计算的 pnl 字段），回测数据写在 test-cases/。
+// 追加完回测数据后，把新记录合并进 daily-review/ 的同名文件：原有记录和 pnl 不动，只追加没有的。
+// 配了 R2 时更新 R2，本地 daily-review/ 已有该文件时一并更新（npm run pnl 读本地）；没配 R2 时只写本地。
+async function syncDailyReviewCopy(records, filename) {
+  const name = path.basename(filename);
+  const merge = existing => {
+    const known = new Set(existing.map(item => `${item.marketCode}|${item.date}`));
+    const added = records.filter(item => !known.has(`${item.marketCode}|${item.date}`));
+    return { merged: existing.concat(added), added: added.length };
+  };
+  if (r2Client) {
+    let existing = [];
+    try {
+      existing = await readJson(`daily-review/${name}`);
+    } catch (error) {
+      if (error.name !== 'NoSuchKey' && error.$metadata?.httpStatusCode !== 404) throw error;
+    }
+    if (!Array.isArray(existing)) throw new Error(`R2 daily-review/${name} 根节点不是数组，未同步`);
+    const { merged, added } = merge(existing);
+    if (added) await writeJson(`daily-review/${name}`, merged);
+    console.log(`每日复盘 R2 daily-review/${name}：追加 ${added} 条，共 ${merged.length} 条`);
+  }
+  const localPath = path.join(DAILY_REVIEW_DIR, name);
+  if (!r2Client || fs.existsSync(localPath)) {
+    const existing = fs.existsSync(localPath) ? JSON.parse(fs.readFileSync(localPath, 'utf8')) : [];
+    const { merged, added } = merge(existing);
+    if (added) saveLocalJson(merged, localPath);
+    console.log(`每日复盘本地 daily-review/${name}：追加 ${added} 条，共 ${merged.length} 条`);
+  }
+  console.log('新追加的记录还没有预计算盈亏，可运行 npm run pnl 后再上传。');
+}
+
 async function run(startArgument, endArgument) {
   const startText = String(startArgument).trim();
   const endText = String(endArgument).trim();
@@ -253,56 +290,21 @@ async function run(startArgument, endArgument) {
   } else {
     console.log(`本地未检测到同名 JSON，将创建文件: ${filename}`);
   }
-  if (startDate > endDate) return console.log('已有数据已经覆盖指定日期范围，无需追加。');
+  if (startDate > endDate) {
+    console.log('已有数据已经覆盖指定日期范围，无需追加。');
+    if (records.length) await syncDailyReviewCopy(records, filename);
+    return;
+  }
 
-  console.log('\n>>> 任务开始！输出格式为 JSON');
-  await ensureChromeDebugging();
-  const browser = await chromium.connectOverCDP('http://127.0.0.1:9222');
-  const context = browser.contexts()[0];
-  const page = await context.newPage();
-  try {
-    for (let current = new Date(startDate); current <= endDate; current = addDays(current, 1)) {
-      const dateString = formatDate(current);
-      const calendar = await getMarketCalendar(dateString);
-      if (!calendar.isTrade) { console.log(`跳过: ${dateString} (非交易日)`); continue; }
-      const year = `${dateString.slice(0, 4)}年`;
-      const question = `${year}${calendar.tMinus1Chs}收盘涨停,${year}${calendar.tMinus2Chs}收盘未涨停,${year}${calendar.tChs}10点30前达到过${year}${calendar.tChs}涨停价,${year}${calendar.tChs}最低价<${year}${calendar.tChs}涨停价,主板,非st`;
-      const targetUrl = `https://www.iwencai.com/unifiedwap/result?w=${encodeURIComponent(question)}`;
-      process.stdout.write(`正在查询: ${dateString} ... `);
-      const batch = [];
-      const responseTasks = [];
-      const handleResponse = response => {
-        if (!response.url().includes('robotdata') && !response.url().includes('get-robot-data') || response.status() !== 200) return;
-        responseTasks.push((async () => {
-          try {
-            const body = await response.json();
-            batch.push(...extractRobotRows(body));
-          } catch { /* 忽略非目标响应 */ }
-        })());
-      };
-      page.on('response', handleResponse);
-      try {
-        await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
-        await waitForManualLogin(page, targetUrl);
-        try { await page.waitForSelector('.iwc-table-body', { timeout: 15000 }); await sleep(3000); } catch { process.stdout.write(' [页面加载完成，但未检测到表格] '); }
-        await Promise.all(responseTasks);
-        if (!batch.length) batch.push(...await extractTableRows(page));
-      } catch (error) { process.stdout.write(` [错误: ${error.message}] `); }
-      page.off('response', handleResponse);
-      const uniqueRows = Array.from(new Map(batch.map(row => [JSON.stringify(row), row])).values());
-      console.log(`>>> 问财接口捕获 ${uniqueRows.length} 条原始记录`);
-      if (!uniqueRows.length && !(await hasExplicitEmptyResult(page))) {
-        throw new Error('问财页面已显示结果，但未能从接口响应提取股票数据，已停止写入以避免覆盖已有文件');
-      }
-      const newRecords = convertToRecords(normalizeData(uniqueRows, calendar), calendar.tMinus1Raw, records.length)
-        .filter(item => !records.some(existing => existing.date === item.date && existing.marketCode === item.marketCode));
-      records.push(...newRecords);
-      await saveJson(records, filename);
-      console.log(`成功获取 ${newRecords.length} 条，已保存 JSON`);
-      await sleep(3000 + Math.floor(Math.random() * 3001));
-    }
-  } finally { await page.close(); }
+  // 不再用问财问句：「T日10点30前达到过T日涨停价」被问财解析成 10:30 那一分钟的最高价，早盘触板后开板的票会漏掉。
+  // 改由 yijiner-cases.js 用全市场涨停名单 + 逐笔成交判断，它在本地文件上追加，所以先把已有记录写到本地。
+  if (records.length) saveLocalJson(records, filename);
+  console.log('\n>>> 任务开始：yijiner-cases.js 按逐笔成交判断二板日 10:30 前是否在涨停价成交过（需要先 npm start）');
+  execFileSync(process.execPath, [path.join(__dirname, 'yijiner-cases.js'), '--start', startText, '--end', endText], { stdio: 'inherit' });
+  records = JSON.parse(fs.readFileSync(filename, 'utf8'));
+  await saveJson(records, filename);
   console.log(`\n>>> 全部完成！请查看文件: ${filename}`);
+  await syncDailyReviewCopy(records, filename);
 }
 
 async function runTodayFirstBoard() {

@@ -7,3 +7,7 @@ node_modules/
 test-cases/
 daily-review/
 favorites.json
+
+# 本地分析产物和缓存（新闻原文缓存 100MB+，涨停名单等由脚本生成）
+reports/
+/*.csv

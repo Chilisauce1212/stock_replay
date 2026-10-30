@@ -384,7 +384,8 @@ function collectCombinationFieldValues(value, fieldName, results = []) {
   return results;
 }
 
-async function getNewsDateRange(dateString) {
+// 新闻范围：回测日及之前 days - 1 个交易日（按同花顺交易日历，连续的交易日，中间的周末/假期新闻也包含在内）。
+async function getNewsDateRange(dateString, days = 5) {
   const response = await axios.get(TRADE_DAY_URL, {
     params: {
       date: dateString.replaceAll('-', ''),
@@ -407,7 +408,7 @@ async function getNewsDateRange(dateString) {
     throw new Error('交易日历不足，无法确定5个交易日范围');
   }
   return {
-    startDate: previousDates[previousDates.length - 4],
+    startDate: days > 1 ? previousDates[previousDates.length - (days - 1)] : dateString,
     endDate: dateString,
   };
 }
@@ -496,12 +497,14 @@ async function fetchTimeline(code, startDate, endDate) {
 app.get('/api/news', async (req, res) => {
   const code = String(req.query.code || '').trim();
   const date = toDateString(req.query.date);
-  if (!/^\d{6}$/.test(code) || !date) {
-    return res.status(400).json({ status_code: -1, msg: '股票代码或回测日期格式无效' });
+  // days：包括回测日在内的交易日数，默认 5（回放页面）；题材演绎脚本传 2。
+  const days = req.query.days === undefined ? 5 : Number(req.query.days);
+  if (!/^\d{6}$/.test(code) || !date || !Number.isInteger(days) || days < 1 || days > 5) {
+    return res.status(400).json({ status_code: -1, msg: '股票代码、回测日期或天数格式无效' });
   }
 
   try {
-    const { startDate, endDate } = await getNewsDateRange(date);
+    const { startDate, endDate } = await getNewsDateRange(date, days);
     const [timelineNews, pinnedNews] = await Promise.all([
       fetchTimeline(code, startDate, endDate),
       fetchPinnedTimeline(code, endDate).catch(error => {
@@ -895,6 +898,433 @@ app.get('/api/test-cases/:fileName', async (req, res) => {
   try {
     const cases = await parseTestCases(req.params.fileName);
     res.json({ status_code: 0, total: cases.length, data: cases });
+  } catch (error) {
+    res.status(400).json({ status_code: -1, msg: error.message });
+  }
+});
+
+// 题材演绎甘特图：读取 news-theme-table.js 生成的 reports/*.json，
+// 页面上的人工编辑写入同名 .manual.json，下次生成表格时与 Excel 人工列合并；
+// 新闻核对（Debug）的人工勾选写入同名 .review.json，与自动判断对比：
+// 有大模型结果（news-llm.js 写入 reports/news-llm.json）时和大模型比，否则和关键词规则比。
+const REPORTS_DIR = path.join(__dirname, 'reports');
+const THEME_MANUAL_COLUMNS = ['人工锚定新闻', '人工类别', '人工题材', '备注'];
+const THEME_SIDE_FILE = /\.(manual|review|review-diff)\.json$/i;
+const NEWS_CACHE_NAME = 'news-cache.json';
+// reports/ 里不是题材演绎表的数据文件，不出现在页面的文件下拉框里。
+const REPORT_AUX_FILES = new Set([NEWS_CACHE_NAME, 'news-llm.json', 'news-llm-fast.json', 'news-body-cache.json', '首板涨停原因.json', '全市场涨停原因.json']);
+
+function themeReportPaths(name) {
+  const base = path.basename(String(name || '')).replace(/\.json$/i, '');
+  if (!base || /\.(manual|review|review-diff)$/i.test(base) || REPORT_AUX_FILES.has(`${base}.json`)) {
+    throw new Error('题材演绎文件名无效');
+  }
+  const dataPath = path.join(REPORTS_DIR, `${base}.json`);
+  if (!fs.existsSync(dataPath)) throw new Error(`找不到 reports/${base}.json，请先运行 npm run news-theme`);
+  return {
+    dataPath,
+    manualPath: path.join(REPORTS_DIR, `${base}.manual.json`),
+    reviewPath: path.join(REPORTS_DIR, `${base}.review.json`),
+    diffPath: path.join(REPORTS_DIR, `${base}.review-diff.json`),
+  };
+}
+
+// reports/ 下的大 JSON 按修改时间缓存，文件没变就不重新读。
+const reportJsonCache = new Map();
+
+function readReportJson(name) {
+  const filePath = path.join(REPORTS_DIR, name);
+  if (!fs.existsSync(filePath)) return {};
+  const { mtimeMs } = fs.statSync(filePath);
+  const cached = reportJsonCache.get(name);
+  if (cached?.mtimeMs === mtimeMs) return cached.data;
+  const data = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+  reportJsonCache.set(name, { mtimeMs, data });
+  return data;
+}
+
+function readThemeNewsCache() {
+  return readReportJson(NEWS_CACHE_NAME);
+}
+
+function themeNewsId(item) {
+  return `${item.time}|${item.title}`;
+}
+
+// 自动判断：有大模型结果、且模型看到的新闻列表和现在一致时用大模型，否则用 news-theme-table.js 的关键词规则
+// （规则改了不用重新生成表格也能看到最新结果）。两边的结果都放进每条新闻，页面上一起显示。
+function classifyThemeNews(row, cacheEntry) {
+  const { classifyNews, pickAnchor, cachedNews } = require('./news-theme-table');
+  const news = cachedNews(cacheEntry);
+  const { anchor } = pickAnchor({ stockName: row['名称'], news });
+  const ids = news.map(themeNewsId);
+  const llmEntry = readReportJson('news-llm.json')[row.key];
+  const llm = llmEntry && llmEntry.newsIds.join('\n') === ids.join('\n') ? llmEntry : null;
+  const llmIdOf = id => ids[Number(String(id).slice(1)) - 1] || '';
+  const items = news.map((item, index) => {
+    const result = classifyNews(item, row['名称']);
+    const judged = llm?.result.news[index];
+    return {
+      id: ids[index],
+      title: item.title,
+      time: item.time,
+      url: item.url || '',
+      pinned: Boolean(item.pinned),
+      verdict: result.verdict,
+      categories: result.categories,
+      keywords: result.keywords,
+      ruleImportant: result.score > 0,
+      llm: judged ? {
+        relevant: judged.relevant, polarity: judged.polarity, newThing: judged.newThing,
+        categories: judged.categories, reason: judged.reason,
+      } : null,
+      important: judged ? judged.important : result.score > 0,
+    };
+  });
+  return {
+    items,
+    basis: llm ? '大模型' : '关键词规则',
+    anchorId: llm ? llmIdOf(llm.result.anchorId) : anchor ? themeNewsId(anchor) : '',
+    llm: llm ? {
+      hasImportantNews: llm.result.hasImportantNews, newThing: llm.result.newThing, theme: llm.result.theme,
+      reason: llm.result.reason, limitUpReason: llm.limitUpReason, model: llm.model,
+    } : null,
+  };
+}
+
+// 人工勾选与自动判断的对比：有无重要新闻是否一致、自动锚定是否被人工选中、逐条的交集差集。
+// 勾选的新闻不在当前新闻范围里（如新闻天数从 5 天改成 2 天）时忽略，记为 stale；
+// 勾选的全部失效、又没选「没有重要新闻」的，需要重新核对（needsRecheck），不计入一致率。
+function currentSelection(review, classified) {
+  const ids = new Set(classified.items.map(item => item.id));
+  const picked = review.noImportant ? [] : review.selected;
+  return { selected: new Set(picked.filter(id => ids.has(id))), stale: picked.filter(id => !ids.has(id)).length };
+}
+
+function compareThemeReview(review, classified) {
+  const { selected, stale } = currentSelection(review, classified);
+  const auto = new Set(classified.items.filter(item => item.important).map(item => item.id));
+  return {
+    noImportant: Boolean(review.noImportant),
+    stale,
+    needsRecheck: !review.noImportant && stale > 0 && selected.size === 0,
+    selected: [...selected],
+    updatedAt: review.updatedAt || '',
+    autoIds: [...auto],
+    anchorId: classified.anchorId,
+    userHasNews: selected.size > 0,
+    autoHasNews: auto.size > 0,
+    agree: (selected.size > 0) === (auto.size > 0),
+    anchorHit: classified.anchorId ? selected.has(classified.anchorId) : null,
+    both: [...selected].filter(id => auto.has(id)).length,
+    userOnly: [...selected].filter(id => !auto.has(id)).length,
+    autoOnly: [...auto].filter(id => !selected.has(id)).length,
+    basis: classified.basis,
+    reasons: review.reasons || {},
+  };
+}
+
+// 不符的新闻：你选了但自动没选、自动选了但你没选。
+function themeMismatches(review, classified) {
+  const { selected } = currentSelection(review, classified);
+  return classified.items
+    .filter(item => selected.has(item.id) !== item.important)
+    .map(item => ({ ...item, type: selected.has(item.id) ? `你选了·${classified.basis}没选` : `${classified.basis}选了·你没选` }));
+}
+
+function readThemeManual(manualPath) {
+  try {
+    return JSON.parse(fs.readFileSync(manualPath, 'utf8'));
+  } catch {
+    return {};
+  }
+}
+
+app.get('/api/theme-gantt', (req, res) => {
+  const files = fs.existsSync(REPORTS_DIR)
+    ? fs.readdirSync(REPORTS_DIR)
+      .filter(file => file.toLowerCase().endsWith('.json') && !THEME_SIDE_FILE.test(file) && !REPORT_AUX_FILES.has(file))
+      .map(file => file.replace(/\.json$/i, ''))
+    : [];
+  res.json({ status_code: 0, files });
+});
+
+app.get('/api/theme-gantt/:name', (req, res) => {
+  try {
+    const { dataPath, manualPath, reviewPath } = themeReportPaths(req.params.name);
+    const report = JSON.parse(fs.readFileSync(dataPath, 'utf8'));
+    const manual = readThemeManual(manualPath);
+    const reviews = readThemeManual(reviewPath);
+    const newsCache = readThemeNewsCache();
+    const rows = report.rows.map(row => {
+      const saved = manual[row.key];
+      const merged = saved
+        ? { ...row, ...Object.fromEntries(THEME_MANUAL_COLUMNS.map(column => [column, saved[column] ?? ''])) }
+        : { ...row };
+      const news = newsCache[row.key]?.news || [];
+      // 人工锚定新闻是手填文本；能在新闻里找到同名标题时补上发布时间，方便页面显示日期。
+      if (merged['人工锚定新闻']) {
+        merged['人工锚定新闻时间'] = news.find(item => item.title === merged['人工锚定新闻'].trim())?.time || '';
+      }
+      if (reviews[row.key]) merged['核对'] = compareThemeReview(reviews[row.key], classifyThemeNews(merged, newsCache[row.key]));
+      return merged;
+    });
+    res.set('Cache-Control', 'no-store');
+    res.json({ status_code: 0, ...report, rows });
+  } catch (error) {
+    res.status(400).json({ status_code: -1, msg: error.message });
+  }
+});
+
+app.get('/api/theme-gantt/:name/news', (req, res) => {
+  try {
+    const { dataPath, reviewPath } = themeReportPaths(req.params.name);
+    const key = String(req.query.key || '');
+    const row = JSON.parse(fs.readFileSync(dataPath, 'utf8')).rows.find(item => item.key === key);
+    if (!row) throw new Error(`找不到记录 ${key}`);
+    const classified = classifyThemeNews(row, readThemeNewsCache()[key]);
+    const review = readThemeManual(reviewPath)[key];
+    // 原文正文（news-body.js 抓取），页面上每条新闻可以展开看。
+    const bodies = readReportJson('news-body-cache.json');
+    classified.items.forEach(item => { item.body = bodies[item.url]?.text || ''; });
+    res.set('Cache-Control', 'no-store');
+    res.json({
+      status_code: 0,
+      key,
+      ...classified,
+      review: review ? compareThemeReview(review, classified) : null,
+    });
+  } catch (error) {
+    res.status(400).json({ status_code: -1, msg: error.message });
+  }
+});
+
+app.put('/api/theme-gantt/:name/review', (req, res) => {
+  try {
+    const { dataPath, reviewPath } = themeReportPaths(req.params.name);
+    const key = String(req.body?.key || '');
+    const row = JSON.parse(fs.readFileSync(dataPath, 'utf8')).rows.find(item => item.key === key);
+    if (!row) throw new Error(`找不到记录 ${key}`);
+    const classified = classifyThemeNews(row, readThemeNewsCache()[key]);
+    const validIds = new Set(classified.items.map(item => item.id));
+    const noImportant = req.body?.noImportant === true;
+    const selected = noImportant ? [] : [...new Set((req.body?.selected || []).map(String))];
+    if (selected.some(id => !validIds.has(id))) throw new Error('勾选的新闻不在该股票的新闻列表里');
+    if (!noImportant && !selected.length) throw new Error('请勾选重要新闻，或选择「没有重要新闻」');
+    const reviews = readThemeManual(reviewPath);
+    // 重新选择后保留已写的理由，导出时只取当前仍不符的新闻。
+    reviews[key] = { noImportant, selected, reasons: reviews[key]?.reasons || {}, updatedAt: new Date().toISOString() };
+    fs.writeFileSync(reviewPath, `${JSON.stringify(reviews, null, 2)}\n`, 'utf8');
+    res.json({ status_code: 0, key, review: compareThemeReview(reviews[key], classified) });
+  } catch (error) {
+    res.status(400).json({ status_code: -1, msg: error.message });
+  }
+});
+
+// 不符新闻旁填写的理由：{ key, id, reason }，空理由表示删除。
+app.put('/api/theme-gantt/:name/review/reason', (req, res) => {
+  try {
+    const { dataPath, reviewPath } = themeReportPaths(req.params.name);
+    const key = String(req.body?.key || '');
+    const id = String(req.body?.id || '');
+    const reason = String(req.body?.reason || '').trim();
+    const row = JSON.parse(fs.readFileSync(dataPath, 'utf8')).rows.find(item => item.key === key);
+    if (!row) throw new Error(`找不到记录 ${key}`);
+    const reviews = readThemeManual(reviewPath);
+    if (!reviews[key]) throw new Error('请先保存核对结果');
+    const classified = classifyThemeNews(row, readThemeNewsCache()[key]);
+    if (!classified.items.some(item => item.id === id)) throw new Error('这条新闻不在该股票的新闻列表里');
+    const reasons = { ...(reviews[key].reasons || {}) };
+    if (reason) reasons[id] = reason;
+    else delete reasons[id];
+    reviews[key] = { ...reviews[key], reasons, updatedAt: new Date().toISOString() };
+    fs.writeFileSync(reviewPath, `${JSON.stringify(reviews, null, 2)}\n`, 'utf8');
+    res.json({ status_code: 0, key, review: compareThemeReview(reviews[key], classified) });
+  } catch (error) {
+    res.status(400).json({ status_code: -1, msg: error.message });
+  }
+});
+
+// 提交核对：把所有已核对股票里不符的新闻和理由写成 reports/<name>.review-diff.json，供优化关键词规则。
+app.post('/api/theme-gantt/:name/review-diff', (req, res) => {
+  try {
+    const { dataPath, reviewPath, diffPath } = themeReportPaths(req.params.name);
+    const report = JSON.parse(fs.readFileSync(dataPath, 'utf8'));
+    const reviews = readThemeManual(reviewPath);
+    const newsCache = readThemeNewsCache();
+    const stocks = [];
+    const totals = { reviewed: 0, agree: 0, both: 0, userOnly: 0, autoOnly: 0, withReason: 0 };
+    for (const row of report.rows) {
+      const review = reviews[row.key];
+      if (!review) continue;
+      const classified = classifyThemeNews(row, newsCache[row.key]);
+      const compared = compareThemeReview(review, classified);
+      if (compared.needsRecheck) {
+        totals.needsRecheck = (totals.needsRecheck || 0) + 1;
+        continue;
+      }
+      const mismatches = themeMismatches(review, classified).map(item => ({
+        type: item.type,
+        time: item.time,
+        title: item.title,
+        autoAnchor: item.id === classified.anchorId,
+        // 大模型的判断（有时）和关键词规则的判断都写上，方便对照。
+        llm: item.llm,
+        rule: { important: item.ruleImportant, verdict: item.verdict, categories: item.categories, keywords: item.keywords },
+        reason: review.reasons?.[item.id] || '',
+      }));
+      totals.reviewed++;
+      if (compared.agree) totals.agree++;
+      totals.both += compared.both;
+      totals.userOnly += compared.userOnly;
+      totals.autoOnly += compared.autoOnly;
+      totals.withReason += mismatches.filter(item => item.reason).length;
+      if (!mismatches.length) continue;
+      const anchor = classified.items.find(item => item.id === classified.anchorId);
+      stocks.push({
+        key: row.key,
+        名称: row['名称'],
+        首板日期: row['首板日期'],
+        新闻起始日期: row['新闻起始日期'] || '',
+        对比对象: classified.basis,
+        有无重要新闻一致: compared.agree,
+        人工: compared.userHasNews ? '有重要新闻' : '没有重要新闻',
+        自动: compared.autoHasNews ? '有重要新闻' : '没有重要新闻',
+        自动锚定: anchor ? `${anchor.time} ${anchor.title}` : '',
+        自动锚定被选中: compared.anchorHit,
+        自动理由: classified.llm?.reason || '',
+        涨停原因: classified.llm?.limitUpReason || '',
+        不符新闻: mismatches,
+      });
+    }
+    const diff = { generatedAt: new Date().toISOString(), source: path.basename(dataPath), totals, stocks };
+    fs.writeFileSync(diffPath, `${JSON.stringify(diff, null, 2)}\n`, 'utf8');
+    res.json({ status_code: 0, file: `reports/${path.basename(diffPath)}`, totals, stocks: stocks.length });
+  } catch (error) {
+    res.status(400).json({ status_code: -1, msg: error.message });
+  }
+});
+
+app.put('/api/theme-gantt/:name/manual', (req, res) => {
+  try {
+    const { dataPath, manualPath } = themeReportPaths(req.params.name);
+    const key = String(req.body?.key || '');
+    const report = JSON.parse(fs.readFileSync(dataPath, 'utf8'));
+    if (!report.rows.some(row => row.key === key)) throw new Error(`找不到记录 ${key}`);
+    const values = Object.fromEntries(THEME_MANUAL_COLUMNS.map(column => [
+      column, String(req.body?.values?.[column] ?? '').slice(0, 2000),
+    ]));
+    const manual = readThemeManual(manualPath);
+    manual[key] = { ...values, updatedAt: new Date().toISOString() };
+    fs.writeFileSync(manualPath, `${JSON.stringify(manual, null, 2)}\n`, 'utf8');
+    res.json({ status_code: 0, key, values });
+  } catch (error) {
+    res.status(400).json({ status_code: -1, msg: error.message });
+  }
+});
+
+// 新闻类别评审：按类别浏览大模型判为重要的新闻和判断依据，人工评审写入 reports/news-category.review.json，
+// 键是「代码|首板日|新闻时间|标题」，值 { verdict: ok/wrongCategory/notImportant, categories, note }。
+const NEWS_CATEGORIES = ['政策规范', '行业利好', '新叙事', '海外/明星公司', '企业荣誉/重要会议', '资本运作转型'];
+const NEWS_CATEGORY_VERDICTS = new Set(['ok', 'wrongCategory', 'notImportant']);
+const NEWS_CATEGORY_REVIEW_PATH = path.join(REPORTS_DIR, 'news-category.review.json');
+
+// 稳定的乱序：同一条新闻每次排在同一位置，又不会一只股票的新闻扎堆。
+function shuffleRank(text) {
+  let hash = 2166136261;
+  for (let index = 0; index < text.length; index++) hash = Math.imul(hash ^ text.charCodeAt(index), 16777619);
+  return hash >>> 0;
+}
+
+function newsCategoryItems(reportName) {
+  const { dataPath } = themeReportPaths(reportName);
+  const report = readReportJson(path.basename(dataPath));
+  const llm = readReportJson('news-llm.json');
+  const newsCache = readThemeNewsCache();
+  const items = [];
+  for (const row of report.rows) {
+    const entry = llm[row.key];
+    if (!entry?.result?.news) continue;
+    const urls = new Map((newsCache[row.key]?.news || []).map(item => [themeNewsId(item), item.url]));
+    for (const news of entry.result.news) {
+      if (!news.important || !news.categories?.length) continue;
+      const newsId = entry.newsIds[Number(String(news.id).slice(1)) - 1];
+      if (!newsId) continue;
+      const [time, ...titleParts] = newsId.split('|');
+      const id = `${row.key}|${newsId}`;
+      items.push({
+        id, key: row.key, name: row['名称'], date: row['首板日期'], limitUpReason: entry.limitUpReason || '',
+        time, title: titleParts.join('|'), url: urls.get(newsId) || '',
+        categories: news.categories, newThing: news.newThing || '', reason: news.reason || '', rank: shuffleRank(id),
+      });
+    }
+  }
+  return items.sort((left, right) => left.rank - right.rank);
+}
+
+app.get('/api/news-category', (req, res) => {
+  try {
+    const category = String(req.query.category || '');
+    const filter = String(req.query.filter || 'all');
+    const page = Math.max(1, Number(req.query.page) || 1);
+    const pageSize = Math.min(200, Math.max(10, Number(req.query.pageSize) || 50));
+    const items = newsCategoryItems(req.query.report || '一进二题材演绎');
+    const reviews = readThemeManual(NEWS_CATEGORY_REVIEW_PATH);
+    // 每个类别的条数、已评审、有异议（类别不对或不算重要）
+    const counts = Object.fromEntries(NEWS_CATEGORIES.map(name => [name, { total: 0, reviewed: 0, disagree: 0 }]));
+    for (const item of items) {
+      for (const name of item.categories) {
+        if (!counts[name]) continue;
+        counts[name].total++;
+        const review = reviews[item.id];
+        if (review) {
+          counts[name].reviewed++;
+          if (review.verdict !== 'ok') counts[name].disagree++;
+        }
+      }
+    }
+    const matched = items.filter(item => {
+      if (category && !item.categories.includes(category)) return false;
+      const review = reviews[item.id];
+      if (filter === 'unreviewed') return !review;
+      if (filter === 'reviewed') return Boolean(review);
+      if (filter === 'disagree') return review && review.verdict !== 'ok';
+      if (filter === 'only') return item.categories.length === 1;
+      return true;
+    });
+    const pageItems = matched.slice((page - 1) * pageSize, page * pageSize)
+      .map(({ rank, ...item }) => ({ ...item, review: reviews[item.id] || null }));
+    res.set('Cache-Control', 'no-store');
+    res.json({ status_code: 0, categories: NEWS_CATEGORIES, counts, total: matched.length, page, pageSize, items: pageItems });
+  } catch (error) {
+    res.status(400).json({ status_code: -1, msg: error.message });
+  }
+});
+
+app.get('/api/news-category/body', (req, res) => {
+  const text = readReportJson('news-body-cache.json')[String(req.query.url || '')]?.text || '';
+  res.json({ status_code: 0, text });
+});
+
+// { id, verdict, categories, note }；verdict 为空表示撤销评审。
+app.put('/api/news-category/review', (req, res) => {
+  try {
+    const id = String(req.body?.id || '');
+    if (!/^\d{6}\|\d{4}-\d{2}-\d{2}\|/.test(id)) throw new Error('新闻编号无效');
+    const verdict = String(req.body?.verdict || '');
+    const reviews = readThemeManual(NEWS_CATEGORY_REVIEW_PATH);
+    if (!verdict) {
+      delete reviews[id];
+    } else {
+      if (!NEWS_CATEGORY_VERDICTS.has(verdict)) throw new Error('评审结论无效');
+      const categories = verdict === 'wrongCategory'
+        ? [...new Set((req.body?.categories || []).map(String))].filter(name => NEWS_CATEGORIES.includes(name))
+        : [];
+      if (verdict === 'wrongCategory' && !categories.length) throw new Error('请选出正确的类别');
+      reviews[id] = { verdict, categories, note: String(req.body?.note || '').slice(0, 500), updatedAt: new Date().toISOString() };
+    }
+    fs.writeFileSync(NEWS_CATEGORY_REVIEW_PATH, `${JSON.stringify(reviews, null, 2)}\n`, 'utf8');
+    res.json({ status_code: 0, id, review: reviews[id] || null });
   } catch (error) {
     res.status(400).json({ status_code: -1, msg: error.message });
   }

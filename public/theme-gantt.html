@@ -1,0 +1,1220 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>题材演绎</title>
+  <link rel="icon" href="data:,">
+  <style>
+    :root {
+      --bg: #0b0e11;
+      --panel: #161a1e;
+      --panel-2: #1e2329;
+      --line: #2b313a;
+      --grid: #1b2026;
+      --text: #cccccc;
+      --muted: #8994a2;
+      --accent: #f0b90b;
+      --month-col: 84px;
+      --lane-h: 22px;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font: 13px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      display: flex;
+      flex-direction: column;
+    }
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px 12px;
+      padding: 10px 16px;
+      background: var(--panel);
+      border-bottom: 1px solid var(--line);
+    }
+    .toolbar h1 { font-size: 16px; margin: 0; color: #eaecef; font-weight: 600; }
+    .toolbar select, .toolbar input[type="search"] {
+      background: var(--panel-2);
+      color: var(--text);
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      padding: 5px 8px;
+      font: inherit;
+    }
+    .toolbar input[type="search"] { width: 220px; max-width: 100%; }
+    .toolbar a { color: var(--muted); text-decoration: none; margin-left: auto; }
+    .toolbar a:hover { color: var(--text); }
+    .filters { display: flex; flex-wrap: wrap; gap: 6px; }
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 3px 9px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      cursor: pointer;
+      user-select: none;
+      background: var(--panel-2);
+    }
+    .chip input { display: none; }
+    .chip .swatch { width: 10px; height: 10px; border-radius: 2px; background: var(--c); }
+    .chip .count { color: var(--muted); font-variant-numeric: tabular-nums; }
+    .chip.off { opacity: 0.4; }
+    .chip.off .swatch { background: transparent; outline: 1px solid var(--c); }
+    #summary { color: var(--muted); font-variant-numeric: tabular-nums; }
+    .toggle { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; user-select: none; }
+    .toggle input { accent-color: #1677ff; margin: 0; }
+    .board { flex: 1; overflow: auto; position: relative; }
+    .board-inner { min-width: 960px; }
+    .axis, .month {
+      display: grid;
+      grid-template-columns: var(--month-col) 1fr;
+    }
+    .axis {
+      position: sticky;
+      top: 0;
+      z-index: 3;
+      background: var(--panel);
+      border-bottom: 1px solid var(--line);
+      height: 24px;
+    }
+    .axis .ticks { position: relative; }
+    .axis .tick {
+      position: absolute;
+      top: 4px;
+      transform: translateX(-50%);
+      color: var(--muted);
+      font-size: 11px;
+      font-variant-numeric: tabular-nums;
+    }
+    .month { border-bottom: 1px solid var(--line); }
+    .month-label {
+      position: sticky;
+      left: 0;
+      z-index: 2;
+      background: var(--panel);
+      border-right: 1px solid var(--line);
+      padding: 4px 8px;
+      font-variant-numeric: tabular-nums;
+    }
+    .month-label strong { display: block; color: #eaecef; font-weight: 600; white-space: nowrap; }
+    .month-label span { color: var(--muted); font-size: 11px; }
+    .track {
+      position: relative;
+      min-height: 30px;
+      background-image: repeating-linear-gradient(to right, var(--grid) 0 1px, transparent 1px calc(100% / 31));
+    }
+    .track .beyond {
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      right: 0;
+      background: repeating-linear-gradient(45deg, #0f1317 0 4px, #13171c 4px 8px);
+    }
+    .track .empty { position: absolute; left: 8px; top: 6px; color: #4a525c; font-size: 12px; }
+    .bar {
+      position: absolute;
+      height: calc(var(--lane-h) - 4px);
+      border-radius: 3px;
+      background: var(--c);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      white-space: nowrap;
+    }
+    .bar:hover, .bar.selected { outline: 2px solid #eaecef; outline-offset: 1px; z-index: 1; }
+    .bar.cont-left { border-top-left-radius: 0; border-bottom-left-radius: 0; border-left: 2px dashed rgba(11, 14, 17, 0.7); }
+    .bar.cont-right { border-top-right-radius: 0; border-bottom-right-radius: 0; border-right: 2px dashed rgba(11, 14, 17, 0.7); }
+    .bar.open-end::after {
+      content: "";
+      position: absolute;
+      right: -6px;
+      top: 50%;
+      transform: translateY(-50%);
+      border: 5px solid transparent;
+      border-left: 6px solid var(--c);
+      border-right: 0;
+    }
+    .bar .label {
+      padding: 0 5px;
+      font-size: 12px;
+      color: #0b0e11;
+      font-weight: 600;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .bar .label.outside {
+      position: absolute;
+      left: 100%;
+      margin-left: 6px;
+      padding: 0;
+      color: var(--c);
+      font-weight: 500;
+      overflow: visible;
+    }
+    .bar.open-end .label.outside { margin-left: 10px; }
+    .bar .edited { margin-left: 2px; font-size: 10px; }
+    #tooltip {
+      position: fixed;
+      z-index: 20;
+      max-width: 360px;
+      padding: 8px 10px;
+      background: #252a31;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
+      pointer-events: none;
+      font-size: 12px;
+    }
+    #tooltip strong { color: #eaecef; }
+    #tooltip .muted { color: var(--muted); }
+    #editor {
+      position: fixed;
+      z-index: 10;
+      top: 0;
+      right: 0;
+      bottom: 0;
+      width: min(400px, 100%);
+      background: var(--panel);
+      border-left: 1px solid var(--line);
+      box-shadow: -8px 0 24px rgba(0, 0, 0, 0.45);
+      display: flex;
+      flex-direction: column;
+    }
+    #editor[hidden] { display: none; }
+    #editor.debug { width: min(600px, 100%); }
+    #debugSummary { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+    #debugSummary strong { color: #eaecef; font-weight: 600; }
+    #submitStatus { color: var(--muted); font-size: 12px; }
+    #submitDiff[hidden], #submitStatus[hidden] { display: none; }
+    .bar .review-mark { margin-left: 3px; font-size: 11px; }
+    #reviewSection {
+      margin: 0 0 14px;
+      padding: 10px 12px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #12161a;
+    }
+    #reviewSection[hidden] { display: none; }
+    .review-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
+    .review-head strong { color: #eaecef; }
+    .review-hint { color: var(--muted); font-size: 12px; }
+    .editor-body .review-none {
+      display: flex;
+      color: var(--text);
+      align-items: center;
+      gap: 6px;
+      padding: 6px 8px;
+      margin: 6px 0 8px;
+      border: 1px dashed var(--line);
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    /* 编辑栏的通用 input 样式是整行宽，复选框要恢复原始宽度。 */
+    .editor-body .review-none input, .editor-body .news-row input { width: auto; accent-color: #1677ff; margin: 0; flex: none; }
+    .day { border-top: 1px solid var(--line); }
+    .day summary {
+      cursor: pointer;
+      padding: 6px 2px;
+      color: #eaecef;
+      font-variant-numeric: tabular-nums;
+      list-style-position: inside;
+    }
+    .day summary .muted { color: var(--muted); font-size: 12px; margin-left: 6px; }
+    .editor-body .news-row {
+      display: grid;
+      color: var(--text);
+      grid-template-columns: auto 1fr;
+      gap: 2px 8px;
+      align-items: start;
+      padding: 6px 6px;
+      margin: 0 0 4px;
+      border-radius: 4px;
+      border-left: 3px solid transparent;
+      cursor: pointer;
+    }
+    .news-row:hover { background: #1a1f25; }
+    .editor-body .news-row input { margin-top: 3px; grid-row: span 3; }
+    .news-row .news-time { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+    .news-row .news-title { grid-column: 2; word-break: break-all; }
+    .news-row .news-meta { grid-column: 2; display: flex; flex-wrap: wrap; gap: 4px 6px; font-size: 11px; }
+    .news-row .news-meta a { color: #47b7ef; }
+    .tag { padding: 0 6px; border-radius: 3px; background: #2b313a; color: var(--text); }
+    .tag.both { background: #1f6f3f; color: #e6ffed; }
+    .tag.user { background: #8a5a00; color: #fff3d6; }
+    .tag.auto { background: #8b2c45; color: #ffe3ea; }
+    .tag.anchor { background: #1d4f91; color: #e3efff; }
+    .tag.verdict { background: transparent; color: var(--muted); padding: 0; }
+    .news-row.both { border-left-color: #3fb950; }
+    .news-row.user { border-left-color: #f0b90b; }
+    .news-row.auto { border-left-color: #f05298; }
+    .news-item { margin: 0 0 4px; }
+    .editor-body .news-item .news-row { margin-bottom: 0; }
+    .editor-body .reason {
+      display: block;
+      width: 100%;
+      min-height: 0;
+      height: 52px;
+      margin: 2px 0 0;
+      padding: 4px 8px;
+      font-size: 12px;
+      resize: vertical;
+    }
+    .reason-state { display: block; color: var(--muted); font-size: 11px; margin: 1px 0 0 3px; }
+    .news-body { margin: 2px 0 0 26px; font-size: 12px; }
+    .news-body summary { cursor: pointer; color: var(--muted); }
+    .news-body div { margin-top: 4px; padding: 6px 8px; border-radius: 4px; background: var(--panel-2); color: var(--text); line-height: 1.6; white-space: pre-wrap; word-break: break-all; max-height: 260px; overflow: auto; }
+    .llm-note { grid-column: 2; font-size: 12px; color: var(--muted); line-height: 1.5; }
+    .llm-note b { color: #eaecef; font-weight: 600; }
+    .review-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 10px; }
+    #reviewStatus { color: var(--muted); font-size: 12px; }
+    #reviewResult { margin-top: 8px; padding: 8px 10px; border-radius: 4px; background: var(--panel-2); font-size: 12px; }
+    #reviewResult[hidden] { display: none; }
+    #reviewResult .bad { color: #f05298; }
+    #reviewResult .good { color: #3fb950; }
+    .editor-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--line);
+    }
+    .editor-head h2 { margin: 0; font-size: 15px; color: #eaecef; }
+    .editor-body { flex: 1; overflow: auto; padding: 12px 16px 16px; }
+    .facts { display: grid; grid-template-columns: 84px 1fr; gap: 4px 10px; margin: 0 0 12px; }
+    .facts dt { color: var(--muted); }
+    .facts dd { margin: 0; word-break: break-all; }
+    .candidates { white-space: pre-wrap; color: var(--muted); font-size: 12px; }
+    .facts a { color: #47b7ef; }
+    .editor-body label { display: block; margin: 10px 0 4px; color: var(--muted); }
+    .editor-body textarea, .editor-body input, .editor-body select {
+      width: 100%;
+      background: var(--panel-2);
+      color: var(--text);
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      padding: 6px 8px;
+      font: inherit;
+    }
+    .editor-body textarea { min-height: 64px; resize: vertical; }
+    .editor-foot {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 12px 16px;
+      border-top: 1px solid var(--line);
+    }
+    button {
+      background: var(--panel-2);
+      color: var(--text);
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      padding: 6px 14px;
+      font: inherit;
+      cursor: pointer;
+    }
+    button.primary { background: #1677ff; border-color: #1677ff; color: #fff; }
+    button.primary:hover { background: #0d5dcc; }
+    #saveStatus { color: var(--muted); font-size: 12px; }
+    .notice { padding: 40px 16px; text-align: center; color: var(--muted); }
+    @media (max-width: 640px) {
+      :root { --month-col: 64px; }
+      .toolbar a { margin-left: 0; }
+      .month-label { padding: 4px 6px; font-size: 12px; }
+    }
+  </style>
+</head>
+<body>
+  <header class="toolbar">
+    <h1>题材演绎</h1>
+    <select id="fileSelect" aria-label="数据文件"></select>
+    <input id="search" type="search" placeholder="搜索名称 / 代码 / 题材 / 新闻" aria-label="搜索">
+    <label class="toggle" title="关闭：首板日到见顶日；打开：首板日到断板日"><input type="checkbox" id="breakToggle">按断板日结束</label>
+    <label class="toggle" title="点击股票后逐条勾选重要新闻，与关键词规则的自动判断对比"><input type="checkbox" id="debugToggle">新闻核对（Debug）</label>
+    <div id="filters" class="filters" role="group" aria-label="新闻类型"></div>
+    <span id="summary"></span>
+    <span id="debugSummary" hidden></span>
+    <button type="button" id="submitDiff" hidden title="把所有已核对股票的不符新闻和理由写入 reports/*.review-diff.json">提交核对差异</button>
+    <span id="submitStatus" hidden></span>
+    <a href="/">返回回放</a>
+  </header>
+  <main id="board" class="board">
+    <div class="notice">正在加载…</div>
+  </main>
+  <div id="tooltip" hidden></div>
+  <aside id="editor" hidden aria-label="编辑">
+    <div class="editor-head">
+      <h2 id="editorTitle"></h2>
+      <button type="button" id="closeEditor" aria-label="关闭">✕</button>
+    </div>
+    <div class="editor-body">
+      <section id="reviewSection" hidden aria-label="新闻核对">
+        <div class="review-head">
+          <strong>新闻核对</strong>
+          <span class="review-hint" id="reviewHint"></span>
+        </div>
+        <label class="review-none"><input type="checkbox" id="reviewNone">没有重要新闻</label>
+        <div id="reviewDays"></div>
+        <div class="review-actions">
+          <button type="button" class="primary" id="saveReview">保存并对比</button>
+          <button type="button" id="editReview" hidden>重新选择</button>
+          <button type="button" id="nextUnreviewed">下一只未核对</button>
+          <button type="button" id="nextDisagree" title="按首板日期找下一只「有无重要新闻」和自动判断不一致的股票">下一只不一致</button>
+          <span id="reviewStatus"></span>
+        </div>
+        <div id="reviewResult" hidden></div>
+      </section>
+      <dl class="facts" id="editorFacts"></dl>
+      <label for="manualNews">人工锚定新闻</label>
+      <textarea id="manualNews" placeholder="留空则使用自动锚定的新闻"></textarea>
+      <label for="manualCategory">人工类别</label>
+      <select id="manualCategory"></select>
+      <label for="manualTheme">人工题材</label>
+      <input id="manualTheme" type="text" placeholder="多个题材用 + 分隔，如 免签+旅游">
+      <label for="manualNote">备注</label>
+      <textarea id="manualNote"></textarea>
+    </div>
+    <div class="editor-foot">
+      <button type="button" class="primary" id="saveEditor">保存</button>
+      <button type="button" id="cancelEditor">取消</button>
+      <span id="saveStatus"></span>
+    </div>
+  </aside>
+
+<script>
+  // 数据由 npm run news-theme 生成（reports/*.json），人工编辑通过 /api/theme-gantt/:name/manual 保存。
+  const NONE = '无重要新闻';
+  const COLORS = {
+    政策规范: '#f0b90b',
+    新叙事: '#b88cff',
+    行业利好: '#3fb950',
+    '海外/明星公司': '#47b7ef',
+    资本运作转型: '#f05298',
+    [NONE]: '#6e7681',
+  };
+  const FILTER_STORAGE_KEY = 'theme-gantt-hidden-categories';
+  const END_MODE_STORAGE_KEY = 'theme-gantt-end-at-break';
+  const DEBUG_STORAGE_KEY = 'theme-gantt-debug';
+  const WEEKDAYS = ['日', '一', '二', '三', '四', '五', '六'];
+  const VERDICT_LABELS = {
+    实质语料: '',
+    '行情/例行信息': '行情/例行信息',
+    仅板块拉升描述: '仅板块拉升描述',
+    无实质语料: '无实质语料',
+    空标题: '空标题',
+  };
+  const BAR_GAP = 6;
+  const OPEN_END_ROOM = 10;
+
+  let report = null;
+  let fileName = '';
+  let hidden = new Set(readHidden());
+  let endAtBreak = readEndMode();
+  let debugMode = readFlag(DEBUG_STORAGE_KEY);
+  // 当前核对中的股票：新闻列表、自动判断、人工勾选；revealed 为 true 时显示对比结果。
+  let reviewState = null;
+  let editingKey = '';
+  const measureContext = document.createElement('canvas').getContext('2d');
+
+  function readHidden() {
+    try {
+      return JSON.parse(localStorage.getItem(FILTER_STORAGE_KEY) || '[]');
+    } catch {
+      return [];
+    }
+  }
+
+  function readFlag(storageKey) {
+    try {
+      return localStorage.getItem(storageKey) === '1';
+    } catch {
+      return false;
+    }
+  }
+
+  function saveFlag(storageKey, value) {
+    try {
+      localStorage.setItem(storageKey, value ? '1' : '0');
+    } catch {
+      // 无法保存时只影响下次打开的默认值。
+    }
+  }
+
+  function readEndMode() {
+    try {
+      return localStorage.getItem(END_MODE_STORAGE_KEY) === '1';
+    } catch {
+      return false;
+    }
+  }
+
+  function saveEndMode() {
+    try {
+      localStorage.setItem(END_MODE_STORAGE_KEY, endAtBreak ? '1' : '0');
+    } catch {
+      // 无法保存时只影响下次打开的默认值。
+    }
+  }
+
+  // 断板开关：关闭时横条画到见顶日，打开时画到断板日。
+  function endOf(row) {
+    return (endAtBreak ? row['断板日期'] : row['最高点日期']) || row['最高点日期'] || row['首板日期'];
+  }
+
+  function daysOf(row) {
+    return endAtBreak ? row['到断板天数'] : row['到最高点天数'];
+  }
+
+  function isOpenEnd(row) {
+    return endAtBreak ? row['断板未出现'] === '是' : row['可能未见顶'] === '是';
+  }
+
+  function saveHidden() {
+    try {
+      localStorage.setItem(FILTER_STORAGE_KEY, JSON.stringify([...hidden]));
+    } catch {
+      // 无痕模式等情况下无法保存筛选，不影响使用。
+    }
+  }
+
+  function categoriesOf(row) {
+    if (row['人工类别']) return [row['人工类别']];
+    if (row['有重要新闻'] === '是' && row['新闻类别']) return row['新闻类别'].split('、');
+    return [NONE];
+  }
+
+  function newsOf(row) {
+    return row['人工锚定新闻'] || row['锚定新闻'] || '';
+  }
+
+  // 新闻时间统一显示到分钟（年月日 时:分）；人工锚定新闻在新闻列表里找不到同名标题时没有时间。
+  function formatNewsTime(time) {
+    return String(time || '').slice(0, 16);
+  }
+
+  function newsTimeOf(row) {
+    return formatNewsTime(row['人工锚定新闻'] ? row['人工锚定新闻时间'] : row['新闻时间']);
+  }
+
+  function newsWithTime(title, time) {
+    if (!title) return '';
+    return time ? `${formatNewsTime(time)} ${title}` : `（时间未知）${title}`;
+  }
+
+  function isEdited(row) {
+    return (report?.manualColumns || []).some(column => String(row[column] || '').trim());
+  }
+
+  function escapeHtml(value) {
+    return String(value ?? '').replace(/[&<>"']/g, character => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+    })[character]);
+  }
+
+  function parseDate(text) {
+    const [year, month, day] = text.split('-').map(Number);
+    return { year, month, day };
+  }
+
+  function monthKey(year, month) {
+    return `${year}-${String(month).padStart(2, '0')}`;
+  }
+
+  function daysInMonth(year, month) {
+    return new Date(Date.UTC(year, month, 0)).getUTCDate();
+  }
+
+  function nextMonth(year, month) {
+    return month === 12 ? [year + 1, 1] : [year, month + 1];
+  }
+
+  function matchesSearch(row, query) {
+    if (!query) return true;
+    return [row['名称'], row['代码'], row['人工题材'], newsOf(row), row['备注']]
+      .some(value => String(value || '').toLowerCase().includes(query));
+  }
+
+  function visibleRows() {
+    const query = document.getElementById('search').value.trim().toLowerCase();
+    return report.rows.filter(row => (
+      categoriesOf(row).some(category => !hidden.has(category)) && matchesSearch(row, query)
+    ));
+  }
+
+  function renderFilters() {
+    const counts = new Map(Object.keys(COLORS).map(category => [category, 0]));
+    for (const row of report.rows) {
+      for (const category of categoriesOf(row)) counts.set(category, (counts.get(category) || 0) + 1);
+    }
+    const container = document.getElementById('filters');
+    container.innerHTML = [...counts.entries()].map(([category, count]) => `
+      <label class="chip${hidden.has(category) ? ' off' : ''}" style="--c:${COLORS[category] || '#999'}">
+        <input type="checkbox" value="${escapeHtml(category)}"${hidden.has(category) ? '' : ' checked'}>
+        <span class="swatch"></span>${escapeHtml(category)}<span class="count">${count}</span>
+      </label>`).join('');
+  }
+
+  // 把每只股票「首板日 → 最高点日」按月切成段，一个月一行。
+  function buildSegments(rows) {
+    const byMonth = new Map();
+    for (const row of rows) {
+      const start = row['首板日期'];
+      const end = endOf(row);
+      const startParts = parseDate(start);
+      let [year, month] = [startParts.year, startParts.month];
+      while (monthKey(year, month) <= end.slice(0, 7)) {
+        const key = monthKey(year, month);
+        const first = `${key}-01`;
+        const last = `${key}-${String(daysInMonth(year, month)).padStart(2, '0')}`;
+        const segmentStart = start > first ? start : first;
+        const segmentEnd = end < last ? end : last;
+        if (!byMonth.has(key)) byMonth.set(key, []);
+        byMonth.get(key).push({
+          row,
+          startDay: parseDate(segmentStart).day,
+          endDay: parseDate(segmentEnd).day,
+          contLeft: segmentStart > start,
+          contRight: segmentEnd < end,
+        });
+        [year, month] = nextMonth(year, month);
+      }
+    }
+    return byMonth;
+  }
+
+  function monthRange(rows) {
+    const starts = rows.map(row => row['首板日期'].slice(0, 7));
+    const ends = rows.map(row => endOf(row).slice(0, 7));
+    const all = report.rows.map(row => row['首板日期'].slice(0, 7));
+    const first = (starts.length ? starts : all).reduce((min, value) => (value < min ? value : min));
+    const last = [...ends, ...(starts.length ? [] : all)].reduce((max, value) => (value > max ? value : max), first);
+    const months = [];
+    let [year, month] = first.split('-').map(Number);
+    while (monthKey(year, month) <= last) {
+      months.push([year, month]);
+      [year, month] = nextMonth(year, month);
+    }
+    return months;
+  }
+
+  // 核对模式下，已核对的股票标 ✓（有无重要新闻与自动判断一致）或 ✗（不一致）。
+  function reviewMark(row) {
+    if (!debugMode || !row['核对']) return '';
+    if (row['核对'].needsRecheck) return '<span class="review-mark" title="之前勾选的新闻都不在现在的新闻范围内，需要重新核对">?</span>';
+    return `<span class="review-mark" title="${row['核对'].agree ? '与自动判断一致' : '与自动判断不一致'}">${row['核对'].agree ? '✓' : '✗'}</span>`;
+  }
+
+  function labelText(segment) {
+    const row = segment.row;
+    return segment.contLeft ? `${row['名称']}（续）` : `${row['名称']} ${daysOf(row) || ''}天`;
+  }
+
+  function render() {
+    const board = document.getElementById('board');
+    const rows = visibleRows();
+    document.getElementById('summary').textContent = `显示 ${rows.length} / ${report.rows.length} 只`;
+    renderDebugSummary();
+    if (!report.rows.length) {
+      board.innerHTML = '<div class="notice">没有数据</div>';
+      return;
+    }
+    const segmentsByMonth = buildSegments(rows);
+    const months = monthRange(rows);
+    const trackWidth = Math.max(960, board.clientWidth) - parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--month-col'));
+    const dayWidth = trackWidth / 31;
+    const laneHeight = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--lane-h'));
+    measureContext.font = `600 12px ${getComputedStyle(document.body).fontFamily}`;
+
+    const ticks = [1, 5, 10, 15, 20, 25, 31]
+      .map(day => `<span class="tick" style="left:${((day - 0.5) / 31) * 100}%">${day}</span>`).join('');
+    let html = `<div class="board-inner"><div class="axis"><div></div><div class="ticks">${ticks}</div></div>`;
+
+    for (const [year, month] of months) {
+      const key = monthKey(year, month);
+      const segments = (segmentsByMonth.get(key) || [])
+        .sort((left, right) => left.startDay - right.startDay || right.endDay - left.endDay);
+      // 按像素贪心分配泳道：放不下标签的短条把标签画在右侧，并为标签预留位置。
+      const laneEnds = [];
+      const placed = segments.map(segment => {
+        const left = (segment.startDay - 1) * dayWidth;
+        const width = (segment.endDay - segment.startDay + 1) * dayWidth;
+        const text = labelText(segment);
+        const textWidth = measureContext.measureText(text).width + 10;
+        const openEnd = isOpenEnd(segment.row) && !segment.contRight;
+        const outside = textWidth > width;
+        const occupied = left + width + (outside ? textWidth + (openEnd ? OPEN_END_ROOM : 0) : (openEnd ? OPEN_END_ROOM : 0));
+        let lane = laneEnds.findIndex(end => end + BAR_GAP <= left);
+        if (lane < 0) {
+          lane = laneEnds.length;
+          laneEnds.push(0);
+        }
+        laneEnds[lane] = occupied;
+        return { ...segment, left, width, text, outside, openEnd, lane };
+      });
+      const starting = segments.filter(segment => !segment.contLeft).length;
+      const height = Math.max(1, laneEnds.length) * laneHeight + 8;
+      const beyond = 31 - daysInMonth(year, month);
+      const bars = placed.map(segment => {
+        const row = segment.row;
+        const category = categoriesOf(row).find(item => !hidden.has(item)) || NONE;
+        const classes = ['bar'];
+        if (segment.contLeft) classes.push('cont-left');
+        if (segment.contRight) classes.push('cont-right');
+        if (segment.openEnd) classes.push('open-end');
+        if (row.key === editingKey) classes.push('selected');
+        return `<div class="${classes.join(' ')}" data-key="${escapeHtml(row.key)}"
+          style="--c:${COLORS[category] || '#999'};left:${segment.left}px;width:${segment.width}px;top:${segment.lane * laneHeight + 4}px">
+          <span class="label${segment.outside ? ' outside' : ''}">${escapeHtml(segment.text)}${isEdited(row) ? '<span class="edited">✎</span>' : ''}${reviewMark(row)}</span>
+        </div>`;
+      }).join('');
+      html += `<section class="month">
+        <div class="month-label"><strong>${year}-${String(month).padStart(2, '0')}</strong><span>${starting ? `首板 ${starting} 只` : ''}</span></div>
+        <div class="track" style="height:${height}px">
+          ${beyond ? `<div class="beyond" style="width:${(beyond / 31) * 100}%"></div>` : ''}
+          ${placed.length ? '' : '<span class="empty">—</span>'}
+          ${bars}
+        </div>
+      </section>`;
+    }
+    board.innerHTML = `${html}</div>`;
+  }
+
+  function findRow(key) {
+    return report.rows.find(row => row.key === key);
+  }
+
+  function showTooltip(event, row) {
+    const tooltip = document.getElementById('tooltip');
+    const categories = categoriesOf(row).join('、');
+    tooltip.innerHTML = `
+      <strong>${escapeHtml(row['名称'])}</strong> <span class="muted">${escapeHtml(row['代码'])}</span><br>
+      首板 ${escapeHtml(row['首板日期'])}，涨幅 ${escapeHtml(row['首板收盘→最高涨幅%'])}%${row['连板高度'] ? `，${escapeHtml(row['连板高度'])} 连板` : ''}<br>
+      见顶 ${escapeHtml(row['最高点日期'])}（第 ${escapeHtml(row['到最高点天数'])} 天${row['可能未见顶'] === '是' ? '，可能未见顶' : ''}）
+      · 断板 ${escapeHtml(row['断板日期'] || '--')}（第 ${escapeHtml(row['到断板天数'] || '--')} 天${row['断板未出现'] === '是' ? '，数据内未断板' : ''}）<br>
+      <span class="muted">${escapeHtml(categories)}</span> ${escapeHtml(newsOf(row) ? newsWithTime(newsOf(row), newsTimeOf(row)) : '（无锚定新闻）')}<br>
+      ${debugMode && row['核对'] ? `<span class="muted">核对：${escapeHtml(reviewSummaryText(row['核对']))}</span><br>` : ''}
+      ${row['人工题材'] ? `<span class="muted">题材 ${escapeHtml(row['人工题材'])}</span>` : ''}`;
+    tooltip.hidden = false;
+    const x = Math.min(event.clientX + 14, window.innerWidth - tooltip.offsetWidth - 8);
+    const y = event.clientY + 16 + tooltip.offsetHeight > window.innerHeight
+      ? event.clientY - tooltip.offsetHeight - 10
+      : event.clientY + 16;
+    tooltip.style.left = `${Math.max(8, x)}px`;
+    tooltip.style.top = `${Math.max(8, y)}px`;
+  }
+
+  function hideTooltip() {
+    document.getElementById('tooltip').hidden = true;
+  }
+
+  function openEditor(key) {
+    const row = findRow(key);
+    if (!row) return;
+    editingKey = key;
+    hideTooltip();
+    document.getElementById('editorTitle').textContent = `${row['名称']} ${row['代码']}`;
+    const facts = [
+      ['首板日期', row['首板日期']],
+      ['最高点', `${row['最高点日期']}（第 ${row['到最高点天数']} 天${row['可能未见顶'] === '是' ? '，可能未见顶' : ''}）`],
+      ['断板', row['断板日期'] ? `${row['断板日期']}（第 ${row['到断板天数']} 天${row['断板未出现'] === '是' ? '，数据内未断板' : ''}）` : '--'],
+      ['涨幅', `${row['首板收盘→最高涨幅%']}%`],
+      ['连板高度', row['连板高度'] || '--'],
+      ['自动新闻', row['锚定新闻'] ? newsWithTime(row['锚定新闻'], row['新闻时间']) : '无'],
+      ...(row['人工锚定新闻'] ? [['人工新闻', newsWithTime(row['人工锚定新闻'], row['人工锚定新闻时间'])]] : []),
+      ['自动类别', row['新闻类别'] ? `${row['新闻类别']}；关键词 ${row['命中关键词']}` : NONE],
+    ];
+    document.getElementById('editorFacts').innerHTML = facts
+      .map(([name, value]) => `<dt>${escapeHtml(name)}</dt><dd>${escapeHtml(value)}</dd>`).join('')
+      + (/^https?:\/\//.test(row['新闻链接'] || '')
+        ? `<dt>新闻原文</dt><dd><a href="${escapeHtml(row['新闻链接'])}" target="_blank" rel="noopener noreferrer">打开</a></dd>`
+        : '')
+      + (row['其他候选新闻'] ? `<dt>其他候选</dt><dd class="candidates">${escapeHtml(row['其他候选新闻'])}</dd>` : '');
+    const autoCategory = row['有重要新闻'] === '是' ? row['新闻类别'] : NONE;
+    document.getElementById('manualCategory').innerHTML = [
+      `<option value="">自动（${escapeHtml(autoCategory)}）</option>`,
+      ...Object.keys(COLORS).map(category => `<option value="${escapeHtml(category)}">${escapeHtml(category)}</option>`),
+    ].join('');
+    document.getElementById('manualNews').value = row['人工锚定新闻'] || '';
+    document.getElementById('manualCategory').value = row['人工类别'] || '';
+    document.getElementById('manualTheme').value = row['人工题材'] || '';
+    document.getElementById('manualNote').value = row['备注'] || '';
+    document.getElementById('saveStatus').textContent = '';
+    document.getElementById('editor').hidden = false;
+    document.getElementById('editor').classList.toggle('debug', debugMode);
+    document.getElementById('reviewSection').hidden = !debugMode;
+    if (debugMode) loadReview(row);
+    render();
+  }
+
+  function closeEditor() {
+    editingKey = '';
+    reviewState = null;
+    document.getElementById('editor').hidden = true;
+    render();
+  }
+
+  async function saveEditor() {
+    const row = findRow(editingKey);
+    if (!row) return;
+    const values = {
+      人工锚定新闻: document.getElementById('manualNews').value.trim(),
+      人工类别: document.getElementById('manualCategory').value,
+      人工题材: document.getElementById('manualTheme').value.trim(),
+      备注: document.getElementById('manualNote').value.trim(),
+    };
+    const status = document.getElementById('saveStatus');
+    status.textContent = '保存中…';
+    try {
+      const response = await fetch(`/api/theme-gantt/${encodeURIComponent(fileName)}/manual`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: row.key, values }),
+      });
+      const payload = await response.json();
+      if (!response.ok || payload.status_code !== 0) throw new Error(payload.msg || `HTTP ${response.status}`);
+      Object.assign(row, payload.values);
+      status.textContent = '已保存';
+      renderFilters();
+      render();
+    } catch (error) {
+      status.textContent = `保存失败：${error.message}`;
+    }
+  }
+
+  function reviewSummaryText(review) {
+    const user = review.userHasNews ? '有' : '无';
+    const auto = review.autoHasNews ? '有' : '无';
+    const anchor = review.anchorHit === null ? '' : review.anchorHit ? '，自动锚定被选中' : '，自动锚定未被选中';
+    return `${review.agree ? '一致' : '不一致'}（你：${user}，自动：${auto}）${anchor}`;
+  }
+
+  function percent(part, total) {
+    return total ? `${((part / total) * 100).toFixed(0)}%` : '--';
+  }
+
+  // 汇总所有已核对股票：有无重要新闻一致率、自动锚定命中率、逐条新闻的精确率和召回率。
+  function renderDebugSummary() {
+    const element = document.getElementById('debugSummary');
+    element.hidden = !debugMode;
+    document.getElementById('submitDiff').hidden = !debugMode;
+    document.getElementById('submitStatus').hidden = !debugMode;
+    if (!debugMode || !report) return;
+    const reviews = report.rows.map(row => row['核对']).filter(review => review && !review.needsRecheck);
+    const recheck = report.rows.filter(row => row['核对']?.needsRecheck).length;
+    if (!reviews.length) {
+      element.textContent = `已核对 0 只${recheck ? ` · 待重新核对 ${recheck}` : ''}`;
+      return;
+    }
+    const agree = reviews.filter(review => review.agree).length;
+    const anchorCases = reviews.filter(review => review.userHasNews && review.anchorHit !== null);
+    const anchorHits = anchorCases.filter(review => review.anchorHit).length;
+    const both = reviews.reduce((sum, review) => sum + review.both, 0);
+    const userOnly = reviews.reduce((sum, review) => sum + review.userOnly, 0);
+    const autoOnly = reviews.reduce((sum, review) => sum + review.autoOnly, 0);
+    const byLlm = reviews.filter(review => review.basis === '大模型').length;
+    const basisText = byLlm === reviews.length ? '和大模型比' : byLlm ? `和大模型比 ${byLlm} 只、和规则比 ${reviews.length - byLlm} 只` : '和关键词规则比';
+    element.innerHTML = `已核对 <strong>${reviews.length}</strong> 只（${basisText}）`
+      + ` · 有无重要新闻一致 <strong>${percent(agree, reviews.length)}</strong>`
+      + ` · 锚定命中 <strong>${percent(anchorHits, anchorCases.length)}</strong>`
+      + ` · 逐条精确率 <strong>${percent(both, both + autoOnly)}</strong>`
+      + ` 召回率 <strong>${percent(both, both + userOnly)}</strong>`
+      + (recheck ? ` · 待重新核对 <strong>${recheck}</strong>` : '');
+    element.title = `逐条：一致 ${both} 条，你选了但自动没选 ${userOnly} 条，自动选了但你没选 ${autoOnly} 条。`
+      + '精确率 = 一致 ÷ 自动选中；召回率 = 一致 ÷ 你选中。';
+  }
+
+  async function loadReview(row) {
+    const key = row.key;
+    document.getElementById('reviewDays').innerHTML = '<div class="review-hint">正在加载新闻…</div>';
+    document.getElementById('reviewResult').hidden = true;
+    document.getElementById('reviewStatus').textContent = '';
+    try {
+      const response = await fetch(`/api/theme-gantt/${encodeURIComponent(fileName)}/news?key=${encodeURIComponent(key)}`);
+      const payload = await response.json();
+      if (!response.ok || payload.status_code !== 0) throw new Error(payload.msg || `HTTP ${response.status}`);
+      if (editingKey !== key) return;
+      reviewState = {
+        key,
+        signalDate: row['首板日期'],
+        items: payload.items,
+        anchorId: payload.anchorId,
+        basis: payload.basis || '关键词规则',
+        llm: payload.llm,
+        review: payload.review,
+        reasons: { ...(payload.review?.reasons || {}) },
+        selected: new Set(payload.review?.selected || []),
+        none: Boolean(payload.review?.noImportant),
+        revealed: Boolean(payload.review) && !payload.review.needsRecheck,
+      };
+      renderReview();
+    } catch (error) {
+      document.getElementById('reviewDays').innerHTML = `<div class="review-hint">新闻加载失败：${escapeHtml(error.message)}</div>`;
+    }
+  }
+
+  function weekdayOf(date) {
+    const [year, month, day] = date.split('-').map(Number);
+    return WEEKDAYS[new Date(Date.UTC(year, month - 1, day)).getUTCDay()];
+  }
+
+  // 对比对象：有大模型结果时是「模型」，否则是关键词「规则」。
+  function basisLabel() {
+    return reviewState?.basis === '大模型' ? '模型' : '规则';
+  }
+
+  function reviewItemState(item) {
+    const selected = !reviewState.none && reviewState.selected.has(item.id);
+    if (selected && item.important) return { cls: 'both', tag: '一致' };
+    if (selected) return { cls: 'user', tag: `你选了·${basisLabel()}没选` };
+    if (item.important) return { cls: 'auto', tag: `${basisLabel()}选了·你没选` };
+    return { cls: '', tag: '' };
+  }
+
+  // 按天分组（新的在上），首板日和前一天默认展开；保存前不显示自动判断（盲选）。
+  function renderReview() {
+    const state = reviewState;
+    const revealed = state.revealed;
+    document.getElementById('reviewNone').checked = state.none;
+    document.getElementById('reviewNone').disabled = revealed;
+    document.getElementById('saveReview').hidden = revealed;
+    document.getElementById('editReview').hidden = !revealed;
+    document.getElementById('reviewHint').textContent = revealed
+      ? `已保存，下面是和${state.basis}的对比；在不符的新闻下面填写理由（离开输入框自动保存）`
+      : `先按自己的判断勾选（可以展开原文），保存后再显示${state.basis}的判断`;
+    const days = new Map();
+    for (const item of state.items) {
+      const day = item.time.slice(0, 10);
+      if (!days.has(day)) days.set(day, []);
+      days.get(day).push(item);
+    }
+    const dayKeys = [...days.keys()].sort().reverse();
+    const container = document.getElementById('reviewDays');
+    if (!dayKeys.length) {
+      container.innerHTML = '<div class="review-hint">首板日和前一个交易日没有新闻</div>';
+    } else {
+      container.innerHTML = dayKeys.map((day, index) => {
+        const items = days.get(day).sort((left, right) => right.time.localeCompare(left.time));
+        const selectedCount = items.filter(item => !state.none && state.selected.has(item.id)).length;
+        const autoCount = items.filter(item => item.important).length;
+        const label = day === state.signalDate ? '（首板日）' : '';
+        const counts = [`${items.length} 条`, selectedCount ? `已选 ${selectedCount}` : '', revealed && autoCount ? `${basisLabel()} ${autoCount}` : '']
+          .filter(Boolean).join(' · ');
+        const open = revealed || index < 2 || selectedCount ? ' open' : '';
+        return `<details class="day"${open}>
+          <summary>${day} 周${weekdayOf(day)}${label}<span class="muted">${counts}</span></summary>
+          ${items.map(item => renderReviewItem(item, revealed)).join('')}
+        </details>`;
+      }).join('');
+    }
+    renderReviewResult();
+  }
+
+  function renderReviewItem(item, revealed) {
+    const state = reviewState;
+    const checked = !state.none && state.selected.has(item.id);
+    const itemState = revealed ? reviewItemState(item) : { cls: '', tag: '' };
+    const meta = [];
+    if (item.pinned) meta.push('<span class="tag">置顶</span>');
+    let llmNote = '';
+    if (revealed) {
+      if (itemState.tag) meta.push(`<span class="tag ${itemState.cls}">${itemState.tag}</span>`);
+      if (item.id === state.anchorId) meta.push(`<span class="tag anchor">${basisLabel()}锚定</span>`);
+      if (item.llm) {
+        // 大模型：类别、新东西、理由；关键词规则的结论放在后面做对照。
+        if (item.llm.categories.length) meta.push(`<span class="tag">${escapeHtml(item.llm.categories.join('/'))}</span>`);
+        if (!item.llm.relevant) meta.push('<span class="tag verdict">模型：无关</span>');
+        else if (item.llm.polarity && item.llm.polarity !== '肯定') meta.push(`<span class="tag verdict">模型：${escapeHtml(item.llm.polarity)}</span>`);
+        meta.push(`<span class="tag verdict">规则：${item.ruleImportant ? '重要' : '不重要'}</span>`);
+        llmNote = `<span class="llm-note">${item.llm.newThing ? `<b>新东西</b> ${escapeHtml(item.llm.newThing)}　` : ''}<b>模型</b> ${escapeHtml(item.llm.reason)}</span>`;
+      } else {
+        if (item.categories.length) meta.push(`<span class="tag">${escapeHtml(item.categories.join('/'))}</span>`);
+        if (item.keywords.length) meta.push(`<span class="tag verdict">关键词 ${escapeHtml(item.keywords.join('、'))}</span>`);
+        if (VERDICT_LABELS[item.verdict]) meta.push(`<span class="tag verdict">${escapeHtml(VERDICT_LABELS[item.verdict])}</span>`);
+      }
+    }
+    if (/^https?:\/\//.test(item.url)) {
+      meta.push(`<a href="${escapeHtml(item.url)}" target="_blank" rel="noopener noreferrer">链接</a>`);
+    }
+    // 不符的新闻（你选了·自动没选、自动选了·你没选）下面可以填理由。
+    const mismatch = itemState.cls === 'user' || itemState.cls === 'auto';
+    const reason = state.reasons[item.id] || '';
+    return `<div class="news-item">
+      <label class="news-row ${itemState.cls}">
+        <input type="checkbox" data-id="${escapeHtml(item.id)}"${checked ? ' checked' : ''}${revealed || state.none ? ' disabled' : ''}>
+        <span class="news-time">${escapeHtml(formatNewsTime(item.time))}</span>
+        <span class="news-title">${escapeHtml(item.title)}</span>
+        ${meta.length ? `<span class="news-meta">${meta.join('')}</span>` : ''}
+        ${llmNote}
+      </label>
+      ${item.body ? `<details class="news-body"><summary>原文（${item.body.length} 字）</summary><div>${escapeHtml(item.body)}</div></details>` : ''}
+      ${mismatch ? `<textarea class="reason" data-reason-id="${escapeHtml(item.id)}" aria-label="不符理由"
+        placeholder="${itemState.cls === 'user' ? `为什么这条重要（${basisLabel()}漏了什么）` : `为什么这条不重要（${basisLabel()}误判在哪）`}">${escapeHtml(reason)}</textarea>
+        <span class="reason-state" data-reason-state="${escapeHtml(item.id)}">${reason ? '理由已保存' : ''}</span>` : ''}
+    </div>`;
+  }
+
+  async function saveReason(textarea) {
+    const state = reviewState;
+    const id = textarea.dataset.reasonId;
+    if (!state || !id) return;
+    const reason = textarea.value.trim();
+    if (reason === (state.reasons[id] || '')) return;
+    const label = [...document.querySelectorAll('[data-reason-state]')].find(element => element.dataset.reasonState === id);
+    if (label) label.textContent = '保存中…';
+    try {
+      const response = await fetch(`/api/theme-gantt/${encodeURIComponent(fileName)}/review/reason`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: state.key, id, reason }),
+      });
+      const payload = await response.json();
+      if (!response.ok || payload.status_code !== 0) throw new Error(payload.msg || `HTTP ${response.status}`);
+      if (reviewState !== state) return;
+      state.reasons = { ...payload.review.reasons };
+      state.review = payload.review;
+      const row = findRow(state.key);
+      if (row) row['核对'] = payload.review;
+      if (label) label.textContent = reason ? '理由已保存' : '理由已删除';
+      renderReviewResult();
+    } catch (error) {
+      if (label) label.textContent = `保存失败：${error.message}`;
+    }
+  }
+
+  async function submitDiff() {
+    const status = document.getElementById('submitStatus');
+    status.textContent = '提交中…';
+    try {
+      const response = await fetch(`/api/theme-gantt/${encodeURIComponent(fileName)}/review-diff`, { method: 'POST' });
+      const payload = await response.json();
+      if (!response.ok || payload.status_code !== 0) throw new Error(payload.msg || `HTTP ${response.status}`);
+      const { totals } = payload;
+      const mismatches = totals.userOnly + totals.autoOnly;
+      status.textContent = `已写入 ${payload.file}：核对 ${totals.reviewed} 只，有不符的 ${payload.stocks} 只，`
+        + `不符新闻 ${mismatches} 条（已填理由 ${totals.withReason} 条）`;
+    } catch (error) {
+      status.textContent = `提交失败：${error.message}`;
+    }
+  }
+
+  function renderReviewResult() {
+    const result = document.getElementById('reviewResult');
+    const review = reviewState.revealed ? reviewState.review : null;
+    result.hidden = !review;
+    if (!review) return;
+    const anchor = reviewState.items.find(item => item.id === reviewState.anchorId);
+    const name = basisLabel();
+    const llm = reviewState.llm;
+    const stale = review.stale
+      ? `<div class="bad">之前勾选的 ${review.stale} 条新闻不在现在的新闻范围内，已忽略</div>` : '';
+    result.innerHTML = `${stale}
+      <div>有无重要新闻：<span class="${review.agree ? 'good' : 'bad'}">${review.agree ? '一致' : '不一致'}</span>
+        （你：${review.userHasNews ? '有' : '没有'}，${name}：${review.autoHasNews ? '有' : '没有'}）</div>
+      ${llm ? `<div>涨停原因：${escapeHtml(llm.limitUpReason || '无')}</div>
+        <div>模型理由：${escapeHtml(llm.reason)}</div>` : ''}
+      <div>${name}锚定：${anchor ? `${escapeHtml(newsWithTime(anchor.title, anchor.time))}
+        <span class="${review.anchorHit ? 'good' : 'bad'}">${review.anchorHit ? '（你也选了）' : '（你没选）'}</span>` : '无'}</div>
+      <div>逐条：一致 ${review.both} 条，你选了但${name}没选 ${review.userOnly} 条，${name}选了但你没选 ${review.autoOnly} 条</div>
+      ${review.userOnly + review.autoOnly ? `<div>不符 ${review.userOnly + review.autoOnly} 条，已填理由 ${mismatchReasonCount(review)} 条</div>` : ''}`;
+  }
+
+  // 只统计当前仍不符的新闻上的理由（重新选择后旧理由会保留，但不一定还不符）。
+  function mismatchReasonCount(review) {
+    const selected = new Set(review.noImportant ? [] : review.selected);
+    return reviewState.items
+      .filter(item => selected.has(item.id) !== item.important && (reviewState.reasons[item.id] || '').trim())
+      .length;
+  }
+
+  async function saveReview() {
+    const state = reviewState;
+    if (!state) return;
+    const status = document.getElementById('reviewStatus');
+    if (!state.none && !state.selected.size) {
+      status.textContent = '请勾选重要新闻，或选择「没有重要新闻」';
+      return;
+    }
+    status.textContent = '保存中…';
+    try {
+      const response = await fetch(`/api/theme-gantt/${encodeURIComponent(fileName)}/review`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: state.key, noImportant: state.none, selected: [...state.selected] }),
+      });
+      const payload = await response.json();
+      if (!response.ok || payload.status_code !== 0) throw new Error(payload.msg || `HTTP ${response.status}`);
+      state.review = payload.review;
+      state.reasons = { ...(payload.review.reasons || {}) };
+      state.revealed = true;
+      const row = findRow(state.key);
+      if (row) row['核对'] = payload.review;
+      status.textContent = '已保存';
+      renderReview();
+      render();
+    } catch (error) {
+      status.textContent = `保存失败：${error.message}`;
+    }
+  }
+
+  // 按首板日期顺序找下一只未核对的股票（只在当前筛选和搜索结果里找，到末尾后从头找）。
+  function openNextUnreviewed() {
+    const rows = visibleRows().sort((left, right) => (
+      left['首板日期'].localeCompare(right['首板日期']) || left['代码'].localeCompare(right['代码'])
+    ));
+    const start = rows.findIndex(row => row.key === editingKey);
+    const ordered = [...rows.slice(start + 1), ...rows.slice(0, Math.max(start, 0))];
+    const next = ordered.find(row => !row['核对'] || row['核对'].needsRecheck);
+    if (!next) {
+      document.getElementById('reviewStatus').textContent = '当前筛选下没有未核对的股票了';
+      return;
+    }
+    openEditor(next.key);
+    scrollToBar(next.key);
+  }
+
+  // 下一只「有无重要新闻」和自动判断不一致的股票，用来逐只重看分歧。
+  function openNextDisagree() {
+    const rows = visibleRows().sort((left, right) => (
+      left['首板日期'].localeCompare(right['首板日期']) || left['代码'].localeCompare(right['代码'])
+    ));
+    const start = rows.findIndex(row => row.key === editingKey);
+    const ordered = [...rows.slice(start + 1), ...rows.slice(0, Math.max(start, 0))];
+    const next = ordered.find(row => row['核对'] && !row['核对'].needsRecheck && !row['核对'].agree);
+    const left = rows.filter(row => row['核对'] && !row['核对'].needsRecheck && !row['核对'].agree).length;
+    if (!next) {
+      document.getElementById('reviewStatus').textContent = '当前筛选下没有不一致的股票了';
+      return;
+    }
+    openEditor(next.key);
+    scrollToBar(next.key);
+    document.getElementById('reviewStatus').textContent = `当前筛选下还有 ${left} 只不一致`;
+  }
+
+  function scrollToBar(key) {
+    const bar = [...document.querySelectorAll('.bar')].find(element => element.dataset.key === key);
+    bar?.scrollIntoView({ block: 'center', inline: 'nearest' });
+  }
+
+  async function loadFile(name) {
+    const board = document.getElementById('board');
+    board.innerHTML = '<div class="notice">正在加载…</div>';
+    const response = await fetch(`/api/theme-gantt/${encodeURIComponent(name)}`);
+    const payload = await response.json();
+    if (!response.ok || payload.status_code !== 0) throw new Error(payload.msg || `HTTP ${response.status}`);
+    report = payload;
+    fileName = name;
+    const url = new URL(location.href);
+    url.searchParams.set('file', name);
+    history.replaceState(null, '', url);
+    renderFilters();
+    render();
+  }
+
+  async function init() {
+    const response = await fetch('/api/theme-gantt');
+    const { files = [] } = await response.json();
+    const select = document.getElementById('fileSelect');
+    if (!files.length) {
+      document.getElementById('board').innerHTML = '<div class="notice">reports/ 下还没有数据，请先运行 <code>npm run news-theme</code></div>';
+      return;
+    }
+    select.innerHTML = files.map(file => `<option value="${escapeHtml(file)}">${escapeHtml(file)}</option>`).join('');
+    const requested = new URL(location.href).searchParams.get('file');
+    select.value = files.includes(requested) ? requested : files[0];
+    await loadFile(select.value);
+  }
+
+  document.getElementById('fileSelect').addEventListener('change', event => {
+    closeEditor();
+    loadFile(event.target.value).catch(showError);
+  });
+  document.getElementById('search').addEventListener('input', () => render());
+  const breakToggle = document.getElementById('breakToggle');
+  breakToggle.checked = endAtBreak;
+  breakToggle.addEventListener('change', () => {
+    endAtBreak = breakToggle.checked;
+    saveEndMode();
+    render();
+  });
+  document.getElementById('filters').addEventListener('change', event => {
+    const category = event.target.value;
+    if (event.target.checked) hidden.delete(category);
+    else hidden.add(category);
+    saveHidden();
+    renderFilters();
+    render();
+  });
+  const board = document.getElementById('board');
+  board.addEventListener('mousemove', event => {
+    const bar = event.target.closest('.bar');
+    if (bar) showTooltip(event, findRow(bar.dataset.key));
+    else hideTooltip();
+  });
+  board.addEventListener('mouseleave', hideTooltip);
+  board.addEventListener('click', event => {
+    const bar = event.target.closest('.bar');
+    if (bar) openEditor(bar.dataset.key);
+  });
+  const debugToggle = document.getElementById('debugToggle');
+  debugToggle.checked = debugMode;
+  debugToggle.addEventListener('change', () => {
+    debugMode = debugToggle.checked;
+    saveFlag(DEBUG_STORAGE_KEY, debugMode);
+    if (editingKey) openEditor(editingKey);
+    else render();
+  });
+  document.getElementById('reviewNone').addEventListener('change', event => {
+    if (!reviewState || reviewState.revealed) return;
+    reviewState.none = event.target.checked;
+    if (reviewState.none) reviewState.selected.clear();
+    renderReview();
+  });
+  document.getElementById('reviewDays').addEventListener('change', event => {
+    const id = event.target.dataset?.id;
+    if (!id || !reviewState || reviewState.revealed) return;
+    if (event.target.checked) reviewState.selected.add(id);
+    else reviewState.selected.delete(id);
+    // 只更新当天的已选计数，避免整段重绘把展开/收起状态重置。
+    const day = event.target.closest('details');
+    const count = [...day.querySelectorAll('input[data-id]')].filter(input => input.checked).length;
+    const muted = day.querySelector('summary .muted');
+    const total = day.querySelectorAll('input[data-id]').length;
+    muted.textContent = [`${total} 条`, count ? `已选 ${count}` : ''].filter(Boolean).join(' · ');
+  });
+  document.getElementById('reviewDays').addEventListener('focusout', event => {
+    if (event.target.matches?.('textarea.reason')) saveReason(event.target);
+  });
+  document.getElementById('submitDiff').addEventListener('click', submitDiff);
+  document.getElementById('saveReview').addEventListener('click', saveReview);
+  document.getElementById('editReview').addEventListener('click', () => {
+    if (!reviewState) return;
+    reviewState.revealed = false;
+    document.getElementById('reviewStatus').textContent = '重新勾选后再点保存';
+    renderReview();
+  });
+  document.getElementById('nextUnreviewed').addEventListener('click', openNextUnreviewed);
+  document.getElementById('nextDisagree').addEventListener('click', openNextDisagree);
+  document.getElementById('closeEditor').addEventListener('click', closeEditor);
+  document.getElementById('cancelEditor').addEventListener('click', closeEditor);
+  document.getElementById('saveEditor').addEventListener('click', saveEditor);
+  document.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && !document.getElementById('editor').hidden) closeEditor();
+  });
+  let resizeTimer = 0;
+  window.addEventListener('resize', () => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => report && render(), 150);
+  });
+
+  function showError(error) {
+    document.getElementById('board').innerHTML = `<div class="notice">加载失败：${escapeHtml(error.message)}</div>`;
+  }
+
+  init().catch(showError);
+</script>
+</body>
+</html>
