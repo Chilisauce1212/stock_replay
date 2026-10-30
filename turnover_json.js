@@ -1,20 +1,14 @@
 require('dotenv').config();
 
-// 系统代理会把 127.0.0.1 也转发出去，连接 Chrome 调试端口前要排除本机地址。
-for (const name of ['NO_PROXY', 'no_proxy']) {
-  process.env[name] = [process.env[name], '127.0.0.1', 'localhost'].filter(Boolean).join(',');
-}
-
 const fs = require('fs');
 const path = require('path');
-const { spawn, execFileSync } = require('child_process');
-const axios = require('axios');
-const { chromium } = require('playwright');
+const { execFileSync } = require('child_process');
 const { r2Client, readJson, writeJson } = require('./r2-storage');
+const { latestClosedTradeDay, updateLimitUpList } = require('./limit-up-list');
+const { finishReviewFile } = require('./review-pipeline');
 
 const DAILY_REVIEW_DIR = path.join(__dirname, 'daily-review');
 const TEST_CASE_DIR = path.join(__dirname, 'test-cases');
-const sleep = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
 
 function parseDate(dateString) {
   const value = String(dateString).trim();
@@ -34,166 +28,10 @@ function addDays(date, days) {
   return result;
 }
 
-function dateToChinese(dateString) {
-  const date = parseDate(dateString);
-  return `${date.getUTCMonth() + 1}月${date.getUTCDate()}日`;
-}
-
+// 北京时间的今天（UTC 零点表示）
 function today() {
-  const now = new Date();
-  return new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
-}
-
-function beijingNow() {
-  const parts = new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit',
-    hour: '2-digit', hour12: false,
-  }).formatToParts(new Date());
-  return Object.fromEntries(parts.filter(part => part.type !== 'literal').map(part => [part.type, part.value]));
-}
-
-function beijingDateString() {
-  const now = beijingNow();
-  return `${now.year}${now.month}${now.day}`;
-}
-
-function isTodayGenerationWindow() {
-  const hour = Number(beijingNow().hour);
-  return hour >= 15 && hour < 24;
-}
-
-function extractRobotRows(value) {
-  if (!value || typeof value !== 'object') return [];
-  if (Array.isArray(value.datas)) return value.datas;
-  if (Array.isArray(value)) return value.flatMap(extractRobotRows);
-  return Object.values(value).flatMap(extractRobotRows);
-}
-
-async function extractTableRows(page) {
-  const currentPageSize = page.getByText('显示50条/页', { exact: true });
-  for (let index = 0; index < await currentPageSize.count(); index += 1) {
-    if (await currentPageSize.nth(index).isVisible()) {
-      await currentPageSize.nth(index).click();
-      break;
-    }
-  }
-  const pageSize100 = page.getByText('显示100条/页', { exact: true });
-  if (await pageSize100.count() && await pageSize100.first().isVisible()) {
-    await pageSize100.first().click();
-    await page.waitForTimeout(1000);
-  }
-  return page.locator('.iwc-table-body tbody tr').evaluateAll(rows => rows.map(row => {
-    const cells = Array.from(row.querySelectorAll('td .td-cell-box'))
-      .map(cell => cell.textContent.trim());
-    return { 股票代码: cells[2] || '', 股票简称: cells[3] || '' };
-  }).filter(row => row.股票代码 && row.股票简称));
-}
-
-async function hasExplicitEmptyResult(page) {
-  const text = await page.locator('body').innerText().catch(() => '');
-  return /选出\s*A股\s*0/.test(text) || /选出\s*股票\s*0/.test(text);
-}
-
-async function waitForManualLogin(page, targetUrl) {
-  if (!page.url().includes('upass.10jqka.com.cn') && !page.url().includes('/login')) return;
-  console.log('>>> 检测到同花顺登录/验证页面，请在当前 Chrome 窗口完成验证。');
-  console.log('>>> 验证完成并返回问财页面后，脚本将继续抓取数据（最多等待 10 分钟）。');
-  await page.waitForURL(url => url.includes('iwencai.com') && !url.includes('upass.10jqka.com.cn') && !url.includes('/login'), {
-    timeout: 600000,
-  });
-  console.log(`>>> 登录验证完成，已返回问财页面: ${targetUrl}`);
-}
-
-async function ensureChromeDebugging() {
-  const debugUrl = 'http://127.0.0.1:9222/json/version';
-  const chromePath = process.env.CHROME_PATH || 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
-  const userDataDir = 'C:\\chrome_temp';
-  try {
-    const response = await axios.get(debugUrl, { timeout: 1000, proxy: false });
-    if (response.status >= 200 && response.status < 300) {
-      console.log('>>> 检测到 Chrome 调试端口已启动，直接复用。');
-      return;
-    }
-  } catch { /* Chrome 尚未启动 */ }
-  if (!fs.existsSync(chromePath)) throw new Error(`找不到 Chrome: ${chromePath}`);
-  console.log('>>> 未检测到 Chrome 调试端口，正在自动启动 Chrome...');
-  const chrome = spawn(chromePath, ['--remote-debugging-port=9222', `--user-data-dir=${userDataDir}`], { detached: true, stdio: 'ignore' });
-  chrome.unref();
-  const deadline = Date.now() + 15000;
-  while (Date.now() < deadline) {
-    try {
-      const response = await axios.get(debugUrl, { timeout: 1000, proxy: false });
-      if (response.status >= 200 && response.status < 300) {
-        console.log('>>> Chrome 调试端口启动成功。');
-        return;
-      }
-    } catch { /* 继续等待 */ }
-    await sleep(500);
-  }
-  throw new Error('Chrome 启动超时，未能打开 9222 调试端口');
-}
-
-async function getMarketCalendar(dateString) {
-  const url = 'https://data.10jqka.com.cn/dataapi/limit_up/trade_day';
-  for (let attempt = 1; attempt <= 3; attempt += 1) {
-    try {
-      const response = await axios.get(url, {
-        params: { date: dateString, stock: 'stock', next: 1, prev: 5 },
-        headers: { 'User-Agent': 'Mozilla/5.0' }, timeout: 10000,
-      });
-      const data = response.data;
-      const marketData = data?.status_code === 0 ? data.data : null;
-      if (marketData?.trade_day && marketData.prev_dates?.length >= 5 && marketData.next_dates?.length) {
-        const previous = marketData.prev_dates;
-        return {
-          isTrade: true, tPlus1Chs: dateToChinese(marketData.next_dates[0]), tChs: dateToChinese(dateString),
-          tMinus1Chs: dateToChinese(previous[4]), tMinus2Chs: dateToChinese(previous[3]),
-          tPlus1Raw: String(marketData.next_dates[0]), tRaw: dateString,
-          tMinus1Raw: String(previous[4]), tMinus2Raw: String(previous[3]),
-        };
-      }
-      return { isTrade: false };
-    } catch (error) {
-      if (attempt < 3) {
-        console.log(`交易日历获取失败，第 ${attempt} 次重试: ${error.message}`);
-        await sleep(attempt * 1000);
-      } else console.log(`交易日历获取失败，已重试 3 次: ${error.message}`);
-    }
-  }
-  return { isTrade: false };
-}
-
-function normalizeData(rows, calendar) {
-  const replacements = [[calendar.tRaw, 'T'], [calendar.tMinus1Raw, 'T-1'], [calendar.tMinus2Raw, 'T-2'], [calendar.tPlus1Raw, 'T+1']];
-  return rows.map(row => Object.fromEntries(Object.entries(row).map(([key, value]) => {
-    let newKey = String(key);
-    replacements.forEach(([oldValue, newValue]) => { newKey = newKey.split(oldValue).join(newValue); });
-    return [newKey, value];
-  })));
-}
-
-function firstValue(row, names) {
-  for (const name of names) {
-    const value = row[name];
-    if (value != null && !['', 'nan', 'None'].includes(String(value).trim())) return String(value).trim();
-  }
-  return '';
-}
-
-function convertToRecords(rows, dateString, startIndex) {
-  const records = [];
-  rows.forEach(row => {
-    const codeValue = firstValue(row, ['股票代码', '代码', '证券代码']);
-    const stockName = firstValue(row, ['股票简称', '股票名称', '证券简称', '名称']);
-    if (!codeValue || !stockName) return;
-    const code = codeValue.toUpperCase();
-    const [plainCodePart, suffixPart] = code.includes('.') ? code.split('.', 2) : [code.padStart(6, '0'), null];
-    const plainCode = plainCodePart;
-    const suffix = suffixPart || (/^[569]/.test(plainCode) ? 'SH' : 'SZ');
-    const marketCode = `${plainCode}.${suffix}`;
-    records.push({ id: `${startIndex + records.length}-${dateString}-${marketCode}`, date: `${dateString.slice(0, 4)}-${dateString.slice(4, 6)}-${dateString.slice(6, 8)}`, code: plainCode, marketCode, stockName });
-  });
-  return records;
+  const beijing = new Date(Date.now() + 8 * 3600_000);
+  return new Date(Date.UTC(beijing.getUTCFullYear(), beijing.getUTCMonth(), beijing.getUTCDate()));
 }
 
 async function loadJson(filename) {
@@ -222,10 +60,10 @@ function saveLocalJson(records, filename) {
   fs.renameSync(temporary, filename);
 }
 
-async function saveJson(records, filename, { alsoLocal = false } = {}) {
+async function saveJson(records, filename, { alsoLocal = false, allowShrink = false } = {}) {
   if (r2Client) {
     const prefix = path.basename(filename) === '今日首板.json' ? 'daily-review' : 'test-cases';
-    await writeJson(`${prefix}/${path.basename(filename)}`, records);
+    await writeJson(`${prefix}/${path.basename(filename)}`, records, { allowShrink });
     if (alsoLocal) saveLocalJson(records, filename);
     return;
   }
@@ -261,7 +99,6 @@ async function syncDailyReviewCopy(records, filename) {
     if (added) saveLocalJson(merged, localPath);
     console.log(`每日复盘本地 daily-review/${name}：追加 ${added} 条，共 ${merged.length} 条`);
   }
-  console.log('新追加的记录还没有预计算盈亏，可运行 npm run pnl 后再上传。');
 }
 
 // 每日复盘页面的「连板股票」按回测日读 daily-review/连板股票.json：补上这些回测日（从全市场涨停名单生成），再更新 R2
@@ -276,7 +113,7 @@ async function syncChainStocks(records) {
   }
 }
 
-async function run(startArgument, endArgument) {
+async function run(startArgument, endArgument, { followUp = true, yes = false } = {}) {
   const startText = String(startArgument).trim();
   const endText = String(endArgument).trim();
   let startDate = parseDate(startText);
@@ -307,102 +144,68 @@ async function run(startArgument, endArgument) {
     if (records.length) {
       await syncDailyReviewCopy(records, filename);
       await syncChainStocks(records);
+      if (followUp) return finishReviewFile(startText, endText, { yes });
     }
-    return;
+    return [];
   }
 
   // 不再用问财问句：「T日10点30前达到过T日涨停价」被问财解析成 10:30 那一分钟的最高价，早盘触板后开板的票会漏掉。
   // 改由 yijiner-cases.js 用全市场涨停名单 + 逐笔成交判断，它在本地文件上追加，所以先把已有记录写到本地。
   if (records.length) saveLocalJson(records, filename);
-  console.log('\n>>> 任务开始：yijiner-cases.js 按逐笔成交判断二板日 10:30 前是否在涨停价成交过（需要先 npm start）');
+  console.log('\n>>> 任务开始：yijiner-cases.js 按逐笔成交判断二板日 10:30 前是否在涨停价成交过');
   execFileSync(process.execPath, [path.join(__dirname, 'yijiner-cases.js'), '--start', startText, '--end', endText], { stdio: 'inherit' });
   records = JSON.parse(fs.readFileSync(filename, 'utf8'));
   await saveJson(records, filename);
-  console.log(`\n>>> 全部完成！请查看文件: ${filename}`);
+  console.log(`\n>>> 回测追加完成: ${filename}`);
   await syncDailyReviewCopy(records, filename);
   await syncChainStocks(records);
+  return followUp ? finishReviewFile(startText, endText, { yes }) : [];
 }
 
+// 今日首板：最近一个已收盘交易日 T(X) 收盘封死涨停、前一交易日没有封死涨停、主板、非 ST（和问财「涨停」同口径）。
+// 从 T(X) 15:00 到 T(X+1) 15:00 之前运行（含周末、节假日）都生成 T(X) 的首板；数据来自全市场涨停名单（同花顺涨停池）。
 async function runTodayFirstBoard() {
-  if (!isTodayGenerationWindow()) {
-    console.log('北京时间 15:00 前不生成今日首板.json。');
-    return;
+  const { date } = await latestClosedTradeDay();
+  const months = await updateLimitUpList(date);
+  const byDay = new Map();
+  for (const item of Object.values(months).flat()) {
+    if (!byDay.has(item.date)) byDay.set(item.date, new Map());
+    byDay.get(item.date).set(item.code, item);
   }
-
-  let dateString = beijingDateString();
+  const days = [...byDay.keys()].sort();
+  const index = days.indexOf(date);
+  if (index < 1) throw new Error(`涨停名单里没有 ${date} 或它的前一交易日`);
+  const previous = byDay.get(days[index - 1]);
+  const dateString = date.replaceAll('-', '');
+  const records = [...byDay.get(date).values()]
+    .filter(item => /^(60|00)/.test(item.code) && !/ST/i.test(item.name) && !previous.has(item.code))
+    .sort((left, right) => left.code.localeCompare(right.code))
+    .map((item, position) => {
+      const marketCode = `${item.code}.${item.code.startsWith('6') ? 'SH' : 'SZ'}`;
+      return { id: `${position}-${dateString}-${marketCode}`, date, code: item.code, marketCode, stockName: item.name };
+    });
   const filename = path.join(DAILY_REVIEW_DIR, '今日首板.json');
-  const storageTarget = r2Client
-    ? 'R2 对象 daily-review/今日首板.json'
-    : `本地文件 ${filename}`;
-
-  let calendar = await getMarketCalendar(dateString);
-  let attempts = 0;
-  while (!calendar.isTrade && attempts < 7) {
-    dateString = formatDate(addDays(parseDate(dateString), -1));
-    calendar = await getMarketCalendar(dateString);
-    attempts += 1;
-  }
-  if (!calendar.isTrade) {
-    console.log('最近交易日查询失败，不生成今日首板.json。');
-    return;
-  }
-  console.log(`>>> 每日复盘将强制覆盖: ${storageTarget}（更新 ${dateString}）`);
-
-  const year = `${dateString.slice(0, 4)}年`;
-  const question = `${year}${calendar.tChs}收盘涨停,${year}${calendar.tMinus1Chs}收盘未涨停,${year}${calendar.tChs}涨幅>9%,主板,非st`;
-  const targetUrl = `https://www.iwencai.com/unifiedwap/result?w=${encodeURIComponent(question)}`;
-  console.log(`>>> 正在生成今日首板: ${question}`);
-
-  // 使用本机原生 Chrome，并通过调试端口连接，不启动 Playwright 自带 Chromium。
-  await ensureChromeDebugging();
-  const browser = await chromium.connectOverCDP('http://127.0.0.1:9222');
-  const context = browser.contexts()[0];
-  const page = await context.newPage();
-  const batch = [];
-  const responseTasks = [];
-  let explicitEmptyResult = false;
-  const handleResponse = response => {
-    if (!response.url().includes('robotdata') && !response.url().includes('get-robot-data') || response.status() !== 200) return;
-    responseTasks.push((async () => {
-      try {
-        const body = await response.json();
-        batch.push(...extractRobotRows(body));
-      } catch { /* 忽略非目标响应 */ }
-    })());
-  };
-
-  page.on('response', handleResponse);
-  try {
-    await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
-    await waitForManualLogin(page, targetUrl);
-    try { await page.waitForSelector('.iwc-table-body', { timeout: 15000 }); } catch { /* 继续等待接口响应 */ }
-    await sleep(3000);
-    await Promise.all(responseTasks);
-    if (!batch.length) batch.push(...await extractTableRows(page));
-    explicitEmptyResult = !batch.length && await hasExplicitEmptyResult(page);
-  } finally {
-    page.off('response', handleResponse);
-    await page.close();
-  }
-
-  const uniqueRows = Array.from(new Map(batch.map(row => [JSON.stringify(row), row])).values());
-  console.log(`>>> 问财接口捕获 ${uniqueRows.length} 条原始记录`);
-  if (!uniqueRows.length && !explicitEmptyResult) {
-    throw new Error('问财页面已显示结果，但未能从接口响应提取股票数据，已停止写入以避免覆盖已有文件');
-  }
-  const records = convertToRecords(normalizeData(uniqueRows, calendar), dateString, 0);
-  await saveJson(records, filename, { alsoLocal: true });
-  console.log(`>>> 今日首板生成完成：${records.length} 条，已覆盖 ${storageTarget}${r2Client ? `，并同步本地 ${filename}` : ''}`);
+  await saveJson(records, filename, { alsoLocal: true, allowShrink: true });
+  console.log(`>>> 今日首板（${date}）：${records.length} 只，已覆盖 ${r2Client ? 'R2 daily-review/今日首板.json 和本地' : '本地'} ${path.relative(__dirname, filename)}`);
 }
 
-const [, , start, end] = process.argv;
-if (process.argv.includes('--today')) {
+// 用法: node turnover_json.js 起始 结束 [--only-cases] [--yes]
+//   追加回测后接着跑小于 30 元、盈亏、新闻判断、写入每日复盘（见 review-pipeline.js）；--only-cases 只追加回测和同步
+//   --yes：新闻判断要调用大模型超过 100 只时不询问
+// 今日首板: node turnover_json.js --today
+const flags = process.argv.slice(2).filter(argument => argument.startsWith('--'));
+const [start, end] = process.argv.slice(2).filter(argument => !argument.startsWith('--'));
+if (flags.includes('--today')) {
   runTodayFirstBoard().catch(error => {
     console.error(`今日首板生成失败: ${error.message}`);
     process.exitCode = 1;
   });
 } else if (!start || !end) {
-  console.error('用法: node turnover_json.js YYYYMMDD YYYYMMDD');
+  console.error('用法: node turnover_json.js YYYYMMDD YYYYMMDD [--only-cases] [--yes]');
   console.error('今日首板: node turnover_json.js --today');
   process.exitCode = 1;
-} else run(start, end).catch(error => { console.error(`输入或执行失败: ${error.message}`); process.exitCode = 1; });
+} else {
+  run(start, end, { followUp: !flags.includes('--only-cases'), yes: flags.includes('--yes') })
+    .then(failures => { if (failures.length) process.exitCode = 1; })
+    .catch(error => { console.error(`输入或执行失败: ${error.message}`); process.exitCode = 1; });
+}

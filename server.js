@@ -6,7 +6,7 @@ const path = require('path');
 const fs = require('fs');
 const XLSX = require('xlsx');
 const { S3Client, GetObjectCommand, PutObjectCommand } = require('@aws-sdk/client-s3');
-const { r2Client: sharedR2Client, R2_BUCKET: sharedR2Bucket, readJson, writeJson, listJsonKeys } = require('./r2-storage');
+const { r2Client: sharedR2Client, R2_BUCKET: sharedR2Bucket, FORCE_LOCAL, readJson, writeJson, listJsonKeys } = require('./r2-storage');
 const { calcReviewPnl, RULES_VERSION } = require('./review-pnl');
 const pnlKey = (code, date) => `${code}|${date}`;
 const app = express();
@@ -27,7 +27,7 @@ const R2_OBJECT_KEY = process.env.R2_OBJECT_KEY || 'favorites.json';
 const R2_ENDPOINT = process.env.R2_ENDPOINT || (process.env.R2_ACCOUNT_ID
   ? `https://${process.env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`
   : '');
-const r2Client = sharedR2Client || (R2_ENDPOINT && process.env.R2_ACCESS_KEY_ID && process.env.R2_SECRET_ACCESS_KEY
+const r2Client = sharedR2Client || (!FORCE_LOCAL && R2_ENDPOINT && process.env.R2_ACCESS_KEY_ID && process.env.R2_SECRET_ACCESS_KEY
   ? new S3Client({
     endpoint: R2_ENDPOINT,
     region: 'auto',

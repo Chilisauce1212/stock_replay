@@ -44,6 +44,21 @@ async function fetchPool(date) {
   return rows;
 }
 
+// 已收盘的最近交易日 T(X)：从 T(X) 15:00 到 T(X+1) 15:00 之前（含中间的周末、节假日）都返回 T(X)。
+// 北京时间 15:00 前从昨天开始往前找；涨停池非交易日返回空列表，第一个非空的日期就是 T(X)。接口出错直接抛出，不猜日期。
+async function latestClosedTradeDay(now = new Date()) {
+  const beijing = new Date(now.getTime() + 8 * 3600_000);
+  let day = beijing.toISOString().slice(0, 10);
+  if (beijing.getUTCHours() < 15) day = previousDay(day);
+  for (let step = 0; step < 20; step++, day = previousDay(day)) {
+    const weekday = new Date(`${day}T00:00:00Z`).getUTCDay();
+    if (weekday === 0 || weekday === 6) continue;
+    const rows = await fetchPool(day);
+    if (rows.length) return { date: day, rows };
+  }
+  throw new Error('往前 20 天都没找到有涨停数据的交易日');
+}
+
 function readLimitUpMonths() {
   return fs.existsSync(LIMIT_UP_FILE) ? JSON.parse(fs.readFileSync(LIMIT_UP_FILE, 'utf8')) : {};
 }
@@ -100,4 +115,4 @@ function createSealedChecker() {
   };
 }
 
-module.exports = { LIMIT_UP_FILE, fetchPool, readLimitUpMonths, updateLimitUpList, createSealedChecker };
+module.exports = { LIMIT_UP_FILE, fetchPool, latestClosedTradeDay, readLimitUpMonths, updateLimitUpList, createSealedChecker };

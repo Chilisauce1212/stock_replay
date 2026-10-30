@@ -41,7 +41,8 @@ async function uploadAll() {
     const localPath = path.join(__dirname, relativePath);
     const value = JSON.parse(fs.readFileSync(localPath, 'utf8'));
     const objectKey = relativePath.split(path.sep).join('/');
-    await writeJson(objectKey, value);
+    // 默认不允许记录变少（防止拿旧的本地文件覆盖 R2）；确认要删记录时加 --force
+    await writeJson(objectKey, value, { allowShrink: process.argv.includes('--force') });
     console.log(`已上传: ${objectKey}`);
   }
 

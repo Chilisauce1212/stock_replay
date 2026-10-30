@@ -3,7 +3,7 @@ require('dotenv').config();
 const fs = require('fs');
 const path = require('path');
 const { GetObjectCommand, ListObjectsV2Command } = require('@aws-sdk/client-s3');
-const { r2Client, R2_BUCKET } = require('./r2-storage');
+const { r2Client, R2_BUCKET, BACKUP_PREFIX } = require('./r2-storage');
 
 function assertConfigured() {
   if (!r2Client) throw new Error('R2 未配置，请设置 R2_ENDPOINT、R2_ACCESS_KEY_ID、R2_SECRET_ACCESS_KEY 和 R2_BUCKET');
@@ -21,7 +21,7 @@ async function downloadAll() {
     }));
 
     for (const item of response.Contents || []) {
-      if (!item.Key || item.Key.endsWith('/')) continue;
+      if (!item.Key || item.Key.endsWith('/') || item.Key.startsWith(BACKUP_PREFIX)) continue;
       const relativePath = item.Key.replace(/^[/\\]+/, '').split('/').join(path.sep);
       const localPath = path.join(__dirname, relativePath);
       if (!localPath.startsWith(`${__dirname}${path.sep}`)) {

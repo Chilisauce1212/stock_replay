@@ -186,7 +186,7 @@ async function main() {
 
   console.log(`完成，用时 ${Math.round((Date.now() - startedAt) / 1000)}s，失败 ${failures.length} 条`);
   failures.forEach(line => console.log(`  失败（原有 pnl 未覆盖）${line}`));
-  console.log('结果已写入 daily-review/ 的原 JSON（pnl 字段），上传请运行 npm run upload');
+  console.log('结果已写入 daily-review/ 的原 JSON（pnl 字段）；turnover / daily-update 会自动合并上传 R2，单独运行时用 npm run upload 上传');
 }
 
 main().catch(error => {

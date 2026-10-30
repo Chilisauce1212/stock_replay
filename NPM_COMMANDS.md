@@ -80,10 +80,31 @@ set USE_LOCAL_JSON=true && npm start
 
 `npm run start` 与 `npm start` 等价。R2 环境变量配置见 [R2_SETUP.md](R2_SETUP.md)。本地 JSON 模式只在 `USE_LOCAL_JSON=true` 时启用。
 
+## 0. 每日全自动更新（推荐）
+
+```text
+npm run daily-update                # 默认读写 R2，本地 daily-review/ 同步一份
+npm run daily-update -- --local     # 强制只用本地文件，不读写 R2
+npm run daily-update -- --yes       # 新闻判断要调用大模型超过 100 只时不询问
+```
+
+从交易日 T(X) 15:00 到 T(X+1) 15:00 之前运行（含周末、节假日），都更新到 T(X)。依次做：
+
+1. 今日首板（第 7 节）；
+2. T(X) 所在年份的一进二回测（第 3 节，含后续全部步骤）；1 月份同时处理上一年的文件，12 月末的票要到 1 月才算得出盈亏；
+3. 删除 R2 上 30 天前的覆盖备份（`backups/`）。
+
+不用先 `npm start`：新闻判断需要网站服务时，没开会自动临时启动一个，跑完关掉。某一步失败不影响后面的步骤，最后列出哪些失败；修好后重跑同一命令，已完成的会跳过。
+
+**R2 写入保护**（所有脚本通过 `r2-storage.js` 写 R2 时都生效）：
+
+- 覆盖前先把原对象复制到 `backups/<北京时间>/<原路径>`，误写时可以从备份找回；`npm run download:r2` 不下载备份；
+- 原对象和新内容都是数组、新数组更短时拒绝写入，防止拿不完整的本地文件覆盖 R2。今日首板每天整体替换，不受这条限制；`npm run upload -- --force` 确认要删记录时才用。
+
 ## 3. 运行回测数据生成脚本
 
 ```text
-npm run turnover -- YYYYMMDD YYYYMMDD
+npm run turnover -- YYYYMMDD YYYYMMDD [--only-cases] [--yes]
 ```
 
 示例：
@@ -104,8 +125,15 @@ node turnover_json.js 20250104 20251231
 - 判断交给 `yijiner-cases.js`（见第 20 节），用全市场涨停名单和通达信逐笔成交，不再用问财。原来的问句「T 日 10 点 30 前达到过 T 日涨停价」被问财解析成「10:30 那一分钟的最高价」，早盘触板后又开板的票会被漏掉（2026-10 发现，三年样本已按新规则重建）；
 - 已有同名数据时从最后一个首板日之后继续；
 - 配置 R2 时先读 R2 `test-cases/` 的已有记录，追加后写回 R2；未配置 R2 时只用本地 `test-cases/`；
-- 追加完成后（或数据已覆盖日期范围、无需追加时），把新记录合并进 `daily-review/` 下的同名文件，供每日复盘页面读取：原有记录和 `pnl` 字段不动，只追加没有的记录。配了 R2 时更新 R2 的 `daily-review/`，本地 `daily-review/` 已有该文件时一并更新；没配 R2 时只写本地。新追加的记录没有预计算盈亏，需要时运行 `npm run pnl -- 一进二回测_20260106`，再上传该文件。
+- 追加完成后（或数据已覆盖日期范围、无需追加时），把新记录合并进 `daily-review/` 下的同名文件，供每日复盘页面读取：原有记录和 `pnl` 字段不动，只追加没有的记录。配了 R2 时更新 R2 的 `daily-review/`，本地 `daily-review/` 已有该文件时一并更新；没配 R2 时只写本地。
 - 同时补齐每日复盘页面「连板股票」用的 `daily-review/连板股票.json`：对这些回测日运行 `chain-stocks.js`，全市场涨停名单覆盖的日期直接从名单生成（当天收盘封死涨停、连板数 ≥ 2、主板、非 ST；和问财「涨停」同口径，收盘在涨停价但没封死的不算），名单没有的更早日期才用问财；生成后更新 R2。也可以单独运行 `npm run chain-stocks -- 2026-10-29`（不带参数则处理 daily-review 里全部回测日，已有日期跳过，加 `--overwrite` 并指定日期才重新生成，不指定日期会报错，避免覆盖问财历史）。
+
+- 接着自动跑后续步骤（[review-pipeline.js](review-pipeline.js)），某一步失败只记下来、继续后面的：
+  1. 小于 30 元版本（第 4 节，只处理这一年）；
+  2. 预计算盈亏（`pnl.js`）：配了 R2 时先以 R2 为准更新本地文件，算完把 `pnl` 字段合并上传；二板日的次日还没到的票会显示「没有后续交易日」，下次再算；
+  3. 新闻判断：没判断过的记录，加最近 3 个首板日的（新闻、涨停原因变了会重新调用，没变走缓存不花钱）→ 涨停原因（涨停池，`first-board-reason.js --max-queries 0`）→ 新闻和 K 线（`news-theme-table.js`，写 `reports/每日更新新闻.*`）→ 大模型（`news-llm.js`，超过 100 只先询问）；
+  4. 写入每日复盘（第 21 节 `review-judge.js`，配了 R2 时 `--upload`）。
+- `--only-cases` 只追加回测和同步，不跑后续步骤；`--yes` 大模型超过 100 只时不询问。
 
 参数必须是 `YYYYMMDD` 格式。
 
@@ -123,7 +151,7 @@ test-cases/一进二回测_小于30元_20250104_20251231.json
 test-cases/一进二回测_小于30元_20260106_20261231.json
 ```
 
-运行前需要启动网站服务 `npm start`。配置 R2 后，生成的文件会同时写入 R2 的 `test-cases/` 目录。
+不带参数处理 `test-cases/` 下全部年份；`npm run filter-under30 -- 2026` 只处理匹配的文件。首板日收盘价缓存在 `reports/under30-close.json`，查过的不再请求，每天只查新增的记录（查不到收盘价的，如已退市，和原来一样保留）。配置 R2 后，生成的文件会同时写入 R2 的 `test-cases/` 目录。
 
 ## 5. 生成四连板及以上数据
 
@@ -167,11 +195,9 @@ node turnover_json.js --today
 
 功能：
 
-- 只在北京时间 15:00 至 24:00 执行；
-- 自动判断当天是否为交易日；周末或非交易日时使用最近的交易日；
-- 查询目标交易日收盘涨停、前一交易日收盘未涨停、目标交易日涨幅大于 9%、主板、非 ST；
-- 输出到 `daily-review/今日首板.json`，配置 R2 后实际写入 R2 的 `daily-review/今日首板.json`；
-- 如果当天数据已经存在，则跳过，不重复生成。
+- 目标日是最近一个已收盘的交易日 T(X)：从 T(X) 15:00 到 T(X+1) 15:00 之前运行（含周末、节假日）都生成 T(X)；北京时间 15:00 前从昨天往前找，涨停池接口非交易日返回空，第一个有数据的日期就是 T(X)；
+- 条件：T(X) 收盘封死涨停、前一交易日没有封死涨停、主板、非 ST，从全市场涨停名单（同花顺涨停池，和问财「涨停」同口径）生成，不再开问财浏览器；
+- 每次整体覆盖 `daily-review/今日首板.json`，配置 R2 后同时写 R2 的 `daily-review/今日首板.json`。
 
 ## 8. 为 JSON 添加同花顺新闻
 
@@ -248,7 +274,10 @@ node download-r2.js
 
 ```text
 npm run upload
+npm run upload -- --force   # 允许记录变少（默认拒绝，防止拿旧的本地文件覆盖 R2）
 ```
+
+上传本地 `test-cases/`、`daily-review/` 下全部 JSON 和 `favorites.json`，逐个覆盖 R2 同名对象（覆盖前自动备份到 `backups/`）。日常更新用 `npm run daily-update`，它只改有变化的字段，不需要这个命令。
 
 ## 11. 查询同花顺股票新闻
 
@@ -595,6 +624,8 @@ npm run news-llm -- --keys "600593|2024-01-03"
 npm run news-body                               # 只抓新闻原文（news-llm 也会自动抓缺的）
 ```
 
+一次要调用超过 100 只时先显示只数和估算费用并询问（非交互运行时直接停下），加 `--yes` 不询问。
+
 按 [prompts/news-classification.md](prompts/news-classification.md) 的「Prompt 正文」作为 system 消息，每只股票一次调用，逐条判断新闻的关联、肯定/否定、新东西、类别。**重要性只看标题措辞**（散户看到的是标题），原文只用来在标题看不出时确认关联。输入有四样：
 
 - 题材演绎表的股票（`reports/四连板题材演绎.json`）；
@@ -693,5 +724,5 @@ npm run review-judge -- 一进二回测 --upload
 
 - 数据来自 `reports/首板涨停原因.json`、`reports/全市场涨停原因.json`、`reports/news-llm.json`、`test-cases/一进二回测_*.detail.json`；同题材的判断规则和 `stock-pick` 一样（[theme-synonyms.json](theme-synonyms.json)）。
 - 不带关键字处理全部一进二回测文件；`--upload` 同时更新 R2 的 `daily-review/` 同名文件（读 R2 版本、只改 `judge` 再写回）。
-- 每天新增记录的顺序：`npm run turnover` → `npm run pnl` → 对新记录跑 `news-theme` / `news-llm` → `npm run review-judge -- 一进二回测_2026 --upload`。没有新闻判断的记录只显示涨停原因和同题材。
+- `npm run turnover` / `npm run daily-update` 会自动跑这一步（第 3 节）。没有新闻判断的记录只显示涨停原因和同题材。
 

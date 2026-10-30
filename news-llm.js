@@ -34,7 +34,7 @@ const BODY_SNIPPETS = 2;
 const BODY_SNIPPET_RADIUS = 60;
 
 function parseArgs(argv) {
-  const options = { report: '四连板题材演绎', limit: 0, keys: [], onlyReviewed: false, workers: 4, search: false, thinking: true, body: true, refresh: false, out: '', cascade: false, help: false };
+  const options = { report: '四连板题材演绎', limit: 0, keys: [], onlyReviewed: false, workers: 4, search: false, thinking: true, body: true, refresh: false, out: '', cascade: false, yes: false, help: false };
   for (let index = 0; index < argv.length; index++) {
     const argument = argv[index];
     if (argument === '--help' || argument === '-h') options.help = true;
@@ -49,6 +49,7 @@ function parseArgs(argv) {
     else if (argument === '--report') options.report = String(argv[++index] || '');
     else if (argument === '--out') options.out = String(argv[++index] || '');
     else if (argument === '--cascade') options.cascade = true;
+    else if (argument === '--yes' || argument === '-y') options.yes = true;
     else throw new Error(`未知参数 ${argument}`);
   }
   if (!Number.isInteger(options.limit) || options.limit < 0) throw new Error('--limit 必须是非负整数');
@@ -71,6 +72,7 @@ function helpText() {
     '--out 文件名      结果另存到 reports/<文件名>，不覆盖页面读取的 news-llm.json（如关思考对照：--no-thinking --out news-llm-fast.json）',
     '--cascade         分层：先全部关思考跑（存 news-llm-fast.json），关思考结论和关键词规则不一致的再开思考重跑，合并写入 news-llm.json；四连板实测比全开思考省约 35% 费用',
     '--report 名称     题材演绎表名称，默认 四连板题材演绎（读取 reports/<名称>.json 和 .review.json）',
+    `--yes             需要调用超过 ${CONFIRM_ABOVE} 只时不再询问，直接调用`,
   ].join('\n');
 }
 
@@ -348,6 +350,12 @@ async function main(argv = process.argv.slice(2)) {
   if (options.keys.length) rows = rows.filter(row => options.keys.includes(row.key));
   if (options.onlyReviewed) rows = rows.filter(row => reviews[row.key]);
   if (options.limit) rows = rows.slice(0, options.limit);
+  // 新闻没获取到（接口超时等）的不送模型：空列表会被判成「没有重要新闻」并缓存下来，下次重跑 news-theme 再补
+  const unfetched = rows.filter(row => !newsCache[row.key]);
+  if (unfetched.length) {
+    console.log(`新闻没获取到 ${unfetched.length} 只，跳过：${unfetched.map(row => `${row.key} ${row['名称']}`).join('、')}`);
+    rows = rows.filter(row => newsCache[row.key]);
+  }
 
   // 先抓这些股票的新闻原文（有缓存，抓过的跳过）。
   let bodies = {};
@@ -394,6 +402,22 @@ async function main(argv = process.argv.slice(2)) {
   if (failed) process.exitCode = 1;
 }
 
+// 一次要调用的股票超过这个数先确认，免得误跑全样本花太多 token
+const CONFIRM_ABOVE = 100;
+// 2026-10 实测开思考每只约 0.01 元（空闲时段），高峰翻倍
+const YUAN_PER_STOCK = 0.01;
+
+async function confirmLargeRun(count, options) {
+  if (count <= CONFIRM_ABOVE || options.yes) return;
+  const message = `需要调用大模型 ${count} 只，超过 ${CONFIRM_ABOVE} 只，按实测约 ${(count * YUAN_PER_STOCK).toFixed(1)} 元（空闲）/ ${(count * YUAN_PER_STOCK * 2).toFixed(1)} 元（高峰）`;
+  if (!process.stdin.isTTY) throw new Error(`${message}。确认后加 --yes 重跑`);
+  const readline = require('readline/promises');
+  const prompt = readline.createInterface({ input: process.stdin, output: process.stdout });
+  const answer = await prompt.question(`${message}，继续吗？(y/N) `);
+  prompt.close();
+  if (!/^y(es)?$/i.test(answer.trim())) throw new Error('已取消，没有调用大模型');
+}
+
 // 缓存有效：prompt、搜索开关、思考开关、模型和输入（新闻、正文、涨停原因）都没变。返回失败只数。
 async function runCalls(rows, thinking, saved, file, { system, promptHash, inputs, newsCache, options }, label) {
   const isFresh = row => {
@@ -404,6 +428,7 @@ async function runCalls(rows, thinking, saved, file, { system, promptHash, input
   };
   const todo = rows.filter(row => !isFresh(row));
   console.log(`${label}：${rows.length} 只，缓存可用 ${rows.length - todo.length} 只，需要调用 ${todo.length} 只`);
+  await confirmLargeRun(todo.length, options);
   let next = 0;
   let done = 0;
   let failed = 0;
