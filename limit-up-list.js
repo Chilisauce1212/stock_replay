@@ -75,4 +75,29 @@ async function updateLimitUpList(endDate) {
   return months;
 }
 
-module.exports = { LIMIT_UP_FILE, fetchPool, readLimitUpMonths, updateLimitUpList };
+// 某只股票某天是否收盘封死涨停（问财「涨停」为是、同花顺涨停池口径；收盘在涨停价但没封死的不算）。
+// 先查本地全市场涨停名单；名单里没有的日期查涨停池接口（约一年内可查，Render 上没有本地名单时靠它）。
+// 查不到（接口失败或日期太早）返回 null，由调用方决定怎么处理。
+function createSealedChecker() {
+  const known = new Map();
+  for (const item of Object.values(readLimitUpMonths()).flat()) {
+    if (!known.has(item.date)) known.set(item.date, new Set());
+    known.get(item.date).add(item.code);
+  }
+  const pending = new Map();
+  return async (code, date) => {
+    if (!known.has(date)) {
+      if (!pending.has(date)) {
+        pending.set(date, fetchPool(date)
+          .then(rows => { if (rows.length) known.set(date, new Set(rows.map(row => row.code))); })
+          .catch(() => {})
+          .finally(() => pending.delete(date)));
+      }
+      await pending.get(date);
+      if (!known.has(date)) return null;
+    }
+    return known.get(date).has(String(code));
+  };
+}
+
+module.exports = { LIMIT_UP_FILE, fetchPool, readLimitUpMonths, updateLimitUpList, createSealedChecker };

@@ -80,7 +80,14 @@ function halfAmountTrade(day) {
  * 以信号日涨停价为成本计算卖出点。
  * tradingDates: 升序交易日列表，需包含信号日及其前一日。
  */
-async function calcReviewPnl({ code, name, date, tradingDates, worker }) {
+// 「收涨停」按封死口径（问财「涨停」为是）：查涨停名单 / 同花顺涨停池；都查不到时才退回「收盘价 ≥ 涨停价」
+let defaultSealedChecker = null;
+function sealedChecker() {
+  if (!defaultSealedChecker) defaultSealedChecker = require('./limit-up-list').createSealedChecker();
+  return defaultSealedChecker;
+}
+
+async function calcReviewPnl({ code, name, date, tradingDates, worker, isSealed = sealedChecker() }) {
   // date 为首板日，买入发生在其后一个交易日，成本为该日涨停价
   const signalIdx = tradingDates.indexOf(date);
   if (signalIdx < 0) throw new Error('找不到首板日');
@@ -99,7 +106,11 @@ async function calcReviewPnl({ code, name, date, tradingDates, worker }) {
   const previousBuyDay = await getDay(tradingDates[idx - 1]);
   const buyDay = await getDay(buyDate);
   const cost = limitOf(previousBuyDay.close);
-  const signalLimitUp = buyDay.close >= cost - TOL;
+  const closedLimitUp = async (day, limitPrice) => {
+    const sealed = await isSealed(code, day.date);
+    return sealed === null ? day.close >= limitPrice - TOL : sealed;
+  };
+  const signalLimitUp = await closedLimitUp(buyDay, cost);
 
   let sell;
   let nextDate = tradingDates[idx + 1];
@@ -116,8 +127,7 @@ async function calcReviewPnl({ code, name, date, tradingDates, worker }) {
     let prevClose = buyDay.close;
     for (let k = idx + 1; k < tradingDates.length && k <= idx + MAX_STREAK_DAYS; k++) {
       const day = await getDay(tradingDates[k]);
-      const closedLimitUp = day.close >= limitOf(prevClose) - TOL;
-      if (!closedLimitUp) {
+      if (!await closedLimitUp(day, limitOf(prevClose))) {
         if (k === idx + 1) {
           const half = halfAmountTrade(day);
           sell = { date: day.date, tick: half, price: half.price, reason: '次日高开且未收涨停，按成交额过半时的价格卖出' };
@@ -144,6 +154,6 @@ async function calcReviewPnl({ code, name, date, tradingDates, worker }) {
 }
 
 // 盈亏规则变更时递增，已缓存且版本不同的结果会被视为过期并重算
-const RULES_VERSION = 2;
+const RULES_VERSION = 3; // 3：收涨停改为封死口径
 
 module.exports = { calcReviewPnl, RULES_VERSION };

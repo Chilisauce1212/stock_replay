@@ -255,6 +255,8 @@ function saveRecords(records) {
 async function main() {
   const argumentsList = process.argv.slice(2).filter(argument => argument !== '--overwrite');
   const overwrite = process.argv.includes('--overwrite');
+  // --overwrite 必须指定日期或文件，避免把已有的问财历史全部改成涨停名单生成
+  if (overwrite && !argumentsList.length) throw new Error('--overwrite 需要指定要重新生成的日期或 daily-review 文件名');
   fs.mkdirSync(DAILY_REVIEW_DIR, { recursive: true });
   const dates = collectDates(argumentsList);
   if (!dates.length) throw new Error('没有从 daily-review JSON 中找到回测日期');
