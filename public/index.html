@@ -329,6 +329,10 @@
     }
     .review-calendar-day.is-done:not(:disabled) { color: #7d8794; }
     .review-calendar-day.is-selected { background: #f0b90b; color: #111; border-color: #f0b90b; font-weight: bold; }
+    .review-calendar-pnl { display: block; font-size: 10px; line-height: 1.2; white-space: nowrap; }
+    .review-calendar-pnl.is-up { color: #d9363e; }
+    .review-calendar-pnl.is-down { color: #1f9d55; }
+    .review-calendar-day.is-selected .review-calendar-pnl { color: #111; }
     #reviewStockWheel[hidden],
     #reviewWheelToggle[hidden] { display: none; }
     .review-wheel-heading {
@@ -687,6 +691,7 @@
       .review-calendar-head { margin-bottom: 4px; }
       .review-calendar-weekday { padding: 1px 0; }
       .review-calendar-day { height: 34px; padding: 2px 0; }
+      .review-calendar-pnl { font-size: 9px; }
       .custom-case button { padding: 0 6px; }
       .test-panel > span {
         display: block;
@@ -2245,10 +2250,28 @@
       button.disabled = !dayCases.length;
       if (dayCases.length && dayCases.every(isReviewCaseDone)) button.classList.add('is-done');
       if (date === selectedReviewDate) button.classList.add('is-selected');
+      const dayPnl = reviewDayPnl(dayCases);
+      if (dayPnl) {
+        const label = document.createElement('span');
+        label.className = `review-calendar-pnl${dayPnl.pct > 0 ? ' is-up' : dayPnl.pct < 0 ? ' is-down' : ''}`;
+        label.textContent = formatPnl(dayPnl.pct);
+        button.appendChild(label);
+        button.title = `${date} 买入 ${dayPnl.count} 只，平均收益 ${formatPnl(dayPnl.pct)}`;
+      }
       button.addEventListener('click', () => changeReviewDate(date));
       cells.push(button);
     }
     grid.replaceChildren(...cells);
+  }
+
+  // 当天买入并已算出收益的股票，每只等权取平均
+  function reviewDayPnl(dayCases) {
+    const values = dayCases
+      .filter(item => boughtReviewCaseIds.has(String(item.id)))
+      .map(item => reviewPnlResults.get(String(item.id))?.pnlPct)
+      .filter(Number.isFinite);
+    if (!values.length) return null;
+    return { pct: values.reduce((sum, value) => sum + value, 0) / values.length, count: values.length };
   }
 
   function selectCustomDate(date) {
