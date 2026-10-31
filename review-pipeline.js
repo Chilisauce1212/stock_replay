@@ -6,6 +6,7 @@
 //   3. 新闻判断：首板涨停原因（涨停池）→ 新闻和 K 线（news-theme-table.js，需要本地服务，没开会自动临时启动）
 //      → 大模型（news-llm.js，要调用超过 100 只时先询问，--yes 跳过询问）
 //   4. 把判断结果写进每日复盘（review-judge.js，配了 R2 时 --upload）
+//   5. 自由流通市值（free-float.js，问财，每天最多问 20 次，从最近的往前补；配了 R2 时 --upload）
 // 某一步失败只记下来，继续后面的步骤，最后汇总；FORCE_LOCAL=true 时全部只读写本地。
 const fs = require('fs');
 const path = require('path');
@@ -41,7 +42,7 @@ async function readRemote(key) {
   }
 }
 
-// 以 R2 为准更新本地 daily-review 文件；R2 上没有、本地有的 pnl / judge 保留（之前算了还没上传的）
+// 以 R2 为准更新本地 daily-review 文件；R2 上没有、本地有的 pnl / judge / freeFloatCap 保留（之前算了还没上传的）
 async function pullReviewFile(name) {
   const remote = await readRemote(`daily-review/${name}`);
   if (!Array.isArray(remote)) return;
@@ -51,6 +52,7 @@ async function pullReviewFile(name) {
     if (!own) continue;
     if (!item.pnl && own.pnl) item.pnl = own.pnl;
     if (!item.judge && own.judge) item.judge = own.judge;
+    if (!item.freeFloatCap && own.freeFloatCap) item.freeFloatCap = own.freeFloatCap;
   }
   writeLocal(path.join(REVIEW_DIR, name), remote);
 }
@@ -142,6 +144,7 @@ async function finishReviewFile(start, end, { yes = false } = {}) {
   });
   await step('新闻判断', () => runNews(name, { yes }));
   await step('写入判断结果', () => runNode('review-judge.js', [`一进二回测_${start}_${end}`, ...(r2Client ? ['--upload'] : [])]));
+  await step('自由流通市值', () => runNode('free-float.js', r2Client ? ['--upload'] : []));
 
   console.log(failures.length ? `\n后续步骤有 ${failures.length} 项失败：\n  ${failures.join('\n  ')}` : '\n后续步骤全部完成');
   return failures;

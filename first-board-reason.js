@@ -189,7 +189,11 @@ async function queryWencaiOnce(page, records) {
   const range = dates[0] === dates.at(-1)
     ? chineseDate(dates[0])
     : `${chineseDate(dates[0])}至${chineseDate(dates.at(-1))}`;
-  const question = `${codes.join(',')} ${range}每日涨停原因`;
+  return runWencaiQuestion(page, `${codes.join(',')} ${range}每日涨停原因`);
+}
+
+// 在问财页面发一个问句，返回 { question, rows, byCode, notice }；自由流通市值（free-float.js）也用这个
+async function runWencaiQuestion(page, question) {
   const streamPromise = page.waitForResponse(response => response.url().includes('/aime/stream-query'), { timeout: 90_000 });
   await page.goto(`https://www.iwencai.com/unifiedwap/result?w=${encodeURIComponent(question)}`, { waitUntil: 'domcontentloaded', timeout: 60_000 });
   if (/upass\.10jqka\.com\.cn|\/login/.test(page.url())) {
@@ -376,7 +380,7 @@ async function main(argv = process.argv.slice(2)) {
     + `确认找不到 ${all.filter(item => !item.found && item.retried).length} 只，还没查完 ${left} 只`);
 }
 
-module.exports = { OUTPUT_FILE };
+module.exports = { OUTPUT_FILE, DEBUG_URL, MAX_CODES_PER_QUESTION, ensureChrome, runWencaiQuestion, chineseDate };
 
 if (require.main === module) {
   main().catch(error => {

@@ -133,6 +133,7 @@ node turnover_json.js 20250104 20251231
   2. 预计算盈亏（`pnl.js`）：配了 R2 时先以 R2 为准更新本地文件，算完把 `pnl` 字段合并上传；二板日的次日还没到的票会显示「没有后续交易日」，下次再算；
   3. 新闻判断：没判断过的记录，加最近 3 个首板日的（新闻、涨停原因变了会重新调用，没变走缓存不花钱）→ 涨停原因（涨停池，`first-board-reason.js --max-queries 0`）→ 新闻和 K 线（`news-theme-table.js`，写 `reports/每日更新新闻.*`）→ 大模型（`news-llm.js`，超过 100 只先询问）；
   4. 写入每日复盘（第 21 节 `review-judge.js`，配了 R2 时 `--upload`）。
+  5. 自由流通市值（第 22 节 `free-float.js`，问财，每次最多问 20 次，配了 R2 时 `--upload`）。
 - `--only-cases` 只追加回测和同步，不跑后续步骤；`--yes` 大模型超过 100 只时不询问。
 
 参数必须是 `YYYYMMDD` 格式。
@@ -726,3 +727,16 @@ npm run review-judge -- 一进二回测 --upload
 - 不带关键字处理全部一进二回测文件；`--upload` 同时更新 R2 的 `daily-review/` 同名文件（读 R2 版本、只改 `judge` 再写回）。
 - `npm run turnover` / `npm run daily-update` 会自动跑这一步（第 3 节）。没有新闻判断的记录只显示涨停原因和同题材。
 
+## 22. 自由流通市值
+
+```text
+npm run free-float                        # 默认最多问 20 次问财
+npm run free-float -- --max-queries 90    # 补历史时加大次数
+npm run free-float -- --upload            # 同时更新 R2 的 daily-review/
+```
+
+给 `daily-review/` 下今日首板和一进二回测文件的每条记录写 `freeFloatCap`（首板当天的自由流通市值，元），页面固定显示在成交额右边，不随鼠标所指的 K 线变化。
+
+- 通达信只有流通股本（含持股 5% 以上的大股东），没有自由流通股，所以用问财（Chrome 9222 调试端口，需要登录；账号每天约 100 次，和涨停原因共用）。
+- 按月分组，每问最多 9 个代码，一次拿到区间内每天的值；从最近的日期往前查，结果缓存在 `reports/自由流通市值.json`，查过的跳过。
+- `npm run turnover` / `npm run daily-update` 会自动跑（第 3 节第 5 步），每天新增约 4 问；历史记录每天顺带补 20 问左右。

@@ -18,6 +18,7 @@
     "volume-pile-backtest": "node volume-pile-backtest.js",
     "news-theme": "node news-theme-table.js",
     "first-board-reason": "node first-board-reason.js",
+    "free-float": "node free-float.js",
     "news-llm": "node news-llm.js",
     "news-body": "node news-body.js",
     "stock-pick": "node stock-pick.js",

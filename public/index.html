@@ -796,6 +796,7 @@
         <button id="volumePilePanelToggle" type="button" aria-expanded="false" aria-controls="volumePilePanel" onclick="toggleVolumePilePanel()">量堆设置</button>
         <span id="codeVal" style="color: #f0b90b;">股票代码: --</span>
         <span id="amountVal" style="color: #b0b8c4;">成交金额: --</span>
+        <span id="freeFloatVal" style="color: #b0b8c4;" title="首板日的自由流通市值（问财）">自由流通: --</span>
         <span id="successBoard" class="result-board">成功: <span id="successCount">0</span></span>
         <span id="failureBoard" class="result-board">失败: <span id="failureCount">0</span></span>
         <span id="totalBoard" class="result-board">总数: <span id="totalCount">0</span><span id="dailyRecordStatus"></span></span>
@@ -863,18 +864,8 @@
               <output id="volumePileProfitThresholdValue" for="volumePileProfitThreshold">20%</output>
               <input id="volumePileProfitThreshold" type="range" min="5" max="50" step="1" value="20" oninput="updateVolumePileSettings()">
             </div>
-            <div class="volume-pile-field">
-              <label for="volumePileChurnShare">天天放量：放量天占比</label>
-              <output id="volumePileChurnShareValue" for="volumePileChurnShare">90%</output>
-              <input id="volumePileChurnShare" type="range" min="50" max="100" step="5" value="90" oninput="updateVolumePileSettings()">
-            </div>
-            <div class="volume-pile-field">
-              <label for="volumePileChurnMedian">天天放量：每天量/底噪中位数（拉到最高关闭）</label>
-              <output id="volumePileChurnMedianValue" for="volumePileChurnMedian">3.0×</output>
-              <input id="volumePileChurnMedian" type="range" min="2" max="10" step="0.5" value="3" oninput="updateVolumePileSettings()">
-            </div>
             <button type="button" onclick="copyVolumePileSettings()">复制当前参数</button>
-            <div class="volume-pile-help">量堆与前一量堆之间（首个量堆则从当前已显示历史开头）的非放量段作对比，分别取区间成交量最高的 50% 交易日求均值；低于设定倍数的量堆会被过滤。全局中位量是已显示历史成交量的第 50 百分位，用于过滤普通量，不是底噪线。底噪线（全局分位数基线）可单独开关。若放量区间前紧邻连续涨停板（至少一根），以这段连续涨停板的第一根作为区间首根 K 线；锚点不计入有效量和中枢。获利兑现看两个涨幅任一达到阈值：区间内收盘价最高 K 线左侧（含）收盘价最低 K 线中间价到加权中枢的涨幅，或区间最后一根 K 线中间价对加权中枢的涨幅。「天天放量」也算获利兑现：从第一根有效量日到量堆最后一天（含中间没放量的日子）至少 3 天，成交量 ≥ 候选放量倍数的天数占比达到设定值，且每天成交量/底噪的中位数达到设定倍数，说明主力拿大仓位来回高抛低吸，而不是吸筹后缩量锁仓；中位数拉到最高即关闭。首板当天不参与量堆识别。信息栏开头的「近20日量能」「近60日放量」按首板前一日计算：常态量为倒数第 6～125 根成交量的中位数，量能倍数 = 近 20 日均量 ÷ 常态量，放量天数 = 近 60 日中成交量 ≥ 2 倍常态量的天数。</div>
+            <div class="volume-pile-help">量堆与前一量堆之间（首个量堆则从当前已显示历史开头）的非放量段作对比，分别取区间成交量最高的 50% 交易日求均值；低于设定倍数的量堆会被过滤。全局中位量是已显示历史成交量的第 50 百分位，用于过滤普通量，不是底噪线。底噪线（全局分位数基线）可单独开关。若放量区间前紧邻连续涨停板（至少一根），以这段连续涨停板的第一根作为区间首根 K 线；锚点不计入有效量和中枢。获利兑现看两个涨幅任一达到阈值：区间内收盘价最高 K 线左侧（含）收盘价最低 K 线中间价到加权中枢的涨幅，或区间最后一根 K 线中间价对加权中枢的涨幅。首板当天不参与量堆识别。信息栏开头的「近20日量能」「近60日放量」按首板前一日计算：常态量为倒数第 6～125 根成交量的中位数，量能倍数 = 近 20 日均量 ÷ 常态量，放量天数 = 近 60 日中成交量 ≥ 2 倍常态量的天数。</div>
           </div>
         </details>
         <button id="copyVolumePilesButton" type="button" onclick="copyVolumePileData()">复制量堆数据</button>
@@ -998,8 +989,6 @@
     { key: 'minimumWidth', id: 'volumePileMinWidth', output: 'volumePileMinWidthValue', format: value => String(value) },
     { key: 'strongPeakMultiple', id: 'volumePileStrongPeak', output: 'volumePileStrongPeakValue', format: value => `${Number(value).toFixed(1)}×` },
     { key: 'profitThresholdPct', id: 'volumePileProfitThreshold', output: 'volumePileProfitThresholdValue', format: value => `${value}%` },
-    { key: 'churnDayShare', id: 'volumePileChurnShare', output: 'volumePileChurnShareValue', format: value => `${value}%` },
-    { key: 'churnMedianMultiple', id: 'volumePileChurnMedian', output: 'volumePileChurnMedianValue', format: value => (Number(value) >= window.VolumePile.CHURN_OFF_MULTIPLE ? '关闭' : `${Number(value).toFixed(1)}×`) },
   ];
   let volumePileSettings = { ...VOLUME_PILE_DEFAULTS };
   let volumePileAnalysis = { piles: [], byDate: new Map(), anchorByDate: new Map(), auditByDate: new Map() };
@@ -1041,7 +1030,7 @@
   let reviewDates = [];
   let skippedReviewCaseIds = new Set();
   let boughtReviewCaseIds = new Set();
-  let boughtReviewViews = new Map();
+  let boughtReviewViews = new Map(); // 买入或空仓后展示到的位置，回看时直接恢复
   let keepReviewPosition = false;
   let pendingCaseNotice = '';
   let calendarYear = 0;
@@ -1228,11 +1217,7 @@
       info.style.color = '#8994a2';
       return;
     }
-    const label = pile.kind !== 'profit-taking' ? '吸筹/承接倾向候选'
-      : pile.churnRuleMet && !pile.profitRuleMet ? '获利兑现倾向（天天放量）' : '获利兑现倾向';
-    const churnText = pile.churnDays >= 1 && Number.isFinite(pile.churnMedianRatio)
-      ? `每天放量 ${Math.round(pile.churnShare * pile.churnDays)}/${pile.churnDays}天、量/底噪中位 ${pile.churnMedianRatio.toFixed(1)}×`
-      : '';
+    const label = pile.kind === 'profit-taking' ? '获利兑现倾向' : '吸筹/承接倾向候选';
     const lowestRise = Number.isFinite(pile.lowestCloseToCenterPct)
       ? `${pile.lowestCloseToCenterPct.toFixed(1)}%`
       : '无法计算';
@@ -1260,7 +1245,7 @@
     const contrastText = Number.isFinite(pile.contrastRatio)
       ? `放/缩 top50均值比 ${pile.contrastRatio.toFixed(2)}× / 要求 ${pile.contrastThresholdMultiple.toFixed(1)}×`
       : '前置缩量段暂无可比成交量';
-    info.textContent = `${volumeActivityText()} | ${label}${pile.shortCluster ? '（短簇强峰）' : ''} ${pile.startDate}～${pile.endDate}（${pile.durationDays}个有效量日） | ${contrastText} | ${anchorText} | 高点 ${pile.highestCloseDate || '--'} 左侧最低收盘K ${pile.lowestCloseDate || '--'}（中间价 ${lowestMidText}）到中枢 ${lowestRise}；末根 ${pile.lastBarDate || '--'}（中间价 ${lastMidText}）对中枢 ${lastRise}；阈值 ${pile.profitThresholdPct}%${churnText ? ` | ${churnText}` : ''} | 加权中枢 ${pile.centerPrice.toFixed(2)}`;
+    info.textContent = `${volumeActivityText()} | ${label}${pile.shortCluster ? '（短簇强峰）' : ''} ${pile.startDate}～${pile.endDate}（${pile.durationDays}个有效量日） | ${contrastText} | ${anchorText} | 高点 ${pile.highestCloseDate || '--'} 左侧最低收盘K ${pile.lowestCloseDate || '--'}（中间价 ${lowestMidText}）到中枢 ${lowestRise}；末根 ${pile.lastBarDate || '--'}（中间价 ${lastMidText}）对中枢 ${lastRise}；阈值 ${pile.profitThresholdPct}% | 加权中枢 ${pile.centerPrice.toFixed(2)}`;
     info.title = `区间首K中间价 ${firstMidText}；最大量日 ${pile.peakDate} 中间价 ${peakMidText}；峰值/首根涨幅 ${peakVsFirst}（仅供参考）。${contrastText}${Number.isFinite(pile.pileTopHalfAverageVolume) && Number.isFinite(pile.contractionTopHalfAverageVolume)
       ? `（放量段 Top ${pile.pileTopHalfDayCount}/${pile.pileVolumeValidDays}日均值 ${pile.pileTopHalfAverageVolume.toFixed(0)}；前置缩量段 Top ${pile.contractionTopHalfDayCount}/${pile.contractionVolumeValidDays}日均值 ${pile.contractionTopHalfAverageVolume.toFixed(0)}；参考 ${pile.contrastReferenceStartDate}～${pile.contrastReferenceEndDate}）`
       : ''}`;
@@ -1355,10 +1340,6 @@
           : null,
         profitThresholdPct: pile.profitThresholdPct,
         profitRuleMet: pile.kind === 'profit-taking',
-        churnDays: pile.churnDays,
-        churnShare: exportNumber(pile.churnShare),
-        churnMedianRatio: exportNumber(pile.churnMedianRatio),
-        churnRuleMet: pile.churnRuleMet,
         shortCluster: pile.shortCluster,
         bars: pile.auditBars,
       })),
@@ -1726,7 +1707,7 @@
       lineWidth: 2,
       lineStyle: 2,
       axisLabelVisible: true,
-      title: `全局 Q${volumePileSettings.baselineQuantile} 底噪`,
+      title: '', // 不写文字，手机横屏会挡住成交量；只留虚线和右侧数值
     });
   }
 
@@ -1895,7 +1876,36 @@
     if (getBoughtCountForSignalDate(selectedReviewDate) >= 2) {
       document.getElementById('buyButton').disabled = true;
       document.getElementById('testStatus').innerText = '当日最多买入2只，请点击空仓逐只查看剩余候选';
+      return;
     }
+    const blocked = reviewBuyBlockedReason();
+    if (blocked) {
+      document.getElementById('buyButton').disabled = true;
+      document.getElementById('testStatus').innerText = `无法买入：${blocked}，请点击空仓查看后续 K 线`;
+    }
+  }
+
+  // 买入前先用一笔试算的交易跑账户：已满 4 只持仓或资金不够一手时返回原因。
+  // 买入价按首板收盘价的 1.1 倍估算，卖出日按最短持有（二板日次日）估算，避免误挡之后的交易。
+  function reviewBuyBlockedReason() {
+    if (!currentCaseHasFutureData || portfolioTrades.some(trade => trade.id === String(activeCase.id))) return '';
+    const signalIndex = fullData.findIndex(bar => chartDate(bar.date) >= activeCase.date);
+    if (signalIndex < 0 || chartDate(fullData[signalIndex].date) !== activeCase.date) return '';
+    const buyBar = fullData[signalIndex + 1];
+    if (!buyBar) return '';
+    const probe = {
+      id: '__probe',
+      order: Number.MAX_SAFE_INTEGER,
+      signalDate: reviewCaseDate(activeCase),
+      buyDate: chartDate(buyBar.date),
+      sellDate: chartDate((fullData[signalIndex + 2] || buyBar).date),
+      stockName: activeCase.stockName || activeCase.marketCode || activeCase.code,
+      buyPrice: Number(fullData[signalIndex].close) * 1.1,
+      sellPrice: Number(fullData[signalIndex].close) * 1.1,
+      sellTime: '',
+      prices: [],
+    };
+    return simulatePortfolio([...portfolioTrades, probe]).error || '';
   }
 
   function formatNewsDate(publishTime) {
@@ -2085,6 +2095,13 @@
     const panel = document.getElementById('newsPanel');
     panel.hidden = !panel.hidden;
     if (!panel.hidden) updateNewsDisplay();
+  }
+
+  // 固定显示首板日的自由流通市值（free-float.js 从问财获取），不随鼠标所指的 K 线变化
+  function formatFreeFloat() {
+    const value = Number(activeCase?.freeFloatCap);
+    if (!Number.isFinite(value) || value <= 0) return '自由流通: --';
+    return `自由流通: ${(value / 1e8).toFixed(value >= 1e10 ? 0 : 1)}亿`;
   }
 
   function formatAmount(amount) {
@@ -3365,6 +3382,7 @@
     if (last) {
       document.getElementById('codeVal').innerText = displayCodeLabel();
       document.getElementById('amountVal').innerText = formatAmount(last.amount);
+      document.getElementById('freeFloatVal').innerText = formatFreeFloat();
       updateChartWatermark();
       updateVolumePileInfo(String(last.date || '').split('T')[0]);
     }
@@ -3816,7 +3834,13 @@
           if (account.error) {
             skippedReviewCaseIds.add(String(requestedCase.id));
             updateReviewWheel();
-            finishCurrentCase(`未能买入：${account.error}。该候选已标记空仓`);
+            message = `未能买入：${account.error}。该候选已标记空仓，已展示后续 K 线`;
+            currentIndex = shown;
+            updateChartData();
+            finishCurrentCase(message);
+            renderNewsJudge();
+            boughtReviewViews.set(String(requestedCase.id), { shown, message, trade: null, detectionEndDate });
+            saveProgressCheckpoint();
             return;
           }
           portfolioTrades = proposed;
@@ -3921,14 +3945,18 @@
     if (!caseResolved) {
       const buyIndex = currentIndex - 1;
       const entryIndex = buyIndex + 1;
-      freezeVolumePileDetectionRange(activeCase);
+      const detectionEndDate = freezeVolumePileDetectionRange(activeCase);
       currentIndex = Math.min(entryIndex + 8, fullData.length);
       updateChartData();
       caseResolved = true;
-      if (isDailyReviewSource()) markReviewCaseSkipped();
+      const message = '空仓：已展示后续 K 线，再次点击进入下一题';
+      if (isDailyReviewSource()) {
+        markReviewCaseSkipped();
+        boughtReviewViews.set(String(activeCase.id), { shown: currentIndex, message, trade: null, detectionEndDate });
+      }
       document.getElementById('buyButton').disabled = true;
       document.getElementById('nextCaseButton').innerText = '继续';
-      document.getElementById('testStatus').innerText = '空仓：已展示后续 K 线，再次点击进入下一题';
+      document.getElementById('testStatus').innerText = message;
       renderNewsJudge();
       saveProgressCheckpoint();
       return;
