@@ -17,7 +17,15 @@
     minimumWidth: 3,
     strongPeakMultiple: 3.5,
     profitThresholdPct: 20,
+    // 「天天放大量」也算获利兑现：量堆区间（第一根有效量日到最后一根）至少 3 天，
+    // 成交量 ≥ 候选放量倍数 的天数占比 ≥ churnDayShare，且每天量/底噪的中位数 ≥ churnMedianMultiple。
+    // 主力拿着大仓位来回高抛低吸，而不是集中吸筹后缩量锁仓。2024–2026 一进二紧挨首板的这类量堆三年均值都为负。
+    // churnMedianMultiple 拉到 CHURN_OFF_MULTIPLE 即关闭这条规则。
+    churnDayShare: 90,
+    churnMedianMultiple: 3,
   });
+  const CHURN_OFF_MULTIPLE = 10;
+  const CHURN_MIN_DAYS = 3;
 
   function normalizeDate(value) {
     const text = String(value || '').trim().split('T')[0];
@@ -297,10 +305,23 @@
       const lastBarToCenterPct = Number.isFinite(centerPrice) && centerPrice > 0
         ? (lastBarMid / centerPrice - 1) * 100
         : NaN;
-      const profitTaking = (Number.isFinite(lowestToCenterPct)
+      const priceRuleMet = (Number.isFinite(lowestToCenterPct)
         && lowestToCenterPct >= settings.profitThresholdPct)
         || (Number.isFinite(lastBarToCenterPct)
           && lastBarToCenterPct >= settings.profitThresholdPct);
+      // 每天都算，包括区间中没放量的日子，单根巨量拉不高中位数
+      const churnRatios = points.slice(firstVolumeMember.index, endIndex + 1)
+        .map(point => point.ratio)
+        .filter(Number.isFinite);
+      const churnShare = churnRatios.length
+        ? churnRatios.filter(ratio => ratio >= settings.volumeMultiple).length / churnRatios.length
+        : NaN;
+      const churnMedianRatio = quantile(churnRatios, 0.5);
+      const churnRuleMet = settings.churnMedianMultiple < CHURN_OFF_MULTIPLE
+        && churnRatios.length >= CHURN_MIN_DAYS
+        && churnShare * 100 >= settings.churnDayShare
+        && churnMedianRatio >= settings.churnMedianMultiple;
+      const profitTaking = priceRuleMet || churnRuleMet;
       const pile = {
         startDate: points[startIndex].date,
         firstVolumeDate: firstVolumeMember.date,
@@ -328,7 +349,13 @@
         lastBarMidPrice: Number.isFinite(lastBarMid) ? lastBarMid : null,
         lastBarToCenterPct: Number.isFinite(lastBarToCenterPct) ? lastBarToCenterPct : null,
         profitThresholdPct: settings.profitThresholdPct,
-        profitRuleMet: profitTaking,
+        profitRuleMet: priceRuleMet,
+        churnDays: churnRatios.length,
+        churnShare,
+        churnMedianRatio,
+        churnDayShare: settings.churnDayShare,
+        churnMedianMultiple: settings.churnMedianMultiple,
+        churnRuleMet,
         shortCluster,
         auditBars,
         kind: profitTaking ? 'profit-taking' : 'accumulation-candidate',
@@ -447,6 +474,7 @@
   }
 
   return {
+    CHURN_OFF_MULTIPLE,
     DEFAULT_SETTINGS,
     barsBeforeSignal,
     computeActivity,
