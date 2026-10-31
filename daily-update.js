@@ -5,7 +5,8 @@
 //   1. 今日首板（turnover_json.js --today）
 //   2. T(X) 所在年份的一进二回测：追加 → 每日复盘 / 连板股票同步 → 小于 30 元 → 盈亏 → 新闻判断 → 写入每日复盘
 //      （turnover_json.js 起始 结束，见 review-pipeline.js）；1 月份同时处理上一年的文件（12 月末的票要到 1 月才算得出盈亏）
-//   3. 删除 R2 上 30 天前的覆盖备份（backups/）
+//   3. 连板情绪周期（limit-up-cycle.js，配了 R2 时 --upload）
+//   4. 删除 R2 上 30 天前的覆盖备份（backups/）
 // 默认读写 R2（本地 daily-review/ 同步一份）；--local 强制只用本地文件，不读写 R2。
 // 新闻判断要调用大模型超过 100 只时会先询问，--yes 不询问直接调用。
 //
@@ -64,6 +65,13 @@ async function main() {
   for (const item of years) {
     const [start, end] = await rangeOfYear(String(item));
     results.push([`一进二回测_${start}_${end}`, runTurnover([start, end, ...(options.yes ? ['--yes'] : [])])]);
+  }
+  try {
+    console.log('\n========== node limit-up-cycle.js ==========');
+    execFileSync(process.execPath, [path.join(ROOT, 'limit-up-cycle.js'), ...(r2Client ? ['--upload'] : [])], { stdio: 'inherit', cwd: ROOT });
+    results.push(['连板情绪周期', true]);
+  } catch {
+    results.push(['连板情绪周期', false]);
   }
   if (r2Client) {
     try {

@@ -150,4 +150,4 @@ async function finishReviewFile(start, end, { yes = false } = {}) {
   return failures;
 }
 
-module.exports = { finishReviewFile };
+module.exports = { finishReviewFile, ensureServer };

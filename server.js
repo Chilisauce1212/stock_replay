@@ -912,7 +912,7 @@ const THEME_MANUAL_COLUMNS = ['人工锚定新闻', '人工类别', '人工题�
 const THEME_SIDE_FILE = /\.(manual|review|review-diff)\.json$/i;
 const NEWS_CACHE_NAME = 'news-cache.json';
 // reports/ 里不是题材演绎表的数据文件，不出现在页面的文件下拉框里。
-const REPORT_AUX_FILES = new Set([NEWS_CACHE_NAME, 'news-llm.json', 'news-llm-fast.json', 'news-body-cache.json', '首板涨停原因.json', '全市场涨停原因.json']);
+const REPORT_AUX_FILES = new Set([NEWS_CACHE_NAME, 'news-llm.json', 'news-llm-fast.json', 'news-body-cache.json', '首板涨停原因.json', '全市场涨停原因.json', '自由流通市值.json', '连板情绪周期.json', '连板一字板.json']);
 
 function themeReportPaths(name) {
   const base = path.basename(String(name || '')).replace(/\.json$/i, '');
@@ -1039,6 +1039,20 @@ function readThemeManual(manualPath) {
     return {};
   }
 }
+
+// 连板情绪周期（limit-up-cycle.js 生成）：线上读 R2，本地读 reports/
+app.get('/api/limit-up-cycle', async (req, res) => {
+  try {
+    const file = path.join(REPORTS_DIR, '连板情绪周期.json');
+    const data = !USE_LOCAL_JSON && sharedR2Client
+      ? await readJson('limit-up-cycle/连板情绪周期.json')
+      : JSON.parse(fs.readFileSync(file, 'utf8'));
+    res.set('Cache-Control', 'no-store');
+    res.json({ status_code: 0, data });
+  } catch (error) {
+    res.status(500).json({ status_code: -1, msg: `读取连板情绪周期失败: ${error.message}` });
+  }
+});
 
 app.get('/api/theme-gantt', (req, res) => {
   const files = fs.existsSync(REPORTS_DIR)

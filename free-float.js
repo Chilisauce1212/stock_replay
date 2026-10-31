@@ -62,6 +62,18 @@ function groupByMonth(records) {
   return groups;
 }
 
+// 超时等临时错误重试一次，次数用完和要求登录直接抛出
+async function askWencai(page, question) {
+  try {
+    return await runWencaiQuestion(page, question);
+  } catch (error) {
+    if (/次数已用完|要求登录/.test(error.message)) throw error;
+    console.log(`（${error.message.split('\n')[0].slice(0, 60)}，重试一次）`);
+    await sleep(3000);
+    return runWencaiQuestion(page, question);
+  }
+}
+
 // 问一组；问财没认出问句（通常是组里有退市股）时对半拆开重问，单只也认不出就记为查不到。
 // 返回 false 表示达到查询次数上限。
 async function askGroup(page, group, cache, state) {
@@ -69,7 +81,7 @@ async function askGroup(page, group, cache, state) {
   const dates = group.map(record => record.date).sort();
   const codes = [...new Set(group.map(record => record.code))];
   const range = dates[0] === dates.at(-1) ? chineseDate(dates[0]) : `${chineseDate(dates[0])}至${chineseDate(dates.at(-1))}`;
-  const result = await runWencaiQuestion(page, `${codes.join(',')} ${range}每日自由流通市值`);
+  const result = await askWencai(page, `${codes.join(',')} ${range}每日自由流通市值`);
   state.used++;
   await sleep(2500);
   if (!result.rows.length) {
@@ -140,6 +152,7 @@ async function main() {
         writeJson(CACHE_FILE, cache);
       }
     } finally {
+      console.log(`本次问了 ${state.used} 次`);
       writeJson(CACHE_FILE, cache);
       await page.close().catch(() => {});
       await browser.close().catch(() => {});

@@ -1,0 +1,258 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>连板情绪周期</title>
+  <link rel="icon" href="data:,">
+  <script src="https://unpkg.com/lightweight-charts@5.2.1/dist/lightweight-charts.standalone.production.js"></script>
+  <style>
+    :root {
+      --bg: #0b0e11;
+      --panel: #161a1e;
+      --panel-2: #1e2329;
+      --line: #2b313a;
+      --grid: #1b2026;
+      --text: #cccccc;
+      --muted: #8994a2;
+      --height: #b88800;
+      --count: #5b8def;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font: 13px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      display: flex;
+      flex-direction: column;
+    }
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 6px 12px;
+      padding: 8px 16px;
+      background: var(--panel);
+      border-bottom: 1px solid var(--line);
+    }
+    .toolbar h1 { font-size: 16px; margin: 0; color: #eaecef; font-weight: 600; }
+    .toolbar button {
+      background: var(--panel-2);
+      color: var(--text);
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      padding: 3px 10px;
+      font: inherit;
+      cursor: pointer;
+    }
+    .toolbar button.active { border-color: var(--height); color: #eaecef; }
+    .toolbar label { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; }
+    .spacer { flex: 1; }
+    .legend { display: inline-flex; align-items: center; gap: 12px; color: var(--muted); }
+    .legend i { display: inline-block; vertical-align: middle; margin-right: 4px; }
+    .legend .line-key { width: 16px; height: 2px; background: var(--height); }
+    .legend .bar-key { width: 8px; height: 12px; border-radius: 2px 2px 0 0; background: var(--count); }
+    #detail {
+      padding: 6px 16px;
+      border-bottom: 1px solid var(--line);
+      min-height: 52px;
+      font-variant-numeric: tabular-nums;
+    }
+    #detail b { color: #eaecef; font-weight: 600; }
+    #detail .ladder { color: var(--muted); white-space: nowrap; overflow-x: auto; scrollbar-width: none; } /* 单行，移动十字线时图表高度不跳 */
+    #chart { flex: 1; min-height: 240px; position: relative; }
+    #status { padding: 24px 16px; color: var(--muted); }
+  </style>
+</head>
+<body>
+  <div class="toolbar">
+    <h1>连板情绪周期</h1>
+    <span id="ranges">
+      <button data-count="60">3月</button>
+      <button data-count="120" class="active">半年</button>
+      <button data-count="240">1年</button>
+      <button data-count="0">全部</button>
+    </span>
+    <label title="ST 涨跌幅只有 5%，连板高度和普通股不是一回事，默认不计入最高连板；涨停家数始终包含"><input id="withSt" type="checkbox">高度含 ST</label>
+    <span class="spacer"></span>
+    <span class="legend">
+      <span><i class="line-key"></i>最高连板</span>
+      <span><i class="bar-key"></i>涨停家数</span>
+    </span>
+  </div>
+  <div id="detail"></div>
+  <div id="chart"><div id="status">加载中…</div></div>
+
+  <script>
+    const FLAG_ST = 1;
+    const FLAG_ONE_WORD = 2;
+    const DEFAULT_VISIBLE = 120;
+    const PEAK_LABEL_WIDTH = 110; // 标名字的高点至少隔这么多像素，缩小时标得少，标签不会挤在一起
+    const MIN_PEAK_RADIUS = 5;
+    const SECOND_BOARD_LIST_LIMIT = 6;
+    const css = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+
+    let rawDays = [];
+    let days = [];
+    let chart, heightSeries, countSeries, markers;
+    let visibleCount = DEFAULT_VISIBLE;
+    let peakRadius = 0;
+
+    // 没有换手的连板（limit-up-cycle.js 判断）和 ST 只留在涨停家数里，不算高度
+    function computeDays(withSt) {
+      return rawDays.map(day => {
+        const stocks = day.b.filter(([, , flag]) => withSt || !(flag & FLAG_ST));
+        const counted = stocks.filter(([, , flag]) => !(flag & FLAG_ONE_WORD));
+        const height = counted.length ? counted[0][1] : 1;
+        return {
+          date: day.d,
+          total: day.t,
+          height,
+          leaders: counted.filter(([, streak]) => streak === height).map(([name]) => name),
+          counted,
+          oneWord: stocks.filter(([, , flag]) => flag & FLAG_ONE_WORD),
+          boardCount: day.b.length,
+          first: day.t - day.b.length,
+        };
+      });
+    }
+
+    function peakMarkers(radius) {
+      const result = [];
+      let lastPeak = -Infinity;
+      days.forEach((day, index) => {
+        if (day.height < 3 || index - lastPeak <= radius) return;
+        const around = days.slice(Math.max(0, index - radius), index + radius + 1);
+        if (day.height < Math.max(...around.map(item => item.height))) return;
+        lastPeak = index;
+        const names = day.leaders.length > 1 ? `${day.leaders[0]}等${day.leaders.length}只` : day.leaders[0];
+        result.push({ time: day.date, position: 'aboveBar', color: css('--text'), shape: 'circle', size: 0.5, text: `${day.height}板 ${names}` });
+      });
+      return result;
+    }
+
+    function renderDetail(day) {
+      const el = document.getElementById('detail');
+      if (!day) { el.textContent = ''; return; }
+      const byHeight = new Map();
+      for (const [name, streak] of day.counted) {
+        if (!byHeight.has(streak)) byHeight.set(streak, []);
+        byHeight.get(streak).push(name);
+      }
+      const ladder = [...byHeight.entries()].map(([streak, names]) => {
+        const shown = names.length > SECOND_BOARD_LIST_LIMIT ? `${names.length}只` : names.join('、');
+        return `${streak}板：${shown}`;
+      }).join('　');
+      const oneWord = day.oneWord.length ? `　无换手不计：${day.oneWord.map(([name, streak]) => `${name}${streak}板`).join('、')}` : '';
+      el.innerHTML = '';
+      const head = document.createElement('div');
+      head.innerHTML = `<b>${day.date}</b>　最高 <b>${day.height > 1 ? `${day.height}板` : '无连板'}</b>　涨停 <b>${day.total}</b> 家　首板 ${day.first}　连板 ${day.boardCount}`;
+      const rest = document.createElement('div');
+      rest.className = 'ladder';
+      rest.textContent = (ladder + oneWord) || '当天没有连板股';
+      el.append(head, rest);
+    }
+
+    function updateMarkers(force) {
+      const range = chart.timeScale().getVisibleLogicalRange();
+      const width = chart.timeScale().width();
+      if (!range || !width) return;
+      const radius = Math.max(MIN_PEAK_RADIUS, Math.ceil(PEAK_LABEL_WIDTH * (range.to - range.from) / width));
+      if (!force && radius === peakRadius) return;
+      peakRadius = radius;
+      markers.setMarkers(peakMarkers(radius));
+    }
+
+    function applyRange() {
+      const total = days.length;
+      if (!total) return;
+      if (visibleCount === 0 || visibleCount >= total) chart.timeScale().fitContent();
+      else chart.timeScale().setVisibleLogicalRange({ from: total - visibleCount - 0.5, to: total + 1 });
+    }
+
+    function refresh() {
+      days = computeDays(document.getElementById('withSt').checked);
+      heightSeries.setData(days.map(day => ({ time: day.date, value: day.height })));
+      countSeries.setData(days.map(day => ({ time: day.date, value: day.total })));
+      updateMarkers(true);
+      renderDetail(days.at(-1));
+    }
+
+    function createChart() {
+      const container = document.getElementById('chart');
+      container.innerHTML = '';
+      chart = LightweightCharts.createChart(container, {
+        autoSize: true,
+        layout: {
+          background: { color: css('--bg') },
+          textColor: css('--muted'),
+          fontSize: 11,
+          panes: { separatorColor: css('--line') },
+          attributionLogo: false,
+        },
+        localization: { locale: 'zh-CN', dateFormat: 'yyyy-MM-dd' },
+        grid: { vertLines: { visible: false }, horzLines: { color: css('--grid') } },
+        rightPriceScale: { borderColor: css('--line') },
+        timeScale: { borderColor: css('--line'), rightOffset: 2, minBarSpacing: 1 },
+        crosshair: { mode: LightweightCharts.CrosshairMode.Magnet },
+        handleScroll: { mouseWheel: true, pressedMouseMove: true, horzTouchDrag: true, vertTouchDrag: false },
+        handleScale: { mouseWheel: true, pinch: true, axisPressedMouseMove: { time: true, price: false } },
+      });
+      const integer = { type: 'custom', minMove: 1, formatter: value => String(Math.round(value)) };
+      heightSeries = chart.addSeries(LightweightCharts.LineSeries, {
+        color: css('--height'),
+        lineWidth: 2,
+        pointMarkersVisible: true,
+        pointMarkersRadius: 2,
+        crosshairMarkerRadius: 4,
+        lastValueVisible: true,
+        priceLineVisible: false,
+        priceFormat: integer,
+        autoscaleInfoProvider: original => {
+          const info = original();
+          return info && { priceRange: { minValue: 1, maxValue: info.priceRange.maxValue }, margins: { above: 40, below: 6 } };
+        },
+      }, 0);
+      countSeries = chart.addSeries(LightweightCharts.HistogramSeries, {
+        color: css('--count'),
+        lastValueVisible: true,
+        priceLineVisible: false,
+        priceFormat: integer,
+      }, 1);
+      const panes = chart.panes();
+      panes[0].setStretchFactor(3);
+      panes[1].setStretchFactor(2);
+      markers = LightweightCharts.createSeriesMarkers(heightSeries, []);
+      chart.timeScale().subscribeVisibleLogicalRangeChange(() => updateMarkers(false));
+      chart.subscribeCrosshairMove(param => {
+        const time = param.time;
+        renderDetail(time ? days.find(day => day.date === time) : days.at(-1));
+      });
+    }
+
+    async function start() {
+      try {
+        const payload = await (await fetch('/api/limit-up-cycle')).json();
+        if (payload.status_code !== 0) throw new Error(payload.msg);
+        rawDays = payload.data;
+        createChart();
+        refresh();
+        applyRange();
+      } catch (error) {
+        document.getElementById('status').textContent = `加载失败：${error.message}`;
+      }
+    }
+
+    document.getElementById('ranges').addEventListener('click', event => {
+      const button = event.target.closest('button');
+      if (!button) return;
+      visibleCount = Number(button.dataset.count);
+      document.querySelectorAll('#ranges button').forEach(item => item.classList.toggle('active', item === button));
+      applyRange();
+    });
+    document.getElementById('withSt').addEventListener('change', refresh);
+    start();
+  </script>
+</body>
+</html>
