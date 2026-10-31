@@ -746,6 +746,7 @@ npm run limit-up-cycle -- [--upload]
 npm run free-float                        # 默认最多问 20 次问财
 npm run free-float -- --max-queries 90    # 补历史时加大次数
 npm run free-float -- --upload            # 同时更新 R2 的 daily-review/
+npm run free-float -- --today --upload    # 只处理今日首板，有票没拿到时退出码为 1
 ```
 
 给 `daily-review/` 下今日首板和一进二回测文件的每条记录写 `freeFloatCap`（首板当天的自由流通市值，元），页面固定显示在成交额右边，不随鼠标所指的 K 线变化。
@@ -753,3 +754,6 @@ npm run free-float -- --upload            # 同时更新 R2 的 daily-review/
 - 通达信只有流通股本（含持股 5% 以上的大股东），没有自由流通股，所以用问财（Chrome 9222 调试端口，需要登录；账号每天约 100 次，和涨停原因共用）。
 - 按月分组，每问最多 9 个代码，一次拿到区间内每天的值；从最近的日期往前查，结果缓存在 `reports/自由流通市值.json`，查过的跳过。
 - `npm run turnover` / `npm run daily-update` 会自动跑（第 3 节第 5 步），每天新增约 4 问；历史记录每天顺带补 20 问左右。
+- `turnover_json.js --today` 覆盖今日首板后也会跑（`--today`），不动历史积压。次数用完、没登录或有票没拿到时，名单照样写好，但退出码为 1，`daily-update` 的汇总里今日首板显示 ✗。
+- 最近 7 天查不到的会继续重查（收盘后不久问财可能还没有当天数据），更早的查不到就不再问。
+- `--only-cases` 只追加回测和同步，不跑这一步。

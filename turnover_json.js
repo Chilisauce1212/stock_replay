@@ -187,6 +187,13 @@ async function runTodayFirstBoard() {
   const filename = path.join(DAILY_REVIEW_DIR, '今日首板.json');
   await saveJson(records, filename, { alsoLocal: true, allowShrink: true });
   console.log(`>>> 今日首板（${date}）：${records.length} 只，已覆盖 ${r2Client ? 'R2 daily-review/今日首板.json 和本地' : '本地'} ${path.relative(__dirname, filename)}`);
+  // 上面整体覆盖了文件，接着补上自由流通市值（问财）；失败时名单已经写好，只报错，退出码为 1
+  try {
+    execFileSync(process.execPath, [path.join(__dirname, 'free-float.js'), '--today', ...(r2Client ? ['--upload'] : [])], { stdio: 'inherit' });
+  } catch {
+    console.error('今日首板名单已写好，但自由流通市值没补全（原因见上），处理后运行 npm run free-float -- --today --upload');
+    process.exitCode = 1;
+  }
 }
 
 // 用法: node turnover_json.js 起始 结束 [--only-cases] [--yes]

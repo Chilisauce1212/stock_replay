@@ -7,8 +7,9 @@
 // 按月分组，问句里列出当月要查的股票代码（每问最多 9 个），一次拿到区间内每天的自由流通市值。
 // 账号每天约 100 次查询限额，和涨停原因共用；从最近的日期往前查，已查过的跳过，每天跑一点就能慢慢补齐历史。
 //
-// 用法: npm run free-float -- [--max-queries 20] [--upload]
+// 用法: npm run free-float -- [--max-queries 20] [--upload] [--today]
 //   --upload：同时更新 R2 的 daily-review/ 同名文件（读 R2 上的版本、只改 freeFloatCap 字段再写回）
+//   --today：只处理今日首板，不动历史积压；有票没拿到时退出码为 1（turnover_json.js --today 会调用）
 require('dotenv').config({ quiet: true });
 
 const fs = require('fs');
@@ -20,6 +21,8 @@ const ROOT = __dirname;
 const REVIEW_DIR = path.join(ROOT, 'daily-review');
 const CACHE_FILE = path.join(ROOT, 'reports', '自由流通市值.json');
 const DEFAULT_MAX_QUERIES = 20;
+const RECENT_RETRY_DAYS = 7; // 这么多天内查不到的继续重查：收盘后当天的数据可能还没出来
+const TODAY_FILE = '今日首板.json';
 const REVIEW_FILE = /^(今日首板|一进二回测_\d{8}_\d{8})\.json$/;
 const sleep = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
 const keyOf = record => `${record.code}|${record.date}`;
@@ -31,10 +34,11 @@ function writeJson(file, data, pretty) {
 }
 
 function parseArgs(argv) {
-  const options = { maxQueries: DEFAULT_MAX_QUERIES, upload: false };
+  const options = { maxQueries: DEFAULT_MAX_QUERIES, upload: false, today: false };
   for (let index = 0; index < argv.length; index++) {
     const argument = argv[index];
     if (argument === '--upload') options.upload = true;
+    else if (argument === '--today') options.today = true;
     else if (argument === '--max-queries') options.maxQueries = Number(argv[++index]);
     else if (argument === '--help' || argument === '-h') options.help = true;
     else throw new Error(`未知参数: ${argument}`);
@@ -127,20 +131,23 @@ function applyCaps(records, cache) {
 async function main() {
   const options = parseArgs(process.argv.slice(2));
   if (options.help) {
-    console.log(fs.readFileSync(__filename, 'utf8').split('\n').slice(3, 12).map(line => line.replace(/^\/\/ ?/, '')).join('\n'));
+    console.log(fs.readFileSync(__filename, 'utf8').split('\n').slice(3, 13).map(line => line.replace(/^\/\/ ?/, '')).join('\n'));
     return;
   }
   const r2 = options.upload ? require('./r2-storage') : null;
   if (r2 && !r2.r2Client) throw new Error('R2 未配置，不能 --upload');
 
-  const files = fs.readdirSync(REVIEW_DIR).filter(file => REVIEW_FILE.test(file));
+  const files = fs.readdirSync(REVIEW_DIR).filter(file => (options.today ? file === TODAY_FILE : REVIEW_FILE.test(file)));
   const records = files.flatMap(file => readJson(path.join(REVIEW_DIR, file), []));
+  const retryFrom = new Date(Date.now() + 8 * 3600_000 - RECENT_RETRY_DAYS * 86400_000).toISOString().slice(0, 10);
+  const needsQuery = record => !(keyOf(record) in cache) || (cache[keyOf(record)] === null && record.date >= retryFrom);
   const cache = readJson(CACHE_FILE, {});
   // 换了机器、本地没有缓存时，记录里已有的值（从 R2 同步下来的）直接用，不再问
   for (const record of records) if (Number.isFinite(record.freeFloatCap) && !(keyOf(record) in cache)) cache[keyOf(record)] = record.freeFloatCap;
-  const pending = [...new Map(records.filter(record => !(keyOf(record) in cache)).map(record => [keyOf(record), record])).values()];
+  const pending = [...new Map(records.filter(needsQuery).map(record => [keyOf(record), record])).values()];
   console.log(`记录 ${records.length} 条，待查自由流通市值 ${pending.length} 条，本次最多问 ${options.maxQueries} 次`);
 
+  let failure = null;
   if (pending.length && options.maxQueries) {
     await ensureChrome();
     const browser = await chromium.connectOverCDP(DEBUG_URL);
@@ -151,13 +158,15 @@ async function main() {
         if (!(await askGroup(page, group, cache, state))) break;
         writeJson(CACHE_FILE, cache);
       }
+    } catch (error) {
+      failure = error; // 次数用完等情况：已查到的照样写进文件，最后再报错
     } finally {
       console.log(`本次问了 ${state.used} 次`);
       writeJson(CACHE_FILE, cache);
       await page.close().catch(() => {});
       await browser.close().catch(() => {});
     }
-    const left = records.filter(record => !(keyOf(record) in cache)).length;
+    const left = records.filter(needsQuery).length;
     console.log(`问财用了 ${state.used} 次，还剩 ${left} 条没查${left ? '（明天继续，或换账号后加大 --max-queries）' : ''}`);
   }
 
@@ -176,6 +185,11 @@ async function main() {
         console.log(`  已更新 R2 daily-review/${file}（${remoteChanged} 条）`);
       }
     }
+  }
+  if (failure) throw failure;
+  if (options.today) {
+    const missing = records.filter(record => !Number.isFinite(cache[keyOf(record)]));
+    if (missing.length) throw new Error(`今日首板 ${missing.length}/${records.length} 只没拿到：${missing.slice(0, 10).map(record => record.stockName).join('、')}。收盘后不久问财可能还没有当天数据，稍后重跑`);
   }
 }
 
