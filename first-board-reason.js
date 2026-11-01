@@ -23,7 +23,9 @@ const { chromium } = require('playwright');
 const DEFAULT_INPUT = path.join(__dirname, 'test-cases', '四连板及以上.json');
 const OUTPUT_FILE = path.join(__dirname, 'reports', '首板涨停原因.json');
 const POOL_URL = 'https://data.10jqka.com.cn/dataapi/limit_up/limit_up_pool';
-const DEBUG_URL = 'http://127.0.0.1:9222';
+// 9222 被别的程序占用时，设 WENCAI_DEBUG_PORT 用另一个端口，会单独开一个 Chrome（登录状态也分开）
+const DEBUG_PORT = process.env.WENCAI_DEBUG_PORT || '9222';
+const DEBUG_URL = `http://127.0.0.1:${DEBUG_PORT}`;
 const DEFAULT_MAX_QUERIES = 90;
 // 免费账号一个问句最多 10 个条件，每个股票代码算一个条件，加上日期区间，最多放 9 个代码。
 const MAX_CODES_PER_QUESTION = 9;
@@ -140,7 +142,8 @@ async function ensureChrome() {
   } catch { /* Chrome 尚未启动 */ }
   const chromePath = process.env.CHROME_PATH || 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
   if (!fs.existsSync(chromePath)) throw new Error(`找不到 Chrome: ${chromePath}`);
-  spawn(chromePath, ['--remote-debugging-port=9222', '--user-data-dir=C:\\chrome_temp'], { detached: true, stdio: 'ignore' }).unref();
+  const userDataDir = DEBUG_PORT === '9222' ? 'C:\\chrome_temp' : `C:\\chrome_temp_${DEBUG_PORT}`;
+  spawn(chromePath, [`--remote-debugging-port=${DEBUG_PORT}`, `--user-data-dir=${userDataDir}`], { detached: true, stdio: 'ignore' }).unref();
   for (let attempt = 0; attempt < 30; attempt++) {
     try {
       await fetch(`${DEBUG_URL}/json/version`, { signal: AbortSignal.timeout(1000) });

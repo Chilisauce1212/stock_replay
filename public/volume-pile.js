@@ -1,4 +1,4 @@
-// 量堆识别算法：图表（public/index.html）和 volume-pile-report.js 共用这一份实现，
+// 量堆识别算法：图表（public/replay.html）和 volume-pile-report.js 共用这一份实现，
 // 参数默认值也只在这里定义，避免两边各改各的。
 (function (root, factory) {
   const api = factory();

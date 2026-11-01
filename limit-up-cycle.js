@@ -5,8 +5,9 @@
 // 连板数用全市场涨停名单连续上榜的天数算（stock-pick.js 的 buildDays），不含北交所（涨停池接口查不到，历史口径才一致）。
 // 没有换手的连板买不到、不反映情绪，整段不计入高度：二板到倒数第二板之间至少有一个换手板（非一字），这段连板才按完整天数算；
 // 第一板不看；只有最后一板换手也不算（如上纬新材 2025 年 7 月那段）。两连板一共就两个板，都算。整段一起判断，还在走的连板按目前的板数判断。
-// 涨停名单里每只股票只有一个名称（当前名称），看不出当时是不是 ST，所以 ST 按当天涨幅判断：涨幅不到 6% 就涨停的是 5% 涨跌幅的票。
-// 一字板（开高低收相同）和涨幅都要看日 K，结果缓存到 reports/连板一字板.json，每天只查新增的。K 线从本地网站服务取，没开会临时启动。
+// 当时是 ST 的涨停（涨幅 5% 左右）不算进涨停家数和连板；当时还不是 ST 的（涨幅 10% 左右）照算，哪怕现在名称带 ST。
+// 涨停名单里每只股票只有一个名称（当前名称），看不出当时的状态，所以按当天涨幅判断：涨幅不到 6% 就涨停的算 ST；查不到 K 线的（多是退市股）才看名称。
+// 一字板（开高低收相同）和涨幅都要看日 K，每只涨停都要查，结果缓存到 reports/连板一字板.json，每天只查新增的。K 线从本地网站服务取，没开会临时启动。
 //
 // 用法: npm run limit-up-cycle -- [--upload]
 //   --upload：同时写到 R2 的 limit-up-cycle/连板情绪周期.json，线上页面读这份
@@ -22,10 +23,9 @@ const ROOT = __dirname;
 const OUTPUT_FILE = path.join(ROOT, 'reports', '连板情绪周期.json');
 const ONE_WORD_FILE = path.join(ROOT, 'reports', '连板一字板.json');
 const R2_KEY = 'limit-up-cycle/连板情绪周期.json';
-const WORKERS = 6;
+const WORKERS = 10;
 const FIRST_DAY = '2024-01-01'; // 名单从 2023-12-18 开始，头几天的连板数不完整，不展示
 const BEIJING_DAY = () => new Date(Date.now() + 8 * 3600_000).toISOString().slice(0, 10);
-const FLAG_ST = 1;
 const FLAG_ONE_WORD = 2;
 const ST_MAX_PCT = 6;
 const isBeijingExchange = code => /^[489]/.test(code);
@@ -114,12 +114,14 @@ function buildCycle(byDay, days, cache) {
   }
   return days.flatMap(date => {
     if (date < FIRST_DAY) return [];
-    const stocks = stocksOf(date);
+    const isSt = item => {
+      const pct = cache[`${item.code}|${date}`]?.pct;
+      return Number.isFinite(pct) ? pct < ST_MAX_PCT : /ST/i.test(item.name);
+    };
+    const stocks = stocksOf(date).filter(item => !isSt(item));
     const boards = stocks.filter(item => item.streak >= 2).map(item => {
-      const bar = cache[`${item.code}|${date}`];
-      const isSt = Number.isFinite(bar?.pct) && bar.pct < ST_MAX_PCT;
       const noTurnover = !hasTurnover(chains.get(chainKey(date, item, days)));
-      return [item.name, item.streak, (isSt ? FLAG_ST : 0) + (noTurnover ? FLAG_ONE_WORD : 0)];
+      return [item.name, item.streak, noTurnover ? FLAG_ONE_WORD : 0];
     });
     boards.sort((left, right) => right[1] - left[1]);
     return [{ d: date, t: stocks.length, b: boards }];
@@ -129,7 +131,7 @@ function buildCycle(byDay, days, cache) {
 async function main() {
   const argv = process.argv.slice(2);
   if (argv.includes('--help') || argv.includes('-h')) {
-    console.log(fs.readFileSync(__filename, 'utf8').split('\n').slice(3, 11).map(line => line.replace(/^\/\/ ?/, '')).join('\n'));
+    console.log(fs.readFileSync(__filename, 'utf8').split('\n').slice(3, 12).map(line => line.replace(/^\/\/ ?/, '')).join('\n'));
     return;
   }
   const unknown = argv.find(argument => argument !== '--upload');
@@ -138,7 +140,7 @@ async function main() {
   if (r2 && !r2.r2Client) throw new Error('R2 未配置，不能 --upload');
 
   const { byDay, days } = buildDays(await updateLimitUpList(BEIJING_DAY()), makeTagger());
-  const rows = days.flatMap(date => [...byDay.get(date).values()].filter(item => item.streak >= 2 && !isBeijingExchange(item.code)));
+  const rows = days.flatMap(date => [...byDay.get(date).values()].filter(item => !isBeijingExchange(item.code)));
   const cache = fs.existsSync(ONE_WORD_FILE) ? JSON.parse(fs.readFileSync(ONE_WORD_FILE, 'utf8')) : {};
   if (rows.some(({ code, date }) => !(`${code}|${date}` in cache))) {
     const baseUrl = `http://127.0.0.1:${process.env.PORT || 3000}`;
@@ -153,7 +155,7 @@ async function main() {
   const missing = rows.filter(({ code, date }) => !(`${code}|${date}` in cache)).length;
   const cycle = buildCycle(byDay, days, cache);
   writeJson(OUTPUT_FILE, cycle);
-  console.log(`写入 ${path.relative(ROOT, OUTPUT_FILE)}：${cycle.length} 天，${cycle[0].d} ~ ${cycle.at(-1).d}；查不到 K 线按非一字处理 ${missing} 条`);
+  console.log(`写入 ${path.relative(ROOT, OUTPUT_FILE)}：${cycle.length} 天，${cycle[0].d} ~ ${cycle.at(-1).d}；查不到 K 线 ${missing} 条（按非一字、看名称判断 ST）`);
   if (r2) {
     await r2.writeJson(R2_KEY, cycle);
     console.log(`已更新 R2 ${R2_KEY}`);

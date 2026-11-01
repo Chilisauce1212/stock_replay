@@ -63,6 +63,8 @@
     #detail .ladder { color: var(--muted); white-space: nowrap; overflow-x: auto; scrollbar-width: none; } /* 单行，移动十字线时图表高度不跳 */
     #chart { flex: 1; min-height: 240px; position: relative; }
     #status { padding: 24px 16px; color: var(--muted); }
+    .home { color: var(--muted); text-decoration: none; }
+    .home:hover { color: var(--text); }
   </style>
 </head>
 <body>
@@ -74,7 +76,7 @@
       <button data-count="240">1年</button>
       <button data-count="0">全部</button>
     </span>
-    <label title="ST 涨跌幅只有 5%，连板高度和普通股不是一回事，默认不计入最高连板；涨停家数始终包含"><input id="withSt" type="checkbox">高度含 ST</label>
+    <a class="home" href="/">首页</a>
     <span class="spacer"></span>
     <span class="legend">
       <span><i class="line-key"></i>最高连板</span>
@@ -85,7 +87,6 @@
   <div id="chart"><div id="status">加载中…</div></div>
 
   <script>
-    const FLAG_ST = 1;
     const FLAG_ONE_WORD = 2;
     const DEFAULT_VISIBLE = 120;
     const PEAK_LABEL_WIDTH = 110; // 标名字的高点至少隔这么多像素，缩小时标得少，标签不会挤在一起
@@ -99,10 +100,10 @@
     let visibleCount = DEFAULT_VISIBLE;
     let peakRadius = 0;
 
-    // 没有换手的连板（limit-up-cycle.js 判断）和 ST 只留在涨停家数里，不算高度
-    function computeDays(withSt) {
+    // 没有换手的连板（limit-up-cycle.js 判断）只留在涨停家数里，不算高度；当时是 ST 的数据里已经去掉
+    function computeDays() {
       return rawDays.map(day => {
-        const stocks = day.b.filter(([, , flag]) => withSt || !(flag & FLAG_ST));
+        const stocks = day.b;
         const counted = stocks.filter(([, , flag]) => !(flag & FLAG_ONE_WORD));
         const height = counted.length ? counted[0][1] : 1;
         return {
@@ -172,7 +173,7 @@
     }
 
     function refresh() {
-      days = computeDays(document.getElementById('withSt').checked);
+      days = computeDays();
       heightSeries.setData(days.map(day => ({ time: day.date, value: day.height })));
       countSeries.setData(days.map(day => ({ time: day.date, value: day.total })));
       updateMarkers(true);
@@ -251,7 +252,6 @@
       document.querySelectorAll('#ranges button').forEach(item => item.classList.toggle('active', item === button));
       applyRange();
     });
-    document.getElementById('withSt').addEventListener('change', refresh);
     start();
   </script>
 </body>
