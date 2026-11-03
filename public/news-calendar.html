@@ -42,8 +42,27 @@
       white-space: nowrap;
     }
     .btn:disabled { opacity: .4; cursor: default; }
-    #monthLabel { min-width: 88px; text-align: center; color: #eaecef; font-variant-numeric: tabular-nums; }
-    #calendar { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 4px; }
+    header.top { position: relative; }
+    #dateButton { min-width: 120px; color: #eaecef; font-variant-numeric: tabular-nums; }
+    #calendarPop {
+      position: absolute;
+      z-index: 30;
+      top: calc(100% - 4px);
+      left: 0;
+      width: min(420px, calc(100vw - 32px));
+      padding: 9px;
+      box-sizing: border-box;
+      border: 1px solid #526176;
+      border-radius: 4px;
+      background: #111419;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+    }
+    #calendarPop[hidden] { display: none; }
+    .cal-head { display: flex; gap: 6px; align-items: center; margin-bottom: 8px; }
+    .cal-head select { flex: 1 1 0; min-width: 0; padding: 4px 6px; background: var(--panel-2); color: var(--text); border: 1px solid var(--line); border-radius: 4px; }
+    .cal-head .btn { padding: 2px 9px; }
+    #calendar { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 3px; }
+    #calendar .cell { min-height: 40px; padding: 3px 5px; }
     .weekday { text-align: center; color: var(--muted); font-size: 12px; }
     .cell {
       position: relative;
@@ -77,12 +96,22 @@
     .chip.active { border-color: var(--accent); color: #eaecef; }
     .chip small { color: var(--muted); }
     .chip em { font-style: normal; color: var(--accent); font-size: 12px; }
+    .chip .ev { color: #5fd38d; font-size: 12px; }
+    .chip.static { opacity: 0.5; }
+    .tag.ev { border-color: #2e9e78; color: #5fd38d; }
+    .tag.follow { border-color: #6b7280; color: var(--muted); }
+    .evidence { margin: 4px 0 6px; font-size: 13px; }
+    .evidence div { padding: 1px 0; }
+    .evidence .yes { color: #5fd38d; }
+    .evidence .no { color: var(--muted); }
+    .theme-day .ok { color: #5fd38d; }
     #themePanel { background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 8px 10px; margin-bottom: 8px; }
     #themePanel h2 { font-size: 14px; margin: 0 0 6px; color: #eaecef; font-weight: 600; }
     #themePanel h2 small { color: var(--muted); font-weight: 400; }
     .bars { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 3px; align-items: end; height: 76px; margin-bottom: 8px; }
     .bar { display: flex; flex-direction: column; justify-content: flex-end; height: 100%; background: none; border: 0; padding: 0; color: var(--muted); cursor: pointer; font-size: 11px; line-height: 1.2; font-variant-numeric: tabular-nums; }
-    .bar i { display: block; background: var(--count); border-radius: 2px 2px 0 0; min-height: 1px; }
+    .bar i { position: relative; display: block; background: var(--count); border-radius: 2px 2px 0 0; min-height: 1px; }
+    .bar i b { position: absolute; left: 0; right: 0; bottom: 0; background: #2e9e78; border-radius: 2px 2px 0 0; }
     .bar.selected { color: var(--accent); }
     .theme-day { font-size: 13px; padding: 2px 0; }
     .theme-day button { background: none; border: 0; padding: 0; color: var(--muted); cursor: pointer; font: inherit; font-variant-numeric: tabular-nums; }
@@ -169,14 +198,20 @@
   <main>
     <header class="top">
       <h1>新闻日历</h1>
-      <button class="btn" id="prevMonth" aria-label="上个月">◀</button>
-      <span id="monthLabel"></span>
-      <button class="btn" id="nextMonth" aria-label="下个月">▶</button>
+      <button class="btn" id="dateButton" aria-haspopup="true" aria-expanded="false" title="选择日期"></button>
       <button class="btn" id="prevDay" title="键盘 ←">前一天</button>
       <button class="btn" id="nextDay" title="键盘 →">后一天</button>
       <a href="/" style="margin-left:auto">首页</a>
+      <div id="calendarPop" hidden>
+        <div class="cal-head">
+          <button class="btn" id="prevMonth" type="button" aria-label="上个月">‹</button>
+          <select id="calendarYear" aria-label="年"></select>
+          <select id="calendarMonth" aria-label="月"></select>
+          <button class="btn" id="nextMonth" type="button" aria-label="下个月">›</button>
+        </div>
+        <div id="calendar"></div>
+      </div>
     </header>
-    <div id="calendar"></div>
     <div id="dayHead"></div>
     <div id="themes"></div>
     <div id="themePanel" hidden></div>
@@ -184,6 +219,7 @@
       <label title="只显示有重要新闻的票，展开后也只列重要新闻。没跑过新闻判断的票不显示"><input id="onlyImportant" type="checkbox">只看重要新闻</label>
       <label title="隐藏新闻条数为 0 的票。没跑过新闻判断的票还不知道有没有新闻，会保留"><input id="hideNoNews" type="checkbox">隐藏无新闻</label>
       <label title="一只票有几个概念就出现在几组里"><input id="byTheme" type="checkbox">按题材分组</label>
+      <label title="题材标签只显示当天至少有一只票用自己的新闻佐证了这个涨停原因的；题材走势里只数和只列有佐证的票。没跑过佐证判断的日期不受影响"><input id="onlyEvidenced" type="checkbox">只看有佐证</label>
       <input id="search" type="search" placeholder="搜索名称 / 代码 / 原因" aria-label="搜索">
       <button class="btn" id="expandAll">全部展开</button>
       <span id="count"></span>
@@ -223,6 +259,7 @@
     const el = id => document.getElementById(id);
     const dayOf = date => loaded.get(date.slice(0, 7))?.days.find(day => day.d === date);
     const newsOf = (stock, date) => loaded.get(date.slice(0, 7))?.news[`${stock.c}|${stock.fd || date}`] || null;
+    const evidenceOf = (stock, date) => loaded.get(date.slice(0, 7))?.evidence?.[`${stock.c}|${stock.fd || date}`] || null;
     const hasImportant = stock => stock.v === '强类' || stock.v === '仅弱类';
 
     async function loadMonth(month) {
@@ -235,7 +272,11 @@
 
     function renderCalendar() {
       const month = months[monthIndex];
-      el('monthLabel').textContent = month;
+      const years = [...new Set(months.map(item => item.slice(0, 4)))];
+      el('calendarYear').innerHTML = years.map(year => `<option value="${year}"${year === month.slice(0, 4) ? ' selected' : ''}>${year}年</option>`).join('');
+      el('calendarMonth').innerHTML = months.filter(item => item.startsWith(month.slice(0, 4)))
+        .map(item => `<option value="${item}"${item === month ? ' selected' : ''}>${Number(item.slice(5))}月</option>`).join('');
+      el('dateButton').textContent = `${selectedDate || month} ▾`;
       el('prevMonth').disabled = monthIndex === 0;
       el('nextMonth').disabled = monthIndex === months.length - 1;
       const days = new Map(loaded.get(month).days.map(day => [day.d, day]));
@@ -275,13 +316,19 @@
 
     function renderHead(day) {
       const judged = day.stocks.filter(stock => stock.v !== null).length;
-      el('dayHead').innerHTML = `<b>${day.d}</b><span>涨停 ${day.t} 家</span><span>首板 ${day.first}</span><span>连板 ${day.t - day.first}</span><span>最高 ${day.top} 板</span><span>有重要新闻 ${day.imp}</span><span style="color:var(--muted)">已判断新闻 ${judged}/${day.t}</span>`;
-      const shown = day.themes.filter(theme => showAllThemes || theme.c > 1 || theme.n === activeTheme);
-      const single = day.themes.filter(theme => theme.c === 1).length;
+      el('dayHead').innerHTML = `<b>${day.d}</b><span>涨停 ${day.t} 家</span><span>首板 ${day.first}</span><span>连板 ${day.t - day.first}</span><span>最高 ${day.top} 板</span><span>有重要新闻 ${day.imp}</span><span style="color:var(--muted)">已判断新闻 ${judged}/${day.t}</span>${day.evd ? `<span style="color:var(--muted)" title="首板涨停原因有没有自己三天新闻佐证，已判断的票数">已判断佐证 ${day.evd}/${day.t}</span>` : ''}`;
+      const hasEvidence = day.evd > 0;
+      const visible = day.themes.filter(theme => !(hasEvidence && el('onlyEvidenced').checked && !theme.e) || theme.n === activeTheme);
+      const shown = visible.filter(theme => showAllThemes || theme.c > 1 || theme.n === activeTheme);
+      const single = visible.filter(theme => theme.c === 1).length;
       el('themes').innerHTML = shown.map(theme => {
         const isNew = theme.tr.length && theme.tr.every(count => count === 0);
-        const title = `涨停原因含这个概念的都算。近 ${theme.tr.length} 个交易日每天家数：${theme.tr.join(' → ') || '无'}，今天 ${theme.c}${theme.l ? `，其中连板 ${theme.l} 只` : ''}`;
-        return `<button class="chip${theme.n === activeTheme ? ' active' : ''}" data-theme="${escapeAttr(theme.n)}" title="${escapeAttr(title)}">${escapeHtml(theme.n)} ${theme.c}${theme.l ? `<small>（连${theme.l}）</small>` : ''}${isNew ? ' <em>新</em>' : ''}</button>`;
+        // 发动：今天有佐证，前面几个交易日都没有佐证
+        const isStart = hasEvidence && theme.e > 0 && (theme.te || []).every(count => count === 0);
+        const evidenceText = hasEvidence ? `；其中用自己新闻佐证了这个涨停原因的 ${theme.e} 家，近 ${(theme.te || []).length} 个交易日每天有佐证的家数：${(theme.te || []).join(' → ') || '无'}` : '';
+        const title = `涨停原因含这个概念的都算。近 ${theme.tr.length} 个交易日每天家数：${theme.tr.join(' → ') || '无'}，今天 ${theme.c}${theme.l ? `，其中连板 ${theme.l} 只` : ''}${evidenceText}`;
+        const staticClass = hasEvidence && !theme.e ? ' static' : '';
+        return `<button class="chip${theme.n === activeTheme ? ' active' : ''}${staticClass}" data-theme="${escapeAttr(theme.n)}" title="${escapeAttr(title)}">${escapeHtml(theme.n)} ${theme.c}${theme.l ? `<small>（连${theme.l}）</small>` : ''}${hasEvidence && theme.e ? ` <span class="ev">✓${theme.e}</span>` : ''}${isStart ? ' <em>发动</em>' : isNew ? ' <em>新</em>' : ''}</button>`;
       }).join('') + (single ? `<button class="chip" id="toggleSingles">${showAllThemes ? '收起只有 1 家的' : `还有 ${single} 个只有 1 家`}</button>` : '');
     }
 
@@ -309,24 +356,51 @@
       const theme = activeTheme;
       const list = await trendDays(selectedDate);
       if (token !== themePanelToken) return;
+      // 勾了「只看有佐证」：跑过佐证判断的日期只数、只列用自己新闻佐证了这个题材的票；没跑过的日期照常
+      const onlyEvidenced = el('onlyEvidenced').checked;
       const rows = list.map(day => {
-        const stocks = day.stocks.filter(stock => stock.ths.includes(theme));
-        return { date: day.d, stocks, top: stocks.reduce((max, stock) => Math.max(max, stock.s), 0) };
+        const all = day.stocks.filter(stock => stock.ths.includes(theme));
+        const evidenced = all.filter(stock => stock.ev?.includes(theme));
+        const judged = day.evd > 0;
+        const stocks = onlyEvidenced && judged ? evidenced : all;
+        return { date: day.d, stocks, all, evidenced, judged, top: stocks.reduce((max, stock) => Math.max(max, stock.s), 0) };
       });
       const max = Math.max(1, ...rows.map(row => row.stocks.length));
-      const bars = rows.map(row => `<button class="bar${row.date === selectedDate ? ' selected' : ''}" data-d="${row.date}" title="${row.date}：${row.stocks.length} 家，最高 ${row.top} 板">
-        <span>${row.stocks.length || ''}</span><i style="height:${(row.stocks.length / max * 44).toFixed(0)}px"></i><span>${row.date.slice(8)}</span></button>`).join('');
+      const bars = rows.map(row => {
+        const height = row.stocks.length / max * 44;
+        const evidencedHeight = row.judged && row.stocks.length ? height * row.evidenced.length / row.stocks.length : 0;
+        const title = `${row.date}：${row.all.length} 家${row.judged ? `，有佐证 ${row.evidenced.length} 家` : '，没跑过佐证判断'}，最高 ${row.top} 板`;
+        return `<button class="bar${row.date === selectedDate ? ' selected' : ''}" data-d="${row.date}" title="${title}">
+        <span>${row.stocks.length || ''}</span><i style="height:${height.toFixed(0)}px"><b style="height:${evidencedHeight.toFixed(0)}px"></b></i><span>${row.date.slice(8)}</span></button>`;
+      }).join('');
       const first = rows.find(row => row.stocks.length);
       const firstNews = first ? first.stocks.flatMap(stock => {
         const important = (newsOf(stock, first.date) || []).filter(item => item.i);
         return important.slice(0, 2).map(item => `<div class="origin-news">${escapeHtml(stock.n)}：${item.u ? `<a href="${escapeAttr(item.u)}" target="_blank" rel="noopener">${escapeHtml(item.t)}</a>` : escapeHtml(item.t)}</div>`);
       }).join('') : '';
-      const days = rows.filter(row => row.stocks.length).reverse().map(row => `<div class="theme-day"><button data-d="${row.date}">${row.date.slice(5)}</button> ${row.stocks.length} 家：${row.stocks.map(stock => `${escapeHtml(stock.n)}${stock.s > 1 ? ` ${stock.s}板` : ''}`).join('、')}</div>`).join('');
-      panel.innerHTML = `<h2>${escapeHtml(theme)} <small>近 ${rows.length - 1} 个交易日走势；涨停原因含这个概念的都算</small></h2>
+      const mark = stock => (stock.ev?.includes(theme) ? '<span class="ok">✓</span>' : '');
+      const days = rows.filter(row => row.stocks.length).reverse().map(row => `<div class="theme-day"><button data-d="${row.date}">${row.date.slice(5)}</button> ${row.stocks.length} 家：${row.stocks.map(stock => `${escapeHtml(stock.n)}${mark(stock)}${stock.s > 1 ? ` ${stock.s}板` : ''}`).join('、')}</div>`).join('');
+      const firstEvidence = rows.find(row => row.stocks.some(stock => stock.ev?.includes(theme)));
+      const anyJudged = rows.some(row => row.stocks.some(stock => stock.ev));
+      panel.innerHTML = `<h2>${escapeHtml(theme)} <small>近 ${rows.length - 1} 个交易日走势；${onlyEvidenced ? '只数用自己新闻佐证了这个题材的票（没跑过佐证判断的日期照常）' : '涨停原因含这个概念的都算，绿色是有佐证的'}</small></h2>
         <div class="bars">${bars}</div>
         ${first ? `<div class="theme-day">这段时间最早出现在 <b>${first.date}</b>，当天的重要新闻：</div>${firstNews || '<div class="origin-news">当天的票没有判断为重要的新闻</div>'}` : ''}
+        ${anyJudged ? `<div class="theme-day">最早有新闻佐证（发动）：${firstEvidence ? `<b>${firstEvidence.date}</b>，${firstEvidence.stocks.filter(stock => stock.ev?.includes(theme)).map(stock => escapeHtml(stock.n)).join('、')}` : '这段时间没有票用自己的新闻佐证这个题材，都是静态标签'}；✓ 是有佐证的票</div>` : ''}
         ${days}`;
       panel.hidden = false;
+    }
+
+    // 有佐证判断的票：选了题材时标「佐证/跟风」，没选时列出有佐证的题材
+    function evidenceTag(stock) {
+      if (!stock.ev) return '';
+      if (activeTheme) {
+        return stock.ev.includes(activeTheme)
+          ? '<span class="tag ev" title="首板时自己的新闻佐证了这个题材">佐证</span>'
+          : '<span class="tag follow" title="首板时没有自己的新闻佐证这个题材（静态标签，或连板中后加的概念）">跟风</span>';
+      }
+      return stock.ev.length
+        ? `<span class="tag ev" title="首板涨停原因里有自己新闻佐证的题材">✓${escapeHtml(stock.ev.join('、'))}</span>`
+        : '<span class="tag follow" title="首板涨停原因的概念都没有自己的新闻佐证">无佐证</span>';
     }
 
     function stockRow(stock, date) {
@@ -341,6 +415,7 @@
           <span class="time" title="${stock.tm.startsWith('~') ? '逐笔里第一次到涨停价的时间，不一定封住' : '首次涨停时间'}">${time}</span>
           ${stock.s > 1 ? `<span class="tag">${stock.s}板</span>` : ''}
           ${verdict}
+          ${evidenceTag(stock)}
           <span class="reason">${escapeHtml(stock.r)}</span>
         </summary>
         <div class="body"></div>
@@ -395,10 +470,12 @@
       body.dataset.done = '1';
       const date = details.dataset.date;
       const stock = dayOf(date).stocks.find(item => item.c === details.dataset.code);
-      const origin = stock.s > 1
+      let origin = stock.s > 1
         ? `<div class="origin"><b>首板 ${stock.fd}</b>：${escapeHtml(stock.fr || '无涨停原因')}<br><b>今天 ${stock.s} 板</b>：${escapeHtml(stock.r)}</div>
            <div class="origin" style="color:var(--muted)">下面是首板时的新闻</div>`
         : `<div class="origin"><b>涨停原因</b>：${escapeHtml(stock.r)}</div>`;
+      const concepts = evidenceOf(stock, date);
+      if (concepts) origin += `<div class="evidence"><div style="color:var(--muted)">首板涨停原因佐证${stock.s > 1 ? `（${stock.fd}）` : ''}：</div>${concepts.map(item => `<div class="${item.e ? 'yes' : 'no'}">${item.e ? '✓' : '✗'} ${escapeHtml(item.c)}：${escapeHtml(item.r)}${item.n ? `「${escapeHtml(item.n)}」` : ''}</div>`).join('')}</div>`;
       const cached = newsOf(stock, date);
       if (cached) {
         const list = cached
@@ -453,11 +530,18 @@
       return selectDate(delta > 0 ? data.days[0].d : data.days.at(-1).d);
     }
 
-    async function showMonth(delta) {
-      const month = months[monthIndex + delta];
-      if (!month) return;
-      const data = await loadMonth(month);
-      await selectDate(data.days.at(-1).d);
+    async function viewMonth(index) {
+      if (!months[index]) return;
+      await loadMonth(months[index]);
+      monthIndex = index;
+      renderCalendar();
+    }
+    const showMonth = delta => viewMonth(monthIndex + delta);
+
+    function toggleCalendar(open = el('calendarPop').hidden) {
+      el('calendarPop').hidden = !open;
+      el('dateButton').setAttribute('aria-expanded', String(open));
+      if (open && selectedDate) viewMonth(months.indexOf(selectedDate.slice(0, 7)));
     }
 
     function renderLegend() {
@@ -479,7 +563,9 @@
 
     el('calendar').addEventListener('click', event => {
       const cell = event.target.closest('button.cell');
-      if (cell) selectDate(cell.dataset.d);
+      if (!cell) return;
+      toggleCalendar(false);
+      selectDate(cell.dataset.d);
     });
     el('themes').addEventListener('click', event => {
       const chip = event.target.closest('.chip');
@@ -502,18 +588,38 @@
       if (event.target.matches('details.stock') && event.target.open) renderBody(event.target);
     }, true);
     for (const id of ['onlyImportant', 'hideNoNews', 'byTheme']) el(id).addEventListener('change', renderList);
+    el('onlyEvidenced').addEventListener('change', () => {
+      renderHead(dayOf(selectedDate));
+      renderThemePanel();
+    });
     el('search').addEventListener('input', renderList);
     el('expandAll').addEventListener('click', () => {
       const open = el('expandAll').textContent === '全部展开';
       document.querySelectorAll('details.stock').forEach(details => { details.open = open; });
       el('expandAll').textContent = open ? '全部收起' : '全部展开';
     });
+    el('dateButton').addEventListener('click', () => toggleCalendar());
+    el('calendarYear').addEventListener('change', () => {
+      // 换年：同一个月有数据就用同一个月，没有就用这一年最接近的月份
+      const year = el('calendarYear').value;
+      const sameMonth = `${year}-${months[monthIndex].slice(5)}`;
+      const inYear = months.filter(item => item.startsWith(year));
+      viewMonth(months.indexOf(months.includes(sameMonth) ? sameMonth : (sameMonth < inYear[0] ? inYear[0] : inYear.at(-1))));
+    });
+    el('calendarMonth').addEventListener('change', () => viewMonth(months.indexOf(el('calendarMonth').value)));
+    // 点日历和日期按钮以外的地方收起
+    document.addEventListener('pointerdown', event => {
+      if (el('calendarPop').hidden) return;
+      if (el('calendarPop').contains(event.target) || el('dateButton').contains(event.target)) return;
+      toggleCalendar(false);
+    });
     el('prevMonth').addEventListener('click', () => showMonth(-1));
     el('nextMonth').addEventListener('click', () => showMonth(1));
     el('prevDay').addEventListener('click', () => stepDay(-1));
     el('nextDay').addEventListener('click', () => stepDay(1));
     document.addEventListener('keydown', event => {
-      if (event.target.matches('input')) return;
+      if (event.key === 'Escape') toggleCalendar(false);
+      if (event.target.matches('input, select')) return;
       if (event.key === 'ArrowLeft') stepDay(-1);
       if (event.key === 'ArrowRight') stepDay(1);
     });

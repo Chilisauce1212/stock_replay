@@ -7,6 +7,8 @@
 // 没跑过的票：页面展开时现查标题（/api/news），没有重要性判断。
 // 题材：涨停原因按 + 拆开后每个概念都算，一只票可以属于多个题材；文字里含 theme-synonyms.json 大题材名的并进大题材（机械匹配）。
 // 只用在这个页面，选股和回测的「第一概念」口径不变。
+// 涨停原因佐证（theme-evidence.js 写入 reports/theme-evidence.json，键 代码|首板日）：首板涨停原因的每个概念有没有这只票自己三天新闻的佐证。
+// 有佐证的概念归到的题材记在 ev，连板票沿用首板的结论；当天涨停原因里有、首板时没有佐证的题材算跟风。没跑过的票没有 ev。
 // 涨停时间：同花顺涨停池的首次涨停时间，大约只能查一年；更早的用 --fill-ticks 从通达信逐笔找第一笔涨停价成交，
 // 记为 ~HH:MM（是首次触板，不一定封住）。都缓存在 reports/涨停时间.json。
 //
@@ -136,9 +138,31 @@ function makeThemeMatcher() {
   }))];
 }
 
-function buildMonths(byDay, days, stocksOf, times, newsCache, llm) {
+function buildMonths(byDay, days, stocksOf, times, newsCache, llm, evidence) {
   const themesOf = makeThemeMatcher();
+  const tagger = makeTagger();
   const months = new Map();
+  // 首板的佐证结果：每个概念归到的题材，和有佐证的题材合集
+  const evidenceCache = new Map();
+  const evidenceOf = key => {
+    if (evidenceCache.has(key)) return evidenceCache.get(key);
+    const entry = evidence[key];
+    let result = null;
+    if (entry) {
+      const titleOf = id => String(entry.newsIds[Number(String(id).slice(1)) - 1] || '').split('|').slice(1).join('|');
+      const concepts = entry.concepts.map(item => ({
+        c: item.concept,
+        e: item.evidenced ? 1 : 0,
+        r: item.reason,
+        ...(item.evidenced && item.newsIds[0] ? { n: titleOf(item.newsIds[0]) } : {}),
+        ths: themesOf(tagger(item.concept)),
+      }));
+      result = { concepts, themes: [...new Set(concepts.filter(item => item.e).flatMap(item => item.ths))] };
+    }
+    evidenceCache.set(key, result);
+    return result;
+  };
+  const firstKey = (item, dayIndex) => `${item.code}|${days[dayIndex - item.streak + 1]}`;
   const newsCacheByKey = new Map();
   const newsOf = key => {
     if (!newsCacheByKey.has(key)) newsCacheByKey.set(key, buildNews(key, newsCache, llm));
@@ -151,10 +175,20 @@ function buildMonths(byDay, days, stocksOf, times, newsCache, llm) {
     }
     return counts;
   });
+  // 每天每个题材有佐证的家数（只数当天涨停原因里有、且首板佐证到这个题材的票）
+  const evidenceCounts = days.map((date, dayIndex) => {
+    const counts = new Map();
+    for (const item of stocksOf(date)) {
+      const found = evidenceOf(firstKey(item, dayIndex));
+      if (!found) continue;
+      for (const theme of themesOf(item.tags)) if (found.themes.includes(theme)) counts.set(theme, (counts.get(theme) || 0) + 1);
+    }
+    return counts;
+  });
   days.forEach((date, dayIndex) => {
     if (date < FIRST_DAY) return;
     const month = date.slice(0, 7);
-    if (!months.has(month)) months.set(month, { days: [], news: {} });
+    if (!months.has(month)) months.set(month, { days: [], news: {}, evidence: {} });
     const target = months.get(month);
     const stocks = stocksOf(date).map(item => {
       const firstDate = days[dayIndex - item.streak + 1];
@@ -172,6 +206,11 @@ function buildMonths(byDay, days, stocksOf, times, newsCache, llm) {
         nc: news ? news.news.length : null,
       };
       if (news?.categories.length) row.cats = news.categories;
+      const found = evidenceOf(key);
+      if (found) {
+        row.ev = found.themes;
+        if (!target.evidence[key]) target.evidence[key] = found.concepts.map(({ ths, ...rest }) => rest);
+      }
       if (item.streak > 1) {
         row.fd = firstDate;
         row.fr = byDay.get(firstDate)?.get(item.code)?.reason || '';
@@ -182,7 +221,8 @@ function buildMonths(byDay, days, stocksOf, times, newsCache, llm) {
       .sort((left, right) => right[1] - left[1])
       .map(([name, count]) => {
         const trend = themeCounts.slice(Math.max(0, dayIndex - TREND_DAYS), dayIndex).map(counts => counts.get(name) || 0);
-        return { n: name, c: count, l: stocks.filter(stock => stock.ths.includes(name) && stock.s >= 2).length, tr: trend };
+        const evidenceTrend = evidenceCounts.slice(Math.max(0, dayIndex - TREND_DAYS), dayIndex).map(counts => counts.get(name) || 0);
+        return { n: name, c: count, l: stocks.filter(stock => stock.ths.includes(name) && stock.s >= 2).length, tr: trend, e: evidenceCounts[dayIndex].get(name) || 0, te: evidenceTrend };
       });
     target.days.push({
       d: date,
@@ -190,6 +230,7 @@ function buildMonths(byDay, days, stocksOf, times, newsCache, llm) {
       top: stocks.reduce((max, stock) => Math.max(max, stock.s), 1),
       first: stocks.filter(stock => stock.s === 1).length,
       imp: stocks.filter(stock => stock.v === '强类' || stock.v === '仅弱类').length,
+      evd: stocks.filter(stock => stock.ev).length,
       themes,
       stocks,
     });
@@ -221,7 +262,7 @@ async function main() {
     await fillTickTimes(rows, times, options);
   }
 
-  const months = buildMonths(byDay, days, stocksOf, times, readJson(path.join(REPORTS_DIR, 'news-cache.json'), {}), readJson(path.join(REPORTS_DIR, 'news-llm.json'), {}));
+  const months = buildMonths(byDay, days, stocksOf, times, readJson(path.join(REPORTS_DIR, 'news-cache.json'), {}), readJson(path.join(REPORTS_DIR, 'news-llm.json'), {}), readJson(path.join(REPORTS_DIR, 'theme-evidence.json'), {}));
   fs.mkdirSync(OUTPUT_DIR, { recursive: true });
   let changed = 0;
   for (const [month, data] of months) {
