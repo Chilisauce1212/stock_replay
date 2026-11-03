@@ -2043,9 +2043,9 @@
     updateNewsDisplay();
   }
 
-  // 每日复盘和新闻审计（news-theme-table.js）同口径：首板日及前一个交易日；其他回放看回测日前 5 个交易日。
+  // 每日复盘和新闻审计（news-theme-table.js）同口径：首板日及前两个交易日；其他回放看回测日前 5 个交易日。
   function newsTradingDays() {
-    return isDailyReviewSource() ? 2 : 5;
+    return isDailyReviewSource() ? 3 : 5;
   }
 
   function loadCurrentNews(caseItem) {

@@ -150,4 +150,10 @@ async function finishReviewFile(start, end, { yes = false } = {}) {
   return failures;
 }
 
-module.exports = { finishReviewFile, ensureServer };
+// 今日首板：新闻判断 → 写进今日首板文件。「更新到今天」就要有今天的新闻分析
+async function finishTodayFile({ yes = false } = {}) {
+  await runNews('今日首板.json', { yes });
+  runNode('review-judge.js', ['今日首板', ...(r2Client ? ['--upload'] : [])]);
+}
+
+module.exports = { finishReviewFile, finishTodayFile, ensureServer };

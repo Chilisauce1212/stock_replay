@@ -1,0 +1,508 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>新闻日历</title>
+  <link rel="icon" href="data:,">
+  <style>
+    :root {
+      --bg: #0b0e11;
+      --panel: #161a1e;
+      --panel-2: #1e2329;
+      --line: #2b313a;
+      --text: #cccccc;
+      --muted: #8994a2;
+      --accent: #f0b90b;
+      --heat: 91, 141, 239;
+      --count: #5b8def;
+      --strong: #e5484d;
+      --weak: #b88800;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    }
+    button, input { font: inherit; }
+    a { color: inherit; }
+    main { max-width: 1040px; margin: 0 auto; padding: 0 16px 48px; }
+    header.top { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; padding: 10px 0; }
+    header.top h1 { font-size: 16px; margin: 0; color: #eaecef; font-weight: 600; white-space: nowrap; }
+    header.top a { color: var(--muted); text-decoration: none; }
+    .btn {
+      background: var(--panel-2);
+      color: var(--text);
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      padding: 3px 10px;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .btn:disabled { opacity: .4; cursor: default; }
+    #monthLabel { min-width: 88px; text-align: center; color: #eaecef; font-variant-numeric: tabular-nums; }
+    #calendar { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 4px; }
+    .weekday { text-align: center; color: var(--muted); font-size: 12px; }
+    .cell {
+      position: relative;
+      min-height: 52px;
+      padding: 4px 6px;
+      background: rgba(var(--heat), var(--level, 0));
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      color: var(--text);
+      text-align: left;
+      cursor: pointer;
+      font-variant-numeric: tabular-nums;
+    }
+    .cell.empty { background: none; border-color: transparent; cursor: default; }
+    .cell.selected { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+    .cell b { display: block; color: #eaecef; font-weight: 600; font-size: 13px; }
+    .cell span { display: block; font-size: 12px; line-height: 1.3; }
+    #dayHead { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px; margin: 14px 0 8px; }
+    #dayHead b { color: #eaecef; font-size: 16px; font-weight: 600; }
+    #themes { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+    .chip {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 2px 10px;
+      color: var(--text);
+      cursor: pointer;
+      font-size: 13px;
+      font-variant-numeric: tabular-nums;
+    }
+    .chip.active { border-color: var(--accent); color: #eaecef; }
+    .chip small { color: var(--muted); }
+    .chip em { font-style: normal; color: var(--accent); font-size: 12px; }
+    #themePanel { background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 8px 10px; margin-bottom: 8px; }
+    #themePanel h2 { font-size: 14px; margin: 0 0 6px; color: #eaecef; font-weight: 600; }
+    #themePanel h2 small { color: var(--muted); font-weight: 400; }
+    .bars { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 3px; align-items: end; height: 76px; margin-bottom: 8px; }
+    .bar { display: flex; flex-direction: column; justify-content: flex-end; height: 100%; background: none; border: 0; padding: 0; color: var(--muted); cursor: pointer; font-size: 11px; line-height: 1.2; font-variant-numeric: tabular-nums; }
+    .bar i { display: block; background: var(--count); border-radius: 2px 2px 0 0; min-height: 1px; }
+    .bar.selected { color: var(--accent); }
+    .theme-day { font-size: 13px; padding: 2px 0; }
+    .theme-day button { background: none; border: 0; padding: 0; color: var(--muted); cursor: pointer; font: inherit; font-variant-numeric: tabular-nums; }
+    .theme-day button:hover { color: var(--text); }
+    .origin-news { font-size: 13px; color: var(--muted); padding: 2px 0 2px 12px; }
+    #filters {
+      position: sticky;
+      top: 0;
+      z-index: 3;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 6px 14px;
+      padding: 8px 0;
+      background: var(--bg);
+    }
+    #filters label { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; }
+    #search {
+      background: var(--panel-2);
+      color: var(--text);
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      padding: 3px 8px;
+      min-width: 0;
+      width: 180px;
+    }
+    #count { color: var(--muted); margin-left: auto; font-variant-numeric: tabular-nums; }
+    .group { margin: 14px 0 4px; color: #eaecef; font-weight: 600; }
+    .group small { color: var(--muted); font-weight: 400; }
+    details.stock { border: 1px solid var(--line); border-radius: 4px; background: var(--panel); margin-bottom: 4px; }
+    details.stock > summary {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 2px 10px;
+      padding: 7px 10px;
+      cursor: pointer;
+      list-style: none;
+    }
+    details.stock > summary::-webkit-details-marker { display: none; }
+    .name { color: #eaecef; font-weight: 600; }
+    .time { color: var(--muted); font-variant-numeric: tabular-nums; }
+    .reason { color: var(--muted); font-size: 13px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1 1 160px; }
+    .tag { font-size: 12px; padding: 0 6px; border-radius: 3px; border: 1px solid var(--line); color: var(--muted); white-space: nowrap; }
+    .tag.strong { border-color: var(--strong); color: #ff8f93; }
+    .tag.weak { border-color: var(--weak); color: #e0b84c; }
+    .body { padding: 2px 10px 10px; border-top: 1px solid var(--line); }
+    .origin { margin: 6px 0; font-size: 13px; }
+    .origin b { color: #eaecef; font-weight: 600; }
+    .news { padding: 6px 0; border-top: 1px dashed var(--line); font-size: 13px; }
+    .news:first-of-type { border-top: 0; }
+    .news a { color: var(--text); text-decoration: none; }
+    .news a:hover { text-decoration: underline; }
+    .news.important a { color: #eaecef; font-weight: 600; }
+    .news time { color: var(--muted); margin-right: 8px; font-variant-numeric: tabular-nums; }
+    .kind {
+      display: inline-block;
+      margin-right: 6px;
+      padding: 0 6px;
+      border-left: 3px solid var(--k);
+      border-radius: 2px;
+      background: color-mix(in srgb, var(--k) 22%, transparent);
+      color: #eaecef;
+      font-size: 12px;
+      white-space: nowrap;
+    }
+    .kind.plain { color: var(--muted); background: none; }
+    #legend { display: flex; flex-wrap: wrap; gap: 4px 2px; padding-bottom: 4px; }
+    .news p { margin: 2px 0 0; color: var(--muted); }
+    .hint { color: var(--muted); font-size: 13px; padding: 6px 0; }
+    @media (max-width: 560px) {
+      .cell { min-height: 46px; padding: 3px 4px; }
+      .cell span { font-size: 11px; white-space: nowrap; }
+      #search { width: 120px; }
+      .reason { flex-basis: 100%; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header class="top">
+      <h1>新闻日历</h1>
+      <button class="btn" id="prevMonth" aria-label="上个月">◀</button>
+      <span id="monthLabel"></span>
+      <button class="btn" id="nextMonth" aria-label="下个月">▶</button>
+      <button class="btn" id="prevDay" title="键盘 ←">前一天</button>
+      <button class="btn" id="nextDay" title="键盘 →">后一天</button>
+      <a href="/" style="margin-left:auto">首页</a>
+    </header>
+    <div id="calendar"></div>
+    <div id="dayHead"></div>
+    <div id="themes"></div>
+    <div id="themePanel" hidden></div>
+    <div id="filters">
+      <label title="只显示有重要新闻的票，展开后也只列重要新闻。没跑过新闻判断的票不显示"><input id="onlyImportant" type="checkbox">只看重要新闻</label>
+      <label title="隐藏新闻条数为 0 的票。没跑过新闻判断的票还不知道有没有新闻，会保留"><input id="hideNoNews" type="checkbox">隐藏无新闻</label>
+      <label title="一只票有几个概念就出现在几组里"><input id="byTheme" type="checkbox">按题材分组</label>
+      <input id="search" type="search" placeholder="搜索名称 / 代码 / 原因" aria-label="搜索">
+      <button class="btn" id="expandAll">全部展开</button>
+      <span id="count"></span>
+    </div>
+    <div id="legend" title="彩色是大模型判为重要的类别；灰色是按标题关键词机械分的，没有判断重要性"></div>
+    <div id="list"><div class="hint">加载中…</div></div>
+  </main>
+
+  <script>
+    const WEEK = ['周一', '周二', '周三', '周四', '周五'];
+    const HEAT_MAX = 150;
+    const THEME_TREND_DAYS = 10; // 题材走势看今天之前多少个交易日
+    let showAllThemes = false; // 只有 1 家的题材默认收起
+    // 重要新闻的类别（大模型判断）：暖色两类是弱类，其余是强类
+    const IMPORTANT_KINDS = {
+      新叙事: '#b05ac4',
+      '海外/明星公司': '#4f8ae0',
+      资本运作转型: '#2e9e78',
+      '企业荣誉/重要会议': '#1f9fb3',
+      政策规范: '#d9822b',
+      行业利好: '#c9a227',
+    };
+    // 其他新闻按标题关键词机械分，只为看着省力，不代表重要性
+    const PLAIN_KINDS = [
+      ['公告财报', '#8a94a6', /公告|财报|业绩|季报|年报|净利|营收|营业收入|分红|减持|增持|股东|回购|定增|董事会|问询|立案/],
+      ['龙虎榜资金', '#7f9a86', /龙虎榜|成交明细|主力|资金|融资|融券|高频透视|大宗交易|游资/],
+      ['行情复盘', '#a08f76', /复盘|涨停|跌停|拉升|异动|封板|连板|竞价|盘中|涨超|跌超|午评|收评|早盘|尾盘|板块|概念股|走强|走高|大涨|大跌|一字/],
+    ];
+    let months = [];
+    const loaded = new Map(); // 月份 → { days, news }
+    const liveNews = new Map(); // 没跑过新闻判断的票，展开时现查的标题
+    let monthIndex = 0;
+    let selectedDate = '';
+    let activeTheme = '';
+
+    const el = id => document.getElementById(id);
+    const dayOf = date => loaded.get(date.slice(0, 7))?.days.find(day => day.d === date);
+    const newsOf = (stock, date) => loaded.get(date.slice(0, 7))?.news[`${stock.c}|${stock.fd || date}`] || null;
+    const hasImportant = stock => stock.v === '强类' || stock.v === '仅弱类';
+
+    async function loadMonth(month) {
+      if (loaded.has(month)) return loaded.get(month);
+      const payload = await (await fetch(`/api/news-calendar/${month}`)).json();
+      if (payload.status_code !== 0) throw new Error(payload.msg);
+      loaded.set(month, payload.data);
+      return payload.data;
+    }
+
+    function renderCalendar() {
+      const month = months[monthIndex];
+      el('monthLabel').textContent = month;
+      el('prevMonth').disabled = monthIndex === 0;
+      el('nextMonth').disabled = monthIndex === months.length - 1;
+      const days = new Map(loaded.get(month).days.map(day => [day.d, day]));
+      const [year, monthNumber] = month.split('-').map(Number);
+      const last = new Date(Date.UTC(year, monthNumber, 0)).getUTCDate();
+      const cells = WEEK.map(name => `<div class="weekday">${name}</div>`);
+      for (let date = 1; date <= last; date++) {
+        const weekday = new Date(Date.UTC(year, monthNumber - 1, date)).getUTCDay();
+        if (weekday === 0 || weekday === 6) continue;
+        if (date === 1 || !cells.some(cell => cell.includes('data-d') || cell.includes('empty'))) {
+          for (let pad = 1; pad < weekday; pad++) cells.push('<div class="cell empty"></div>');
+        }
+        const text = `${month}-${String(date).padStart(2, '0')}`;
+        const day = days.get(text);
+        if (!day) {
+          cells.push(`<div class="cell empty"><span style="color:var(--line)">${date}</span></div>`);
+          continue;
+        }
+        const level = Math.min(day.t / HEAT_MAX, 1) * 0.55;
+        cells.push(`<button class="cell${text === selectedDate ? ' selected' : ''}" style="--level:${level.toFixed(3)}" data-d="${text}"><b>${date}</b><span>${day.t}家 ${day.top}板</span></button>`);
+      }
+      el('calendar').innerHTML = cells.join('');
+    }
+
+    function filteredStocks(day) {
+      const query = el('search').value.trim().toLowerCase();
+      return day.stocks.filter(stock => {
+        if (el('onlyImportant').checked && !hasImportant(stock)) return false;
+        if (el('hideNoNews').checked && stock.nc === 0) return false;
+        if (activeTheme && !stock.ths.includes(activeTheme)) return false;
+        if (query && ![stock.n, stock.c, stock.r, stock.fr].some(text => (text || '').toLowerCase().includes(query))) return false;
+        return true;
+      });
+    }
+
+    function renderHead(day) {
+      const judged = day.stocks.filter(stock => stock.v !== null).length;
+      el('dayHead').innerHTML = `<b>${day.d}</b><span>涨停 ${day.t} 家</span><span>首板 ${day.first}</span><span>连板 ${day.t - day.first}</span><span>最高 ${day.top} 板</span><span>有重要新闻 ${day.imp}</span><span style="color:var(--muted)">已判断新闻 ${judged}/${day.t}</span>`;
+      const shown = day.themes.filter(theme => showAllThemes || theme.c > 1 || theme.n === activeTheme);
+      const single = day.themes.filter(theme => theme.c === 1).length;
+      el('themes').innerHTML = shown.map(theme => {
+        const isNew = theme.tr.length && theme.tr.every(count => count === 0);
+        const title = `涨停原因含这个概念的都算。近 ${theme.tr.length} 个交易日每天家数：${theme.tr.join(' → ') || '无'}，今天 ${theme.c}${theme.l ? `，其中连板 ${theme.l} 只` : ''}`;
+        return `<button class="chip${theme.n === activeTheme ? ' active' : ''}" data-theme="${escapeAttr(theme.n)}" title="${escapeAttr(title)}">${escapeHtml(theme.n)} ${theme.c}${theme.l ? `<small>（连${theme.l}）</small>` : ''}${isNew ? ' <em>新</em>' : ''}</button>`;
+      }).join('') + (single ? `<button class="chip" id="toggleSingles">${showAllThemes ? '收起只有 1 家的' : `还有 ${single} 个只有 1 家`}</button>` : '');
+    }
+
+    const escapeHtml = text => String(text ?? '').replace(/[&<>"]/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[char]));
+    const escapeAttr = escapeHtml;
+
+    // 今天和之前 THEME_TREND_DAYS 个交易日，跨月时加载上个月
+    async function trendDays(date) {
+      let list = [];
+      for (let index = months.indexOf(date.slice(0, 7)); index >= 0 && list.length <= THEME_TREND_DAYS; index--) {
+        const data = await loadMonth(months[index]);
+        list = [...data.days.filter(day => day.d <= date), ...list];
+      }
+      return list.slice(-(THEME_TREND_DAYS + 1));
+    }
+
+    let themePanelToken = 0;
+    async function renderThemePanel() {
+      const panel = el('themePanel');
+      const token = ++themePanelToken;
+      if (!activeTheme) {
+        panel.hidden = true;
+        return;
+      }
+      const theme = activeTheme;
+      const list = await trendDays(selectedDate);
+      if (token !== themePanelToken) return;
+      const rows = list.map(day => {
+        const stocks = day.stocks.filter(stock => stock.ths.includes(theme));
+        return { date: day.d, stocks, top: stocks.reduce((max, stock) => Math.max(max, stock.s), 0) };
+      });
+      const max = Math.max(1, ...rows.map(row => row.stocks.length));
+      const bars = rows.map(row => `<button class="bar${row.date === selectedDate ? ' selected' : ''}" data-d="${row.date}" title="${row.date}：${row.stocks.length} 家，最高 ${row.top} 板">
+        <span>${row.stocks.length || ''}</span><i style="height:${(row.stocks.length / max * 44).toFixed(0)}px"></i><span>${row.date.slice(8)}</span></button>`).join('');
+      const first = rows.find(row => row.stocks.length);
+      const firstNews = first ? first.stocks.flatMap(stock => {
+        const important = (newsOf(stock, first.date) || []).filter(item => item.i);
+        return important.slice(0, 2).map(item => `<div class="origin-news">${escapeHtml(stock.n)}：${item.u ? `<a href="${escapeAttr(item.u)}" target="_blank" rel="noopener">${escapeHtml(item.t)}</a>` : escapeHtml(item.t)}</div>`);
+      }).join('') : '';
+      const days = rows.filter(row => row.stocks.length).reverse().map(row => `<div class="theme-day"><button data-d="${row.date}">${row.date.slice(5)}</button> ${row.stocks.length} 家：${row.stocks.map(stock => `${escapeHtml(stock.n)}${stock.s > 1 ? ` ${stock.s}板` : ''}`).join('、')}</div>`).join('');
+      panel.innerHTML = `<h2>${escapeHtml(theme)} <small>近 ${rows.length - 1} 个交易日走势；涨停原因含这个概念的都算</small></h2>
+        <div class="bars">${bars}</div>
+        ${first ? `<div class="theme-day">这段时间最早出现在 <b>${first.date}</b>，当天的重要新闻：</div>${firstNews || '<div class="origin-news">当天的票没有判断为重要的新闻</div>'}` : ''}
+        ${days}`;
+      panel.hidden = false;
+    }
+
+    function stockRow(stock, date) {
+      const verdict = stock.v === '强类' ? '<span class="tag strong">强类</span>'
+        : stock.v === '仅弱类' ? '<span class="tag weak">仅弱类</span>'
+          : stock.v === '无' ? (stock.nc === 0 ? '<span class="tag">无新闻</span>' : '<span class="tag">无重要</span>')
+            : '<span class="tag">未判断</span>';
+      const time = stock.tm ? escapeHtml(stock.tm.replace('~', '约 ')) : '--:--';
+      return `<details class="stock" data-code="${stock.c}" data-date="${date}">
+        <summary>
+          <span class="name">${escapeHtml(stock.n)}</span>
+          <span class="time" title="${stock.tm.startsWith('~') ? '逐笔里第一次到涨停价的时间，不一定封住' : '首次涨停时间'}">${time}</span>
+          ${stock.s > 1 ? `<span class="tag">${stock.s}板</span>` : ''}
+          ${verdict}
+          <span class="reason">${escapeHtml(stock.r)}</span>
+        </summary>
+        <div class="body"></div>
+      </details>`;
+    }
+
+    function renderList() {
+      const day = dayOf(selectedDate);
+      if (!day) return;
+      const stocks = filteredStocks(day);
+      el('count').textContent = `显示 ${stocks.length}/${day.t}`;
+      const groups = new Map();
+      const add = (name, stock) => {
+        if (!groups.has(name)) groups.set(name, []);
+        groups.get(name).push(stock);
+      };
+      if (el('byTheme').checked) {
+        for (const stock of stocks) (stock.ths.length ? stock.ths : ['其他']).forEach(theme => add(theme, stock));
+      } else {
+        for (const stock of stocks) add(stock.s > 1 ? `${stock.s} 板` : '首板', stock);
+      }
+      const ordered = el('byTheme').checked ? [...groups.entries()].sort((left, right) => right[1].length - left[1].length) : [...groups.entries()];
+      el('list').innerHTML = ordered.map(([name, list]) => `<div class="group">${escapeHtml(name)} <small>${list.length} 只</small></div>${list.map(stock => stockRow(stock, day.d)).join('')}`).join('')
+        || '<div class="hint">没有符合条件的票</div>';
+      el('expandAll').textContent = '全部展开';
+    }
+
+    const kindTag = (name, color, plain = false) => `<span class="kind${plain ? ' plain' : ''}" style="--k:${color}">${escapeHtml(name)}</span>`;
+
+    function kindTags(item) {
+      if (item.cats?.length) return item.cats.map(category => kindTag(category, IMPORTANT_KINDS[category] || '#8994a2')).join('');
+      const kind = PLAIN_KINDS.find(([, , pattern]) => pattern.test(item.t));
+      return kind ? kindTag(kind[0], kind[1], true) : '';
+    }
+
+    function newsHtml(list) {
+      return list.map(item => `<div class="news${item.i ? ' important' : ''}">
+        <time>${escapeHtml((item.tm || '').slice(5, 16))}</time>${kindTags(item)}${item.u ? `<a href="${escapeAttr(item.u)}" target="_blank" rel="noopener">${escapeHtml(item.t)}</a>` : escapeHtml(item.t)}
+        ${item.i && (item.nt || item.why) ? `<p>${escapeHtml(item.nt || item.why)}</p>` : ''}
+      </div>`).join('');
+    }
+
+    async function renderBody(details) {
+      const body = details.querySelector('.body');
+      if (body.dataset.done) return;
+      body.dataset.done = '1';
+      const date = details.dataset.date;
+      const stock = dayOf(date).stocks.find(item => item.c === details.dataset.code);
+      const origin = stock.s > 1
+        ? `<div class="origin"><b>首板 ${stock.fd}</b>：${escapeHtml(stock.fr || '无涨停原因')}<br><b>今天 ${stock.s} 板</b>：${escapeHtml(stock.r)}</div>
+           <div class="origin" style="color:var(--muted)">下面是首板时的新闻</div>`
+        : `<div class="origin"><b>涨停原因</b>：${escapeHtml(stock.r)}</div>`;
+      const cached = newsOf(stock, date);
+      if (cached) {
+        const list = el('onlyImportant').checked ? cached.filter(item => item.i) : cached;
+        const hidden = cached.length - list.length;
+        body.innerHTML = origin + (list.length ? newsHtml(list) : '<div class="hint">首板日和前两个交易日没有新闻</div>')
+          + (hidden ? `<div class="hint">已隐藏 ${hidden} 条非重要新闻</div>` : '');
+        return;
+      }
+      body.innerHTML = `${origin}<div class="hint">这只票没跑过新闻判断，正在现查标题…</div>`;
+      const key = `${stock.c}|${stock.fd || date}`;
+      try {
+        if (!liveNews.has(key)) {
+          const payload = await (await fetch(`/api/news?code=${stock.c}&date=${stock.fd || date}&days=3`)).json();
+          if (payload.status_code !== 0) throw new Error(payload.msg);
+          liveNews.set(key, payload.data.map(item => ({
+            t: item.title,
+            tm: new Date(Number(item.publishTime) + 8 * 3600_000).toISOString().replace('T', ' ').slice(0, 19),
+            u: item.jumpUrl || '',
+          })));
+        }
+        const list = liveNews.get(key);
+        body.innerHTML = `${origin}<div class="hint">未做重要性判断，只有标题</div>${list.length ? newsHtml(list) : '<div class="hint">首板日和前两个交易日没有新闻</div>'}`;
+      } catch (error) {
+        body.innerHTML = `${origin}<div class="hint">新闻查询失败：${escapeHtml(error.message)}</div>`;
+      }
+    }
+
+    async function selectDate(date, { keepTheme = false } = {}) {
+      selectedDate = date;
+      if (!keepTheme) activeTheme = '';
+      const month = date.slice(0, 7);
+      await loadMonth(month);
+      monthIndex = months.indexOf(month);
+      renderCalendar();
+      renderHead(dayOf(date));
+      renderList();
+      renderThemePanel();
+      try { history.replaceState(null, '', `#${date}`); } catch { /* 预览环境可能不允许 */ }
+    }
+
+    async function stepDay(delta) {
+      const month = selectedDate.slice(0, 7);
+      const days = loaded.get(month).days;
+      const index = days.findIndex(day => day.d === selectedDate) + delta;
+      if (days[index]) return selectDate(days[index].d);
+      const other = months[months.indexOf(month) + Math.sign(delta)];
+      if (!other) return undefined;
+      const data = await loadMonth(other);
+      return selectDate(delta > 0 ? data.days[0].d : data.days.at(-1).d);
+    }
+
+    async function showMonth(delta) {
+      const month = months[monthIndex + delta];
+      if (!month) return;
+      const data = await loadMonth(month);
+      await selectDate(data.days.at(-1).d);
+    }
+
+    el('legend').innerHTML = [
+      ...Object.entries(IMPORTANT_KINDS).map(([name, color]) => kindTag(name, color)),
+      ...PLAIN_KINDS.map(([name, color]) => kindTag(name, color, true)),
+    ].join('');
+
+    el('calendar').addEventListener('click', event => {
+      const cell = event.target.closest('button.cell');
+      if (cell) selectDate(cell.dataset.d);
+    });
+    el('themes').addEventListener('click', event => {
+      const chip = event.target.closest('.chip');
+      if (!chip) return;
+      if (chip.id === 'toggleSingles') {
+        showAllThemes = !showAllThemes;
+        renderHead(dayOf(selectedDate));
+        return;
+      }
+      activeTheme = activeTheme === chip.dataset.theme ? '' : chip.dataset.theme;
+      renderHead(dayOf(selectedDate));
+      renderList();
+      renderThemePanel();
+    });
+    el('themePanel').addEventListener('click', event => {
+      const target = event.target.closest('button[data-d]');
+      if (target) selectDate(target.dataset.d, { keepTheme: true });
+    });
+    el('list').addEventListener('toggle', event => {
+      if (event.target.matches('details.stock') && event.target.open) renderBody(event.target);
+    }, true);
+    for (const id of ['onlyImportant', 'hideNoNews', 'byTheme']) el(id).addEventListener('change', renderList);
+    el('search').addEventListener('input', renderList);
+    el('expandAll').addEventListener('click', () => {
+      const open = el('expandAll').textContent === '全部展开';
+      document.querySelectorAll('details.stock').forEach(details => { details.open = open; });
+      el('expandAll').textContent = open ? '全部收起' : '全部展开';
+    });
+    el('prevMonth').addEventListener('click', () => showMonth(-1));
+    el('nextMonth').addEventListener('click', () => showMonth(1));
+    el('prevDay').addEventListener('click', () => stepDay(-1));
+    el('nextDay').addEventListener('click', () => stepDay(1));
+    document.addEventListener('keydown', event => {
+      if (event.target.matches('input')) return;
+      if (event.key === 'ArrowLeft') stepDay(-1);
+      if (event.key === 'ArrowRight') stepDay(1);
+    });
+
+    (async () => {
+      try {
+        const payload = await (await fetch('/api/news-calendar')).json();
+        if (payload.status_code !== 0) throw new Error(payload.msg);
+        months = payload.months;
+        const wanted = /^\d{4}-\d{2}-\d{2}$/.test(location.hash.slice(1)) ? location.hash.slice(1) : '';
+        const month = wanted && months.includes(wanted.slice(0, 7)) ? wanted.slice(0, 7) : months.at(-1);
+        const data = await loadMonth(month);
+        await selectDate(data.days.some(day => day.d === wanted) ? wanted : data.days.at(-1).d);
+      } catch (error) {
+        el('list').innerHTML = `<div class="hint">加载失败：${escapeHtml(error.message)}</div>`;
+      }
+    })();
+  </script>
+</body>
+</html>

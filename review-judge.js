@@ -9,7 +9,7 @@
 // 活跃度、量堆由页面按 K 线实时计算，这里不写。
 //
 // 用法: npm run review-judge -- [文件名关键字...] [--upload]
-//   不带关键字则处理 daily-review/ 下全部「一进二回测_*.json」；--upload 同时更新 R2 的 daily-review/ 同名文件
+//   不带关键字则处理 daily-review/ 下今日首板、四连板及以上和全部「一进二回测_*.json」；--upload 同时更新 R2 的 daily-review/ 同名文件
 //   （读 R2 上的版本、只改 judge 字段再写回，不覆盖 R2 上的其他改动）
 require('dotenv').config({ quiet: true });
 
@@ -109,9 +109,9 @@ async function main() {
     return;
   }
   const files = fs.readdirSync(REVIEW_DIR)
-    .filter(file => /^一进二回测_.*\.json$/.test(file))
+    .filter(file => /^(今日首板|四连板及以上|一进二回测_.*)\.json$/.test(file))
     .filter(file => !options.keywords.length || options.keywords.some(keyword => file.includes(keyword)));
-  if (!files.length) throw new Error('daily-review/ 下没有匹配的一进二回测 JSON');
+  if (!files.length) throw new Error('daily-review/ 下没有匹配的 JSON');
 
   const judgeOf = buildJudges();
   const r2 = options.upload ? require('./r2-storage') : null;

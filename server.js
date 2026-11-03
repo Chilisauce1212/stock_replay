@@ -912,7 +912,7 @@ const THEME_MANUAL_COLUMNS = ['人工锚定新闻', '人工类别', '人工题�
 const THEME_SIDE_FILE = /\.(manual|review|review-diff)\.json$/i;
 const NEWS_CACHE_NAME = 'news-cache.json';
 // reports/ 里不是题材演绎表的数据文件，不出现在页面的文件下拉框里。
-const REPORT_AUX_FILES = new Set([NEWS_CACHE_NAME, 'news-llm.json', 'news-llm-fast.json', 'news-body-cache.json', '首板涨停原因.json', '全市场涨停原因.json', '自由流通市值.json', '连板情绪周期.json', '连板一字板.json']);
+const REPORT_AUX_FILES = new Set([NEWS_CACHE_NAME, 'news-llm.json', 'news-llm-fast.json', 'news-body-cache.json', '首板涨停原因.json', '全市场涨停原因.json', '自由流通市值.json', '连板情绪周期.json', '连板一字板.json', '涨停时间.json']);
 
 function themeReportPaths(name) {
   const base = path.basename(String(name || '')).replace(/\.json$/i, '');
@@ -1051,6 +1051,34 @@ app.get('/api/limit-up-cycle', async (req, res) => {
     res.json({ status_code: 0, data });
   } catch (error) {
     res.status(500).json({ status_code: -1, msg: `读取连板情绪周期失败: ${error.message}` });
+  }
+});
+
+// 新闻日历（news-calendar.js 生成）：本地 reports/新闻日历/ 有就读本地，没有（线上）再读 R2
+const readNewsCalendarFile = async name => {
+  const file = path.join(REPORTS_DIR, '新闻日历', `${name}.json`);
+  if (fs.existsSync(file) || USE_LOCAL_JSON || !sharedR2Client) return JSON.parse(fs.readFileSync(file, 'utf8'));
+  return readJson(`news-calendar/${name}.json`);
+};
+
+app.get('/api/news-calendar', async (req, res) => {
+  try {
+    const { months } = await readNewsCalendarFile('index');
+    res.set('Cache-Control', 'no-store');
+    res.json({ status_code: 0, months });
+  } catch (error) {
+    res.status(500).json({ status_code: -1, msg: `读取新闻日历失败: ${error.message}` });
+  }
+});
+
+app.get('/api/news-calendar/:month', async (req, res) => {
+  if (!/^\d{4}-\d{2}$/.test(req.params.month)) return res.status(400).json({ status_code: -1, msg: '月份格式无效' });
+  try {
+    const data = await readNewsCalendarFile(req.params.month);
+    res.set('Cache-Control', 'no-store');
+    res.json({ status_code: 0, data });
+  } catch (error) {
+    res.status(500).json({ status_code: -1, msg: `读取新闻日历失败: ${error.message}` });
   }
 });
 

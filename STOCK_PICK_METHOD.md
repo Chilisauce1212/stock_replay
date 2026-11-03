@@ -21,7 +21,7 @@
 | 2. 活跃 | 近 20 日均量 ÷ 常态量 | ≥ 1.27 | K 线（首板日之前） |
 |  | 近 60 日放量天数（成交量 ≥ 2 倍常态量） | ≥ 7 天 | 同上 |
 | 3. 同题材热度 | 首板当天同题材的其他涨停家数 | 1–10 家 | 全市场涨停名单和涨停原因 |
-| 4. 有强类重要新闻 | 大模型按 prompt 判断首板日和前一交易日的新闻标题 | 至少 1 条重要新闻属于新叙事、海外/明星公司、企业荣誉/重要会议、资本运作转型之一 | 同花顺个股新闻 |
+| 4. 有强类重要新闻 | 大模型按 prompt 判断首板日和前两个交易日的新闻标题 | 至少 1 条重要新闻属于新叙事、海外/明星公司、企业荣誉/重要会议、资本运作转型之一 | 同花顺个股新闻 |
 | 5. 每天最多 2 只 | 近 60 日放量天数 | 从高到低取前 2 只 | 同条件 2 |
 
 **定义细节：**
@@ -104,7 +104,7 @@ npm run stock-pick -- --start 20261030 --end 20261030 --name 今日选股
 | 全市场每日涨停名单和涨停原因 | 一年内：同花顺涨停池接口（免费）；更早：问财按月区间问句加翻页（每月 1 次额度） | `limit-up-list.js`（stock-pick、yijiner-cases 自动调用）→ `reports/全市场涨停原因.json` |
 | 日 K 线 | 同花顺 K 线接口，经网站服务 `/api/kline` | `stock-pick.js`、`volume-pile-report.js` |
 | 个股首板涨停原因 | 涨停池接口 / 问财 | `npm run first-board-reason` → `reports/首板涨停原因.json` |
-| 个股新闻 | 同花顺个股时间线，经 `/api/news`（首板日和前一交易日） | `npm run news-theme` → `reports/news-cache.json` |
+| 个股新闻 | 同花顺个股时间线，经 `/api/news`（首板日和前两个交易日） | `npm run news-theme` → `reports/news-cache.json` |
 | 新闻原文 | 无头 Chrome 渲染 | `npm run news-body` → `reports/news-body-cache.json` |
 | 新闻判断 | DeepSeek（`.env` 的 `BASEURL`、`APIKEY`、`MODEL`），全开思考 | `npm run news-llm` → `reports/news-llm.json` |
 | 收益 | 通达信逐笔成交，按 `review-pnl.js` 规则 | `npm run volume-pile-report` 的收益列 |

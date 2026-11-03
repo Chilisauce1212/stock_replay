@@ -49,9 +49,11 @@ function parseArgs(argv) {
     else if (argument === '--report') options.report = String(argv[++index] || '');
     else if (argument === '--out') options.out = String(argv[++index] || '');
     else if (argument === '--cascade') options.cascade = true;
+    else if (argument === '--incremental') options.incremental = true;
     else if (argument === '--yes' || argument === '-y') options.yes = true;
     else throw new Error(`未知参数 ${argument}`);
   }
+  if (options.incremental && (options.refresh || options.cascade)) throw new Error('--incremental 不能和 --refresh、--cascade 一起用');
   if (!Number.isInteger(options.limit) || options.limit < 0) throw new Error('--limit 必须是非负整数');
   if (!Number.isInteger(options.workers) || options.workers < 1 || options.workers > 16) throw new Error('--workers 必须在 1～16 之间');
   return options;
@@ -71,6 +73,7 @@ function helpText() {
     '--refresh         忽略缓存重新调用（prompt、输入改了会自动重新调用，不需要这个参数）',
     '--out 文件名      结果另存到 reports/<文件名>，不覆盖页面读取的 news-llm.json（如关思考对照：--no-thinking --out news-llm-fast.json）',
     '--cascade         分层：先全部关思考跑（存 news-llm-fast.json），关思考结论和关键词规则不一致的再开思考重跑，合并写入 news-llm.json；四连板实测比全开思考省约 35% 费用',
+    '--incremental     只判断旧结果里没有的新闻并合并，旧判断原样保留（只改了新闻窗口时用；改了判断标准要用全量重跑）',
     '--report 名称     题材演绎表名称，默认 四连板题材演绎（读取 reports/<名称>.json 和 .review.json）',
     `--yes             需要调用超过 ${CONFIRM_ABOVE} 只时不再询问，直接调用`,
   ].join('\n');
@@ -271,6 +274,60 @@ async function judgeStock(system, promptHash, input, news, { useSearch, thinking
   throw lastError;
 }
 
+// 增量判断：旧判断里已有的新闻（按 时间|标题 对应）原样保留，只把新增的新闻送模型，再按当前新闻顺序合并。
+// 判断重要与否只看单条标题，所以逐条结果可以合并；已不在当前新闻里的旧判断丢弃。
+// 锚定新闻：旧锚定还在就保留，否则取模型对新增新闻选的锚定，都没有时取最早一条重要新闻。
+async function judgeStockIncremental(system, promptHash, input, news, old, { useSearch, thinking }) {
+  const ids = news.map(newsId);
+  const oldItem = item => old.newsIds[Number(item.id.slice(1)) - 1];
+  const kept = new Map(old.result.news.map(item => [oldItem(item), item]));
+  const freshIndexes = ids.flatMap((id, index) => (kept.has(id) ? [] : [index]));
+  let fresh = null;
+  if (freshIndexes.length) {
+    const subInput = { ...input, news: freshIndexes.map((index, position) => ({ ...input.news[index], id: `n${position + 1}` })) };
+    fresh = await judgeStock(system, promptHash, subInput, freshIndexes.map(index => news[index]), { useSearch, thinking });
+  }
+  const freshAt = new Map(freshIndexes.map((index, position) => [index, fresh.result.news[position]]));
+  const merged = ids.map((id, index) => ({ ...(kept.get(id) || freshAt.get(index)), id: `n${index + 1}` }));
+
+  const importantAt = id => {
+    const index = ids.indexOf(id);
+    return index >= 0 && merged[index].important ? merged[index] : null;
+  };
+  const oldAnchor = old.result.anchorId ? importantAt(old.newsIds[Number(old.result.anchorId.slice(1)) - 1]) : null;
+  const freshAnchorIndex = fresh?.result.anchorId ? freshIndexes[Number(fresh.result.anchorId.slice(1)) - 1] : -1;
+  const earliest = merged.filter(item => item.important)
+    .sort((left, right) => news[Number(left.id.slice(1)) - 1].time.localeCompare(news[Number(right.id.slice(1)) - 1].time))[0];
+  const anchor = oldAnchor || (freshAnchorIndex >= 0 && merged[freshAnchorIndex].important ? merged[freshAnchorIndex] : earliest) || null;
+  // 整只票的说明跟着锚定来源走：旧锚定用旧说明，否则用新增部分的说明；都没有重要新闻时保留旧说明。
+  const summary = oldAnchor || !fresh?.result.hasImportantNews ? old.result : fresh.result;
+  const hasImportantNews = merged.some(item => item.important);
+  return {
+    key: input.key,
+    promptHash,
+    inputHash: hashOf(input),
+    model: process.env.MODEL,
+    search: useSearch,
+    thinking,
+    limitUpReason: input.limitUpReason,
+    newsIds: ids,
+    bodies: input.news.filter(item => item.body).length,
+    fetchedAt: new Date().toISOString(),
+    result: {
+      news: merged,
+      hasImportantNews,
+      anchorId: anchor ? anchor.id : '',
+      newThing: hasImportantNews ? (summary.newThing || anchor.newThing) : '',
+      theme: summary.theme || '',
+      reason: hasImportantNews ? (summary.reason || anchor.reason) : (summary.reason || ''),
+    },
+    searches: fresh?.searches || [],
+    sources: fresh?.sources || [],
+    usage: fresh?.usage || {},
+    incremental: { fromPrompt: old.promptHash, fromInputHash: old.inputHash, kept: ids.length - freshIndexes.length, judged: freshIndexes.length, dropped: old.newsIds.filter(id => !ids.includes(id)).length },
+  };
+}
+
 function percent(part, total) {
   return total ? `${(part / total * 100).toFixed(1)}%` : '--';
 }
@@ -427,8 +484,12 @@ async function runCalls(rows, thinking, saved, file, { system, promptHash, input
       && entry.inputHash === hashOf(inputs.get(row.key));
   };
   const todo = rows.filter(row => !isFresh(row));
-  console.log(`${label}：${rows.length} 只，缓存可用 ${rows.length - todo.length} 只，需要调用 ${todo.length} 只`);
-  await confirmLargeRun(todo.length, options);
+  // 增量时没有新增新闻的票只合并旧判断，不调用模型，不计入需要确认的只数
+  const calls = options.incremental
+    ? todo.filter(row => !saved[row.key] || cachedNews(newsCache[row.key]).some(item => !saved[row.key].newsIds.includes(newsId(item)))).length
+    : todo.length;
+  console.log(`${label}：${rows.length} 只，缓存可用 ${rows.length - todo.length} 只，需要处理 ${todo.length} 只，其中调用模型 ${calls} 只`);
+  await confirmLargeRun(calls, options);
   let next = 0;
   let done = 0;
   let failed = 0;
@@ -438,9 +499,12 @@ async function runCalls(rows, thinking, saved, file, { system, promptHash, input
     while (next < todo.length) {
       const row = todo[next++];
       try {
-        const entry = await judgeStock(system, promptHash, inputs.get(row.key), cachedNews(newsCache[row.key]), {
-          useSearch: options.search, thinking,
-        });
+        const news = cachedNews(newsCache[row.key]);
+        const settings = { useSearch: options.search, thinking };
+        const old = options.incremental ? saved[row.key] : null;
+        const entry = old
+          ? await judgeStockIncremental(system, promptHash, inputs.get(row.key), news, old, settings)
+          : await judgeStock(system, promptHash, inputs.get(row.key), news, settings);
         saved[row.key] = entry;
         for (const field of Object.keys(usage)) usage[field] += Number(entry.usage[field] || 0);
       } catch (error) {

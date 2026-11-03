@@ -2,11 +2,12 @@
 'use strict';
 
 // 每日复盘全自动更新。从交易日 T(X) 15:00 到 T(X+1) 15:00 之前（含周末、节假日）运行，都更新到 T(X)：
-//   1. 今日首板（turnover_json.js --today）
+//   1. 今日首板（turnover_json.js --today，含连板股票、自由流通市值、新闻判断）
 //   2. T(X) 所在年份的一进二回测：追加 → 每日复盘 / 连板股票同步 → 小于 30 元 → 盈亏 → 新闻判断 → 写入每日复盘
 //      （turnover_json.js 起始 结束，见 review-pipeline.js）；1 月份同时处理上一年的文件（12 月末的票要到 1 月才算得出盈亏）
 //   3. 连板情绪周期（limit-up-cycle.js，配了 R2 时 --upload）
-//   4. 删除 R2 上 30 天前的覆盖备份（backups/）
+//   4. 新闻日历（news-calendar.js，配了 R2 时 --upload）
+//   5. 删除 R2 上 30 天前的覆盖备份（backups/）
 // 默认读写 R2（本地 daily-review/ 同步一份）；--local 强制只用本地文件，不读写 R2。
 // 新闻判断要调用大模型超过 100 只时会先询问，--yes 不询问直接调用。
 //
@@ -59,7 +60,7 @@ async function main() {
   console.log(`更新到交易日 ${date}，${r2Client ? '读写 R2（本地同步一份）' : '只用本地文件'}`);
 
   const results = [];
-  results.push(['今日首板', runTurnover(['--today'])]);
+  results.push(['今日首板', runTurnover(['--today', ...(options.yes ? ['--yes'] : [])])]);
   const year = Number(date.slice(0, 4));
   const years = date.slice(5, 7) === '01' ? [year - 1, year] : [year];
   for (const item of years) {
@@ -72,6 +73,13 @@ async function main() {
     results.push(['连板情绪周期', true]);
   } catch {
     results.push(['连板情绪周期', false]);
+  }
+  try {
+    console.log('\n========== node news-calendar.js ==========');
+    execFileSync(process.execPath, [path.join(ROOT, 'news-calendar.js'), '--fill-ticks', ...(r2Client ? ['--upload'] : [])], { stdio: 'inherit', cwd: ROOT });
+    results.push(['新闻日历', true]);
+  } catch {
+    results.push(['新闻日历', false]);
   }
   if (r2Client) {
     try {

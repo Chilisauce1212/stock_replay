@@ -23,7 +23,7 @@ const CACHE_FILE = path.join(ROOT, 'reports', '自由流通市值.json');
 const DEFAULT_MAX_QUERIES = 20;
 const RECENT_RETRY_DAYS = 7; // 这么多天内查不到的继续重查：收盘后当天的数据可能还没出来
 const TODAY_FILE = '今日首板.json';
-const REVIEW_FILE = /^(今日首板|一进二回测_\d{8}_\d{8})\.json$/;
+const REVIEW_FILE = /^(今日首板|四连板及以上|一进二回测_\d{8}_\d{8})\.json$/;
 const sleep = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
 const keyOf = record => `${record.code}|${record.date}`;
 const readJson = (file, fallback) => (fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : fallback);

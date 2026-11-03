@@ -37,7 +37,10 @@ async function fetchPool(date) {
     const payload = await response.json();
     if (payload.status_code !== 0) throw new Error(`${date} 涨停池接口: ${payload.status_msg}`);
     for (const item of payload.data?.info || []) {
-      rows.push({ date, code: String(item.code), name: String(item.name || ''), reason: String(item.reason_type || '').trim(), boards: String(item.high_days || '') });
+      const firstLimitTime = Number(item.first_limit_up_time) > 0
+        ? new Date(Number(item.first_limit_up_time) * 1000 + 8 * 3600_000).toISOString().slice(11, 16)
+        : '';
+      rows.push({ date, code: String(item.code), name: String(item.name || ''), reason: String(item.reason_type || '').trim(), boards: String(item.high_days || ''), firstLimitTime });
     }
     if (page * 200 >= Number(payload.data?.page?.total || 0)) break;
   }

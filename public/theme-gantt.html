@@ -894,7 +894,7 @@
     const dayKeys = [...days.keys()].sort().reverse();
     const container = document.getElementById('reviewDays');
     if (!dayKeys.length) {
-      container.innerHTML = '<div class="review-hint">首板日和前一个交易日没有新闻</div>';
+      container.innerHTML = '<div class="review-hint">首板日和前两个交易日没有新闻</div>';
     } else {
       container.innerHTML = dayKeys.map((day, index) => {
         const items = days.get(day).sort((left, right) => right.time.localeCompare(left.time));

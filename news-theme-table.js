@@ -2,10 +2,10 @@
 'use strict';
 
 // 用四连板用例检验「新闻/题材判断」程序化之后准不准，生成「题材演绎」表格（Excel + 甘特图页面，可编辑）：
-// 股票取自用例 JSON，新闻实时调用网站服务的 /api/news，只取首板日和前一个交易日（按交易日历，中间的周末/假期新闻也算），按新闻判断规则锚定重要新闻，
+// 股票取自用例 JSON，新闻实时调用网站服务的 /api/news，只取首板日和前两个交易日（按交易日历，中间的周末/假期新闻也算），按新闻判断规则锚定重要新闻，
 // 再用 K 线计算首板到见顶、到断板的天数。
 // 不使用 daily-review/连板股票.json 的涨停原因：那是同花顺事后整理的，不是首板时能看到的新闻。
-// 用法: npm run news-theme -- [--input test-cases/四连板及以上.json] [--start YYYYMMDD] [--end YYYYMMDD]
+// 用法: npm run news-theme -- [--input daily-review/四连板及以上.json] [--start YYYYMMDD] [--end YYYYMMDD]
 //                             [--out reports/四连板题材演绎.xlsx] [--window 20] [--refresh-news] [--base-url http://localhost:3000]
 
 const fs = require('fs');
@@ -13,14 +13,14 @@ const path = require('path');
 const XLSX = require('xlsx');
 const { normalizeDate, isLimitUpBar } = require('./public/volume-pile');
 
-const DEFAULT_INPUT = path.join(__dirname, 'test-cases', '四连板及以上.json');
+const DEFAULT_INPUT = path.join(__dirname, 'daily-review', '四连板及以上.json');
 const DEFAULT_OUTPUT = path.join(__dirname, 'reports', '四连板题材演绎.xlsx');
 // 新闻按「代码|首板日」缓存，重跑时不重复请求；--refresh-news 重新获取。
 const NEWS_CACHE_FILE = path.join(__dirname, 'reports', 'news-cache.json');
 const IMPORTANT_SCORE = 2;
-// 新闻范围：首板日和前一个交易日，共 2 个连续交易日（按同花顺交易日历，不按个股 K 线，停牌不影响），
-// 两个交易日之间的周末/假期新闻也包含在内；前一个交易日没有新闻时就只有首板日的新闻。
-const NEWS_TRADING_DAYS = 2;
+// 新闻范围：首板日和前两个交易日，共 3 个连续交易日（按同花顺交易日历，不按个股 K 线，停牌不影响），
+// 这几个交易日之间的周末/假期新闻也包含在内。
+const NEWS_TRADING_DAYS = 3;
 const MAX_WINDOW = 22;
 const BEIJING_OFFSET_MS = 8 * 60 * 60 * 1000;
 const MANUAL_COLUMNS = ['人工锚定新闻', '人工类别', '人工题材', '备注'];
@@ -96,7 +96,7 @@ function helpText() {
   return [
     '用法: npm run news-theme -- [选项]',
     '',
-    '  --input <JSON>     用例文件（code、date、stockName），默认 test-cases/四连板及以上.json',
+    '  --input <JSON>     用例文件（code、date、stockName），默认 daily-review/四连板及以上.json',
     '  --start <日期>     只统计首板日不早于该日期的股票（YYYYMMDD 或 YYYY-MM-DD）',
     '  --end <日期>       只统计首板日不晚于该日期的股票',
     '  --out <xlsx>       输出路径，默认 reports/四连板题材演绎.xlsx',
@@ -149,7 +149,7 @@ function formatBeijingTime(milliseconds) {
   return new Date(milliseconds + BEIJING_OFFSET_MS).toISOString().slice(0, 19).replace('T', ' ');
 }
 
-// 首板日和前一个交易日的个股新闻（含临时置顶），与回放页面的新闻面板同源。
+// 首板日和前两个交易日的个股新闻（含临时置顶），与回放页面的新闻面板同源。
 async function fetchNews(baseUrl, code, signalDate) {
   const url = new URL('/api/news', baseUrl);
   url.searchParams.set('code', code);
@@ -401,7 +401,7 @@ function writeWorkbook(outputPath, rows, themeSummary, categorySummary, options)
     ['生成时间', new Date().toLocaleString('zh-CN', { hour12: false })],
     ['输入文件', path.relative(__dirname, options.input)],
     ['首板日期范围', `${options.start || '不限'} ～ ${options.end || '不限'}`],
-    ['新闻范围', '调用网站服务 /api/news：只用首板日和前一个交易日（按交易日历的连续交易日，两日之间的周末/假期新闻也算，起始日见「新闻起始日期」列）的同花顺个股时间线标题和临时置顶新闻，缓存在 reports/news-cache.json'],
+    ['新闻范围', '调用网站服务 /api/news：只用首板日和前两个交易日（按交易日历的连续交易日，其间的周末/假期新闻也算，起始日见「新闻起始日期」列）的同花顺个股时间线标题和临时置顶新闻，缓存在 reports/news-cache.json'],
     ['重要新闻五类', CATEGORIES.map(category => category.name).join('、')],
     ['排除', '龙虎榜、资金流向、涨停分析、例行公告等行情/例行信息；只描述板块拉升暴涨、没有命中五类的标题'],
     ['评分', `命中类别数 + 1，标题点名个股再 +1；分数 ≥ ${IMPORTANT_SCORE} 记为有重要新闻；同分取更早的一条`],

@@ -20,7 +20,7 @@ const path = require('path');
 const { spawn } = require('child_process');
 const { chromium } = require('playwright');
 
-const DEFAULT_INPUT = path.join(__dirname, 'test-cases', '四连板及以上.json');
+const DEFAULT_INPUT = path.join(__dirname, 'daily-review', '四连板及以上.json');
 const OUTPUT_FILE = path.join(__dirname, 'reports', '首板涨停原因.json');
 const POOL_URL = 'https://data.10jqka.com.cn/dataapi/limit_up/limit_up_pool';
 // 9222 被别的程序占用时，设 WENCAI_DEBUG_PORT 用另一个端口，会单独开一个 Chrome（登录状态也分开）
@@ -197,7 +197,17 @@ async function queryWencaiOnce(page, records) {
 
 // 在问财页面发一个问句，返回 { question, rows, byCode, notice }；自由流通市值（free-float.js）也用这个
 async function runWencaiQuestion(page, question) {
-  const streamPromise = page.waitForResponse(response => response.url().includes('/aime/stream-query'), { timeout: 90_000 });
+  // 页面打开后会连续跳转几次，跳转前发出的请求读不到正文，这种不算，继续等下一个。
+  let text = null;
+  const streamPromise = page.waitForResponse(async response => {
+    if (!response.url().includes('/aime/stream-query')) return false;
+    try {
+      text = await response.text();
+      return true;
+    } catch {
+      return false;
+    }
+  }, { timeout: 90_000 });
   await page.goto(`https://www.iwencai.com/unifiedwap/result?w=${encodeURIComponent(question)}`, { waitUntil: 'domcontentloaded', timeout: 60_000 });
   if (/upass\.10jqka\.com\.cn|\/login/.test(page.url())) {
     throw new Error('问财要求登录，请在 Chrome 窗口登录后重跑');
@@ -209,7 +219,6 @@ async function runWencaiQuestion(page, question) {
   quotaPromise.catch(() => {});
   const response = await Promise.race([streamPromise, quotaPromise]);
   if (response === 'quota') throw new Error('问财免费次数已用完（每日约 100 次），请在 Chrome 里换账号后重跑，已获取的会跳过');
-  const text = await response.text();
   const allRows = parseStreamRows(text);
   const rows = allRows.filter(row => /\d{6}/.test(String(row.code || row['股票代码'] || '')));
   // 条件数超限、次数用完等提示也放在 datas 里，是带 content 的一行。

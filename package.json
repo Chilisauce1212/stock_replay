@@ -20,6 +20,7 @@
     "first-board-reason": "node first-board-reason.js",
     "free-float": "node free-float.js",
     "limit-up-cycle": "node limit-up-cycle.js",
+    "news-calendar": "node news-calendar.js",
     "news-llm": "node news-llm.js",
     "news-body": "node news-body.js",
     "stock-pick": "node stock-pick.js",

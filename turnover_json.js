@@ -5,7 +5,7 @@ const path = require('path');
 const { execFileSync } = require('child_process');
 const { r2Client, readJson, writeJson } = require('./r2-storage');
 const { latestClosedTradeDay, updateLimitUpList } = require('./limit-up-list');
-const { finishReviewFile } = require('./review-pipeline');
+const { finishReviewFile, finishTodayFile } = require('./review-pipeline');
 
 const DAILY_REVIEW_DIR = path.join(__dirname, 'daily-review');
 const TEST_CASE_DIR = path.join(__dirname, 'test-cases');
@@ -164,7 +164,7 @@ async function run(startArgument, endArgument, { followUp = true, yes = false } 
 
 // 今日首板：最近一个已收盘交易日 T(X) 收盘封死涨停、前一交易日没有封死涨停、主板、非 ST（和问财「涨停」同口径）。
 // 从 T(X) 15:00 到 T(X+1) 15:00 之前运行（含周末、节假日）都生成 T(X) 的首板；数据来自全市场涨停名单（同花顺涨停池）。
-async function runTodayFirstBoard() {
+async function runTodayFirstBoard({ yes = false } = {}) {
   const { date } = await latestClosedTradeDay();
   const months = await updateLimitUpList(date);
   const byDay = new Map();
@@ -187,11 +187,24 @@ async function runTodayFirstBoard() {
   const filename = path.join(DAILY_REVIEW_DIR, '今日首板.json');
   await saveJson(records, filename, { alsoLocal: true, allowShrink: true });
   console.log(`>>> 今日首板（${date}）：${records.length} 只，已覆盖 ${r2Client ? 'R2 daily-review/今日首板.json 和本地' : '本地'} ${path.relative(__dirname, filename)}`);
+  // 页面的「连板股票」按日期读，今日首板这天也要有；失败不影响名单和后面的自由流通市值
+  try {
+    await syncChainStocks(records);
+  } catch (error) {
+    console.error(`今日首板名单已写好，但连板股票没更新：${error.message}。处理后运行 npm run chain-stocks -- ${date}`);
+    process.exitCode = 1;
+  }
   // 上面整体覆盖了文件，接着补上自由流通市值（问财）；失败时名单已经写好，只报错，退出码为 1
   try {
     execFileSync(process.execPath, [path.join(__dirname, 'free-float.js'), '--today', ...(r2Client ? ['--upload'] : [])], { stdio: 'inherit' });
   } catch {
     console.error('今日首板名单已写好，但自由流通市值没补全（原因见上），处理后运行 npm run free-float -- --today --upload');
+    process.exitCode = 1;
+  }
+  try {
+    await finishTodayFile({ yes });
+  } catch (error) {
+    console.error(`今日首板名单已写好，但新闻判断失败：${error.message}。处理后重跑 npm run turnover -- --today`);
     process.exitCode = 1;
   }
 }
@@ -203,7 +216,7 @@ async function runTodayFirstBoard() {
 const flags = process.argv.slice(2).filter(argument => argument.startsWith('--'));
 const [start, end] = process.argv.slice(2).filter(argument => !argument.startsWith('--'));
 if (flags.includes('--today')) {
-  runTodayFirstBoard().catch(error => {
+  runTodayFirstBoard({ yes: flags.includes('--yes') }).catch(error => {
     console.error(`今日首板生成失败: ${error.message}`);
     process.exitCode = 1;
   });

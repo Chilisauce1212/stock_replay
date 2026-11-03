@@ -140,11 +140,14 @@ async function main() {
     ['四连板及以上.json', allCases.filter((_, index) => boardCounts[index] >= 4)],
     ['五连板及以上.json', allCases.filter((_, index) => boardCounts[index] >= 5)],
   ];
-  outputs.forEach(([fileName, cases]) => fs.writeFileSync(
-    path.join(testCaseDir, fileName),
-    `${JSON.stringify(cases, null, 2)}\n`,
-    'utf8'
-  ));
+  outputs.forEach(([fileName, cases]) => {
+    // 四连板及以上放在每日复盘里：保留已算好的 pnl、judge、freeFloatCap
+    const inReview = fileName === '四连板及以上.json';
+    const file = path.join(inReview ? path.join(__dirname, 'daily-review') : testCaseDir, fileName);
+    const old = inReview && fs.existsSync(file) ? new Map(JSON.parse(fs.readFileSync(file, 'utf8')).map(item => [`${item.code}|${item.date}`, item])) : new Map();
+    const merged = cases.map(item => ({ ...old.get(`${item.code}|${item.date}`), ...item }));
+    fs.writeFileSync(file, `${JSON.stringify(merged, null, 2)}\n`, 'utf8');
+  });
   console.log(`全量重算完成：大于30元 ${outputs[0][1].length} 条，小于3元 ${outputs[1][1].length} 条，三连板及以上 ${outputs[2][1].length} 条，四连板及以上 ${outputs[3][1].length} 条，五连板及以上 ${outputs[4][1].length} 条，未匹配 ${missing} 条`);
 }
 
