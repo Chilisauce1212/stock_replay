@@ -150,7 +150,11 @@
       white-space: nowrap;
     }
     .kind.plain { color: var(--muted); background: none; }
-    #legend { display: flex; flex-wrap: wrap; gap: 4px 2px; padding-bottom: 4px; }
+    #legend { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 2px; padding-bottom: 4px; }
+    #legend button.kind { border-top: 0; border-right: 0; border-bottom: 0; font: inherit; font-size: 12px; cursor: pointer; }
+    #legend.filtering button.kind:not(.active) { opacity: 0.4; }
+    #legend button.kind.active { outline: 1px solid var(--k); }
+    #legend .legend-hint { color: var(--muted); font-size: 12px; margin-left: 6px; }
     .news p { margin: 2px 0 0; color: var(--muted); }
     .hint { color: var(--muted); font-size: 13px; padding: 6px 0; }
     @media (max-width: 560px) {
@@ -184,7 +188,7 @@
       <button class="btn" id="expandAll">全部展开</button>
       <span id="count"></span>
     </div>
-    <div id="legend" title="彩色是大模型判为重要的类别；灰色是按标题关键词机械分的，没有判断重要性"></div>
+    <div id="legend" title="彩色是大模型判为重要的类别；灰色是按标题关键词机械分的，没有判断重要性。点击类别只看当天有这类新闻的票，再点一次取消"></div>
     <div id="list"><div class="hint">加载中…</div></div>
   </main>
 
@@ -214,6 +218,7 @@
     let monthIndex = 0;
     let selectedDate = '';
     let activeTheme = '';
+    let activeKind = ''; // 点图例筛选的新闻类别
 
     const el = id => document.getElementById(id);
     const dayOf = date => loaded.get(date.slice(0, 7))?.days.find(day => day.d === date);
@@ -261,6 +266,8 @@
         if (el('onlyImportant').checked && !hasImportant(stock)) return false;
         if (el('hideNoNews').checked && stock.nc === 0) return false;
         if (activeTheme && !stock.ths.includes(activeTheme)) return false;
+        // 按类别筛选只看已存的新闻（跑过新闻判断的票），没跑过的不知道有什么新闻，不显示
+        if (activeKind && !(newsOf(stock, day.d) || []).some(item => kindsOf(item).includes(activeKind))) return false;
         if (query && ![stock.n, stock.c, stock.r, stock.fr].some(text => (text || '').toLowerCase().includes(query))) return false;
         return true;
       });
@@ -344,7 +351,7 @@
       const day = dayOf(selectedDate);
       if (!day) return;
       const stocks = filteredStocks(day);
-      el('count').textContent = `显示 ${stocks.length}/${day.t}`;
+      el('count').textContent = `显示 ${stocks.length}/${day.t}${activeKind ? `（有「${activeKind}」新闻）` : ''}`;
       const groups = new Map();
       const add = (name, stock) => {
         if (!groups.has(name)) groups.set(name, []);
@@ -362,6 +369,12 @@
     }
 
     const kindTag = (name, color, plain = false) => `<span class="kind${plain ? ' plain' : ''}" style="--k:${color}">${escapeHtml(name)}</span>`;
+
+    function kindsOf(item) {
+      if (item.cats?.length) return item.cats;
+      const kind = PLAIN_KINDS.find(([, , pattern]) => pattern.test(item.t));
+      return kind ? [kind[0]] : [];
+    }
 
     function kindTags(item) {
       if (item.cats?.length) return item.cats.map(category => kindTag(category, IMPORTANT_KINDS[category] || '#8994a2')).join('');
@@ -388,10 +401,13 @@
         : `<div class="origin"><b>涨停原因</b>：${escapeHtml(stock.r)}</div>`;
       const cached = newsOf(stock, date);
       if (cached) {
-        const list = el('onlyImportant').checked ? cached.filter(item => item.i) : cached;
+        const list = cached
+          .filter(item => !el('onlyImportant').checked || item.i)
+          .filter(item => !activeKind || kindsOf(item).includes(activeKind));
         const hidden = cached.length - list.length;
+        const hiddenLabel = activeKind ? `不是「${activeKind}」${el('onlyImportant').checked ? '或非重要' : ''}的新闻` : '非重要新闻';
         body.innerHTML = origin + (list.length ? newsHtml(list) : '<div class="hint">首板日和前两个交易日没有新闻</div>')
-          + (hidden ? `<div class="hint">已隐藏 ${hidden} 条非重要新闻</div>` : '');
+          + (hidden ? `<div class="hint">已隐藏 ${hidden} 条${hiddenLabel}</div>` : '');
         return;
       }
       body.innerHTML = `${origin}<div class="hint">这只票没跑过新闻判断，正在现查标题…</div>`;
@@ -444,10 +460,22 @@
       await selectDate(data.days.at(-1).d);
     }
 
-    el('legend').innerHTML = [
-      ...Object.entries(IMPORTANT_KINDS).map(([name, color]) => kindTag(name, color)),
-      ...PLAIN_KINDS.map(([name, color]) => kindTag(name, color, true)),
-    ].join('');
+    function renderLegend() {
+      const button = (name, color, plain = false) => `<button type="button" class="kind${plain ? ' plain' : ''}${name === activeKind ? ' active' : ''}" style="--k:${color}" data-kind="${escapeAttr(name)}">${escapeHtml(name)}</button>`;
+      el('legend').classList.toggle('filtering', Boolean(activeKind));
+      el('legend').innerHTML = [
+        ...Object.entries(IMPORTANT_KINDS).map(([name, color]) => button(name, color)),
+        ...PLAIN_KINDS.map(([name, color]) => button(name, color, true)),
+      ].join('') + (activeKind ? '<span class="legend-hint">只看有这类新闻的票，没跑过新闻判断的票不显示；再点一次取消</span>' : '');
+    }
+    renderLegend();
+    el('legend').addEventListener('click', event => {
+      const chip = event.target.closest('button[data-kind]');
+      if (!chip) return;
+      activeKind = activeKind === chip.dataset.kind ? '' : chip.dataset.kind;
+      renderLegend();
+      renderList();
+    });
 
     el('calendar').addEventListener('click', event => {
       const cell = event.target.closest('button.cell');

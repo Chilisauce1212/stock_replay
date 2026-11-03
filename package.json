@@ -22,6 +22,7 @@
     "limit-up-cycle": "node limit-up-cycle.js",
     "news-calendar": "node news-calendar.js",
     "news-llm": "node news-llm.js",
+    "theme-evidence": "node theme-evidence.js",
     "news-body": "node news-body.js",
     "stock-pick": "node stock-pick.js",
     "review-judge": "node review-judge.js",

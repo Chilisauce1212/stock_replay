@@ -171,6 +171,17 @@
       color: #f0b90b;
     }
     .volume-pile-toggle input { margin: 0; }
+    #volumeFourBoardFactor {
+      padding: 1px 2px;
+      color: #e6edf3;
+      font-size: 11px;
+      background: #1b2028;
+      border: 1px solid #3a4250;
+      border-radius: 3px;
+    }
+    #volumeFourBoardFactor:disabled { opacity: 0.45; }
+    .volume-four-board-note { color: #aeb8c5; white-space: nowrap; }
+    .volume-four-board-note[hidden] { display: none; }
     .volume-pile-toolbar > button {
       padding: 3px 7px;
       font-size: 10px;
@@ -816,6 +827,17 @@
           <input id="volumeBaselineVisible" type="checkbox" onchange="updateVolumePileSettings()">
           <span>显示底噪线</span>
         </label>
+        <label class="volume-pile-toggle" title="临时观察：模拟后面拉高放量之后再回看前面的样子。K 线按假设走出四连板：价格轴上沿至少到首板收盘价连续再涨停 3 天的价格（主板 10%、ST 5%，创业板/科创板 20%，北交所 30%）。成交量刻度放大到首板当天已显示最大量的 N 倍，倍数来自 460 只四连板「首板到之后 20 根的最大量 ÷ 首板当天已显示最大量」的分位数。不影响量堆识别，刷新页面后关闭。">
+          <input id="volumeFourBoardScale" type="checkbox" onchange="updateVolumeScaleMode()">
+          <span>四连板缩放</span>
+        </label>
+        <select id="volumeFourBoardFactor" disabled onchange="updateVolumeScaleMode()" aria-label="四连板缩放倍数">
+          <option value="1.1">量×1.1（25%）</option>
+          <option value="1.4" selected>量×1.4（中位）</option>
+          <option value="1.9">量×1.9（75%）</option>
+          <option value="2.6">量×2.6（90%）</option>
+        </select>
+        <span id="volumeFourBoardNote" class="volume-four-board-note" hidden></span>
         <details id="volumePileSettings">
           <summary>调整参数</summary>
           <div class="volume-pile-panel">
@@ -995,6 +1017,10 @@
   let volumePileBandLayer = null;
   const VOLUME_SCALE_TOP = 0.8; // 成交量区域占图表底部 20%
   let displayedMaxVolume = 0;
+  // 四连板缩放：0 为关闭；只放大成交量刻度，不改量堆识别；不存 localStorage，刷新后关闭
+  let volumeScaleBoost = 0;
+  let priceScaleBoost = false;
+  let fourthBoardPrice = 0; // 假设首板后再连续涨停 3 天（第四板）的收盘价，四连板缩放时价格轴上沿至少到这里
   let volumeBaselinePriceLine = null;
   let volumePileDecisionEndDates = new Map();
   
@@ -1135,6 +1161,42 @@
     } catch (error) {
       console.warn(`保存量堆指标参数失败: ${error.message}`);
     }
+    updateChartData();
+    updateVolumePileBands();
+  }
+
+  // 首板日（用例的日期，自定义回放取买入/空仓前最后一根）收盘价连续涨停 3 天后的价格，每天按涨停价四舍五入到分
+  function assumedFourthBoardPrice(candles) {
+    const code = String(activeCase?.code || '').replace(/D/g, '').slice(-6);
+    const decisionEndDate = activeCase?.id ? volumePileDecisionEndDates.get(String(activeCase.id)) : '';
+    const signal = candles.find(item => item.time === activeCase?.date)
+      || (decisionEndDate ? candles.filter(item => item.time <= decisionEndDate).at(-1) : candles.at(-1));
+    if (!signal || !(signal.close > 0)) return 0;
+    const percent = /^(30|68)/.test(code) ? 0.2 : /^(8|4|92)/.test(code) ? 0.3
+      : /ST/i.test(String(activeCase?.stockName || '')) ? 0.05 : 0.1;
+    let price = signal.close;
+    for (let day = 0; day < 3; day++) price = Math.round(price * (1 + percent) * 100) / 100;
+    return price;
+  }
+
+  // 开关打开时说明价格轴有没有被拉高：前面的最高价已经高于假设的第四板价时，四连板后价格轴本来就不会变
+  function updateFourBoardNote(candles) {
+    const note = document.getElementById('volumeFourBoardNote');
+    if (!note) return;
+    note.hidden = !priceScaleBoost || !(fourthBoardPrice > 0);
+    if (note.hidden) return;
+    const shownHigh = candles.reduce((max, item) => (item.high > max ? item.high : max), 0);
+    note.textContent = fourthBoardPrice > shownHigh
+      ? `K线上沿拉到第四板价 ${fourthBoardPrice.toFixed(2)}（已显示最高 ${shownHigh.toFixed(2)}）`
+      : `前高 ${shownHigh.toFixed(2)} 已高于第四板价 ${fourthBoardPrice.toFixed(2)}，K线不缩放`;
+  }
+
+  function updateVolumeScaleMode() {
+    const enabled = document.getElementById('volumeFourBoardScale').checked;
+    const factorSelect = document.getElementById('volumeFourBoardFactor');
+    factorSelect.disabled = !enabled;
+    volumeScaleBoost = enabled ? Number(factorSelect.value) : 0;
+    priceScaleBoost = enabled;
     updateChartData();
     updateVolumePileBands();
   }
@@ -2286,6 +2348,7 @@
     const leading = new Date(calendarYear, calendarMonth - 1, 1).getDay();
     for (let i = 0; i < leading; i++) cells.push(document.createElement('div'));
     const daysInMonth = new Date(calendarYear, calendarMonth, 0).getDate();
+    const account = !custom && portfolioTrades.length ? simulatePortfolio(portfolioTrades) : null;
     for (let day = 1; day <= daysInMonth; day++) {
       const date = `${calendarYear}-${String(calendarMonth).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
       const button = document.createElement('button');
@@ -2305,13 +2368,15 @@
       button.disabled = !dayCases.length;
       if (dayCases.length && dayCases.every(isReviewCaseDone)) button.classList.add('is-done');
       if (date === selectedReviewDate) button.classList.add('is-selected');
-      const dayPnl = reviewDayPnl(dayCases);
+      const dayPnl = reviewDayPnl(dayCases, account);
       if (dayPnl) {
         const label = document.createElement('span');
         label.className = `review-calendar-pnl${dayPnl.pct > 0 ? ' is-up' : dayPnl.pct < 0 ? ' is-down' : ''}`;
         label.textContent = formatPnl(dayPnl.pct);
         button.appendChild(label);
-        button.title = `${date} 买入 ${dayPnl.count} 只，平均收益 ${formatPnl(dayPnl.pct)}`;
+        button.title = dayPnl.byPosition
+          ? `${date} 买入 ${dayPnl.count} 只，按仓位对账户 ${formatPnl(dayPnl.pct)}（${money(dayPnl.profit)}），单只平均 ${formatPnl(dayPnl.average)}`
+          : `${date} 买入 ${dayPnl.count} 只，单只平均 ${formatPnl(dayPnl.average)}（账户模拟不可用，未按仓位）`;
       }
       button.addEventListener('click', () => changeReviewDate(date));
       cells.push(button);
@@ -2320,13 +2385,24 @@
   }
 
   // 当天买入并已算出收益的股票，每只等权取平均
-  function reviewDayPnl(dayCases) {
-    const values = dayCases
-      .filter(item => boughtReviewCaseIds.has(String(item.id)))
-      .map(item => reviewPnlResults.get(String(item.id))?.pnlPct)
-      .filter(Number.isFinite);
+  // 日历上的当日盈亏按仓位算：当天买入的票（每只占买入前总资产的 1/4，按手取整）卖出后的盈亏金额 ÷ 买入前总资产，
+  // 和顶部累计盈亏用同一个账户模拟；账户模拟出错时退回单只收益的等权平均。
+  function reviewDayPnl(dayCases, account) {
+    const bought = dayCases.filter(item => boughtReviewCaseIds.has(String(item.id)));
+    const values = bought.map(item => reviewPnlResults.get(String(item.id))?.pnlPct).filter(Number.isFinite);
     if (!values.length) return null;
-    return { pct: values.reduce((sum, value) => sum + value, 0) / values.length, count: values.length };
+    const average = values.reduce((sum, value) => sum + value, 0) / values.length;
+    const executed = account && !account.error
+      ? bought.map(item => {
+        const execution = account.executions.get(String(item.id));
+        const trade = portfolioTrades.find(entry => entry.id === String(item.id));
+        return execution && trade ? { execution, profit: execution.shares * (Number(trade.sellPrice) - Number(trade.buyPrice)) } : null;
+      }).filter(Boolean)
+      : [];
+    if (!executed.length) return { pct: average, average, count: values.length, byPosition: false };
+    const profit = executed.reduce((sum, item) => sum + item.profit, 0);
+    const base = Math.max(...executed.map(item => item.execution.totalBefore));
+    return { pct: profit / base * 100, average, profit, count: executed.length, byPosition: true };
   }
 
   function selectCustomDate(date) {
@@ -2742,7 +2818,7 @@
         const amount = shares * trade.buyPrice;
         cash -= amount;
         holdings.push({ trade, shares });
-        executions.set(trade.id, { shares, amount });
+        executions.set(trade.id, { shares, amount, totalBefore: totalBeforeBuy });
       }
 
       holdings = holdings.filter(position => {
@@ -3212,6 +3288,12 @@
       borderVisible: false,
       wickUpColor: '#ff3333',
       wickDownColor: '#00b050',
+      // 四连板缩放：价格轴上沿至少到假设的第四板收盘价，下沿仍按可见区间自动
+      autoscaleInfoProvider: original => {
+        const range = original();
+        if (!range || !priceScaleBoost || !(fourthBoardPrice > 0)) return range;
+        return { ...range, priceRange: { ...range.priceRange, maxValue: Math.max(range.priceRange.maxValue, fourthBoardPrice) } };
+      },
     });
 
     // 【关键配置 1】：设置 K 线主 Y 轴 (right)，底部留出 30% 的空间给成交量
@@ -3356,8 +3438,17 @@
     });
 
     // 写入数据到序列
+    fourthBoardPrice = assumedFourthBoardPrice(candles);
+    updateFourBoardNote(candles);
     candlestickSeries.setData(candles);
-    displayedMaxVolume = volumes.reduce((max, item) => (Number.isFinite(item.value) && item.value > max ? item.value : max), 0);
+    const maxVolumeOf = list => list.reduce((max, item) => (Number.isFinite(item.value) && item.value > max ? item.value : max), 0);
+    displayedMaxVolume = maxVolumeOf(volumes);
+    if (volumeScaleBoost > 0) {
+      // 按买入/空仓前（首板当天及以前）已显示的最大量放大；之后展示的真实量更大时用真实量，揭晓后刻度不跳
+      const decisionEndDate = activeCase?.id ? volumePileDecisionEndDates.get(String(activeCase.id)) : '';
+      const seenVolumes = decisionEndDate ? volumes.filter(item => item.time <= decisionEndDate) : volumes;
+      displayedMaxVolume = Math.max(displayedMaxVolume, maxVolumeOf(seenVolumes) * volumeScaleBoost);
+    }
     volumeSeries.setData(volumes);
     updateGlobalBaselineLine();
     ma5Series.setData(ma5Data);

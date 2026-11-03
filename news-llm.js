@@ -536,7 +536,7 @@ ${row.key} ${row['名称']} 失败：${error.message}`);
   return failed;
 }
 
-module.exports = { OUTPUT_FILE, readSystemPrompt };
+module.exports = { OUTPUT_FILE, readSystemPrompt, callModel, parseReply, hashOf, apiFormat, OFF_PEAK_PRICE, PEAK_PRICE };
 
 if (require.main === module) {
   main().catch(error => {
