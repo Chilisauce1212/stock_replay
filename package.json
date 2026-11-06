@@ -23,6 +23,7 @@
     "news-calendar": "node news-calendar.js",
     "news-llm": "node news-llm.js",
     "theme-evidence": "node theme-evidence.js",
+    "theme-events": "node theme-events.js",
     "news-body": "node news-body.js",
     "stock-pick": "node stock-pick.js",
     "review-judge": "node review-judge.js",

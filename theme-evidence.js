@@ -53,7 +53,9 @@ function readSystemPrompt() {
 }
 
 // 涨停原因按 + 拆开，保留原词（不并大题材），去掉空的和重复的
-const conceptsOf = reason => [...new Set(String(reason || '').split(/[+＋]/).map(word => word.trim().replace(/^“|”$/g, '')).filter(Boolean))];
+// 去掉零宽字符：同花顺的原因里偶尔夹着 U+200B，模型回答时会丢掉，概念名就对不上了
+const cleanConcept = word => String(word || '').replace(/[​-‍﻿]/g, '').trim().replace(/^“|”$/g, '');
+const conceptsOf = reason => [...new Set(String(reason || '').split(/[+＋]/).map(cleanConcept).filter(Boolean))];
 
 // 范围内所有涨停（不含北交所、ST）对应的首板：键 代码|首板日
 function firstBoards(options) {
@@ -99,7 +101,7 @@ function buildInput(board, news) {
 }
 
 function normalize(parsed, input) {
-  const byConcept = new Map((Array.isArray(parsed.concepts) ? parsed.concepts : []).map(item => [String(item.concept || '').trim(), item]));
+  const byConcept = new Map((Array.isArray(parsed.concepts) ? parsed.concepts : []).map(item => [cleanConcept(item.concept), item]));
   const ids = new Set(input.news.map(item => item.id));
   const missing = input.concepts.filter(concept => !byConcept.has(concept));
   if (missing.length) throw new Error(`模型漏判了概念：${missing.join('、')}`);
@@ -141,7 +143,7 @@ async function main() {
 
   // 先补新闻缓存（不花钱）
   const cache = readJson(NEWS_CACHE_FILE, {});
-  const lacking = boards.filter(board => cache[board.key]?.days !== 3);
+  const lacking = boards.filter(board => !(cache[board.key]?.days >= 3));
   if (lacking.length) {
     console.log(`补三天新闻 ${lacking.length} 只`);
     let next = 0;
@@ -159,7 +161,7 @@ async function main() {
     Object.assign(cache, fresh);
   }
 
-  const inputs = new Map(boards.filter(board => cache[board.key]?.days === 3).map(board => [board.key, buildInput(board, cache[board.key].news)]));
+  const inputs = new Map(boards.filter(board => cache[board.key]?.days >= 3).map(board => [board.key, buildInput(board, cache[board.key].news)]));
   const isFresh = key => {
     const entry = saved[key];
     return entry && entry.promptHash === promptHash && entry.model === process.env.MODEL && Boolean(entry.thinking) === options.thinking && entry.inputHash === hashOf(inputs.get(key));

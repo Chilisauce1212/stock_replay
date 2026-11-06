@@ -588,6 +588,22 @@
     .favorite-controls button.is-saved {
       color: #f0b90b;
     }
+    /* 首页链接和数据源下拉框放在同一格，不改变面板的列 */
+    .source-pick { display: flex; gap: 6px; align-items: center; min-width: 0; }
+    .source-pick select { flex: 1 1 0; min-width: 0; }
+    .home-link {
+      flex: 0 0 auto;
+      padding: 5px 8px;
+      border: 1px solid #2b2f36;
+      border-radius: 4px;
+      background: #1e2329;
+      color: #cccccc;
+      font-size: 12px;
+      line-height: 1.4;
+      text-decoration: none;
+      white-space: nowrap;
+    }
+    .home-link:hover { color: #fff; border-color: #f0b90b; }
     .source-target { min-width: 0; }
     .source-target select { width: 100%; }
     .custom-case { display: flex; gap: 6px; align-items: center; min-width: 0; }
@@ -708,7 +724,7 @@
         grid-column: 2;
       }
       .custom-case { gap: 4px; }
-      #customCode { flex: 0 0 4.8em; }
+      #customCode { flex: 1 1 6em; }
       #customDateButton { flex: 1 1 0; min-width: 0; padding: 4px 6px; }
       .review-calendar-head { margin-bottom: 4px; }
       .review-calendar-weekday { padding: 1px 0; }
@@ -757,7 +773,8 @@
 <div class="container">
   <div class="workspace">
     <div class="test-panel">
-      <label>
+      <label class="source-pick">
+        <a class="home-link" href="/" title="返回首页">首页</a>
         <select id="dataSource" onchange="switchDataSource()">
           <option value="dailyReview">每日复盘 JSON</option>
           <!-- 测试用例、收藏暂时关闭：一进二要结合新闻、连板梯队和时间序列看，随机抽样没有意义。恢复时去掉注释并把 FAVORITES_ENABLED 改回 true
@@ -772,7 +789,8 @@
           <option value="">请选择测试用例</option>
         </select>
         <form id="customCaseForm" class="custom-case" hidden onsubmit="startCustomCase(event)">
-          <input id="customCode" type="text" inputmode="numeric" maxlength="9" placeholder="股票代码" aria-label="股票代码" autocomplete="off">
+          <input id="customCode" type="text" maxlength="20" placeholder="代码或名称" aria-label="股票代码或名称" autocomplete="off" list="customStockList">
+          <datalist id="customStockList"></datalist>
           <button id="customDateButton" type="button" aria-haspopup="true" aria-expanded="false" aria-label="选择回放日期" onclick="toggleReviewCalendar()">选择日期</button>
           <button type="submit">确定</button>
         </form>
@@ -1787,20 +1805,64 @@
     return `${code}.SZ`;
   }
 
-  // 自定义模式：输入股票代码和日期，按单条用例回放，不保存进度
-  function startCustomCase(event) {
+  // 自定义模式的股票搜索：输入名称、拼音首字母或代码，下拉里给出候选（/api/stock-search，腾讯证券联想）
+  let customSearchTimer = 0;
+  let customSearchSeq = 0;
+  async function searchStocks(query) {
+    const response = await fetch(`/api/stock-search?q=${encodeURIComponent(query)}`);
+    const payload = await response.json();
+    if (payload.status_code !== 0) throw new Error(payload.msg || '股票搜索失败');
+    return payload.data;
+  }
+  function fillCustomStockList(list) {
+    document.getElementById('customStockList').innerHTML = list
+      .map(item => `<option value="${item.code} ${item.name}"></option>`).join('');
+  }
+  document.getElementById('customCode').addEventListener('input', event => {
+    const query = event.target.value.trim();
+    clearTimeout(customSearchTimer);
+    // 已经是「代码 名称」（从下拉选中的）或纯六位代码，不用再搜
+    if (!query || /^\d{6}(\s|$)/.test(query)) return;
+    customSearchTimer = setTimeout(async () => {
+      const seq = ++customSearchSeq;
+      try {
+        const list = await searchStocks(query);
+        if (seq === customSearchSeq) fillCustomStockList(list);
+      } catch { /* 搜不到就只能输代码 */ }
+    }, 250);
+  });
+
+  // 输入框的值换成 { code, name }：带六位代码的直接用；只有名称的现查，名称完全一致或只有一个候选才用
+  async function resolveCustomStock(value) {
+    const text = value.trim();
+    const code = (text.match(/\d{6}/) || [])[0];
+    if (code) return { code, name: text.replace(code, '').trim() };
+    if (!text) throw new Error('请输入股票代码或名称');
+    const list = await searchStocks(text);
+    const exact = list.find(item => item.name === text);
+    if (exact || list.length === 1) return exact || list[0];
+    fillCustomStockList(list);
+    throw new Error(list.length ? `「${text}」对应多只股票，请从下拉里选一只` : `找不到「${text}」，请输入六位股票代码`);
+  }
+
+  // 自定义模式：输入股票代码或名称和日期，按单条用例回放，不保存进度
+  async function startCustomCase(event) {
     event?.preventDefault();
-    const code = (document.getElementById('customCode').value.match(/\d{6}/) || [])[0];
     const date = customSelectedDate;
-    if (!code) {
-      alert('请输入六位股票代码');
+    let stock;
+    try {
+      stock = await resolveCustomStock(document.getElementById('customCode').value);
+    } catch (error) {
+      alert(error.message);
       return;
     }
+    const { code, name } = stock;
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
       alert('请从日历选择回放日期');
       return;
     }
-    const item = { id: `custom-${date}-${code}`, date, code, marketCode: customMarketCode(code), stockName: '' };
+    document.getElementById('customCode').value = name ? `${code} ${name}` : code;
+    const item = { id: `custom-${date}-${code}`, date, code, marketCode: customMarketCode(code), stockName: name || '' };
     testCases = [item];
     shuffledCases = [item];
     casePosition = 0;
@@ -2038,7 +2100,7 @@
     if (currentNewsLoading) {
       const loading = document.createElement('div');
       loading.className = 'news-title';
-      loading.textContent = `正在加载回测日前${newsTradingDays()}个交易日新闻...`;
+      loading.textContent = `正在加载回测日前${newsTradingDays(activeCase?.date)}个交易日新闻...`;
       list.appendChild(loading);
       return;
     }
@@ -2052,7 +2114,7 @@
     if (!currentNews.length) {
       const empty = document.createElement('div');
       empty.className = 'news-title';
-      empty.textContent = `当前股票在回测日前${newsTradingDays()}个交易日没有新闻`;
+      empty.textContent = `当前股票在回测日前${newsTradingDays(activeCase?.date)}个交易日没有新闻`;
       list.appendChild(empty);
       return;
     }
@@ -2105,9 +2167,10 @@
     updateNewsDisplay();
   }
 
-  // 每日复盘和新闻审计（news-theme-table.js）同口径：首板日及前两个交易日；其他回放看回测日前 5 个交易日。
-  function newsTradingDays() {
-    return isDailyReviewSource() ? 3 : 5;
+  // 每日复盘和新闻判断（news-theme-table.js）同口径：2026 年起的首板看首板日及前四个交易日（共 5 个），更早的看首板日及前两个交易日；
+  // 其他回放看回测日前 5 个交易日。都含其间的周末、节假日。
+  function newsTradingDays(date) {
+    return isDailyReviewSource() && String(date) < '2026-01-01' ? 3 : 5;
   }
 
   function loadCurrentNews(caseItem) {
@@ -2115,7 +2178,7 @@
     const controller = new AbortController();
     currentNewsAbortController = controller;
     const timeoutId = setTimeout(() => controller.abort(), 30000);
-    fetch(`/api/news?code=${encodeURIComponent(caseItem.code)}&date=${encodeURIComponent(caseItem.date)}&days=${newsTradingDays()}&ts=${Date.now()}`, {
+    fetch(`/api/news?code=${encodeURIComponent(caseItem.code)}&date=${encodeURIComponent(caseItem.date)}&days=${newsTradingDays(caseItem.date)}&ts=${Date.now()}`, {
       cache: 'no-store',
       signal: controller.signal,
     })
@@ -3534,7 +3597,7 @@
     if (source === 'custom') {
       document.getElementById('testCaseFile').value = '';
       document.getElementById('customCode').focus();
-      document.getElementById('testStatus').innerText = '输入股票代码，从日历选择日期后按确定';
+      document.getElementById('testStatus').innerText = '输入股票代码或名称，从日历选择日期后按确定';
     } else if (source === 'favorites') {
       updateDataSourceOptions(Object.keys(favoriteGroups));
     } else {
@@ -3767,7 +3830,7 @@
           boughtStockNames.join(' ') || '每日复盘完成，没有点击买入的股票'
         );
       } else if (isCustomSource()) {
-        document.getElementById('testStatus').innerText = '自定义回放结束，可输入新的股票代码和日期';
+        document.getElementById('testStatus').innerText = '自定义回放结束，可输入新的股票代码或名称和日期';
       } else {
         document.getElementById('testStatus').innerText = `回测结束，成功率 ${(successCount / (successCount + failureCount || 1) * 100).toFixed(2)}%`;
         alert(`回测结束\n成功：${successCount}\n失败：${failureCount}\n成功率：${(successCount / (successCount + failureCount || 1) * 100).toFixed(2)}%`);

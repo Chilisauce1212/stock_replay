@@ -527,6 +527,31 @@ app.get('/api/news', async (req, res) => {
   }
 });
 
+// 按名称、拼音首字母或代码搜 A 股（每日复盘自定义模式用）：腾讯证券的联想接口，不要 key；只留沪深北 A 股
+// 返回 [{ code, name, marketCode }]，最多 10 条；名称完全一致的排在最前
+app.get('/api/stock-search', async (req, res) => {
+  const query = String(req.query.q || '').trim().slice(0, 20);
+  if (!query) return res.json({ status_code: 0, data: [] });
+  try {
+    const response = await fetch(`https://smartbox.gtimg.cn/s3/?v=2&t=all&q=${encodeURIComponent(query)}`, { signal: AbortSignal.timeout(8000) });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const text = await response.text();
+    const body = (text.match(/v_hint="([^"]*)"/) || [])[1] || '';
+    const decoded = body.replace(/\\u([0-9a-fA-F]{4})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)));
+    const suffix = { sh: 'SH', sz: 'SZ', bj: 'BJ' };
+    const data = decoded.split('^').map(item => item.split('~'))
+      .filter(([market, code, , , type]) => suffix[market] && /^\d{6}$/.test(code || '') && /^GP-A/.test(type || ''))
+      .map(([market, code, name]) => ({ code, name, marketCode: `${code}.${suffix[market]}` }))
+      .sort((left, right) => (right.name === query) - (left.name === query))
+      .slice(0, 10);
+    res.set('Cache-Control', 'no-store');
+    res.json({ status_code: 0, data });
+  } catch (error) {
+    console.error(`股票搜索失败 ${query}: ${error.message}`);
+    res.status(502).json({ status_code: -1, msg: `股票搜索失败: ${error.message}` });
+  }
+});
+
 async function fetchThsKlineData(code = "000620", cutoffDate) {
   const url = 'https://quota-h.10jqka.com.cn/fuyao/common_hq_aggr/quote/v1/single_kline';
   
@@ -959,11 +984,16 @@ function classifyThemeNews(row, cacheEntry) {
   const { anchor } = pickAnchor({ stockName: row['名称'], news });
   const ids = news.map(themeNewsId);
   const llmEntry = readReportJson('news-llm.json')[row.key];
-  const llm = llmEntry && llmEntry.newsIds.join('\n') === ids.join('\n') ? llmEntry : null;
-  const llmIdOf = id => ids[Number(String(id).slice(1)) - 1] || '';
+  // 2026 年起模型看不到「【异动解读】××涨停：…」这类等于涨停原因的标题（news-llm.js 的 REASON_TITLE），
+  // 所以按新闻 id 对：模型看过的新闻都还在、没看过的只有这类标题，就用模型结果
+  const REASON_TITLE = /异动解读|涨停分析|涨停原因/;
+  const llmById = new Map((llmEntry?.newsIds || []).map((id, index) => [id, llmEntry.result?.news[index]]));
+  const llm = llmEntry && llmEntry.newsIds.every(id => ids.includes(id))
+    && news.every((item, index) => llmById.has(ids[index]) || REASON_TITLE.test(item.title)) ? llmEntry : null;
+  const llmIdOf = id => llmEntry.newsIds[Number(String(id).slice(1)) - 1] || '';
   const items = news.map((item, index) => {
     const result = classifyNews(item, row['名称']);
-    const judged = llm?.result.news[index];
+    const judged = llm ? llmById.get(ids[index]) : null;
     return {
       id: ids[index],
       title: item.title,
@@ -978,7 +1008,8 @@ function classifyThemeNews(row, cacheEntry) {
         relevant: judged.relevant, polarity: judged.polarity, newThing: judged.newThing,
         categories: judged.categories, reason: judged.reason,
       } : null,
-      important: judged ? judged.important : result.score > 0,
+      // 有模型结果时，模型没看的标题（等于涨停原因的）不算重要
+      important: judged ? judged.important : llm ? false : result.score > 0,
     };
   });
   return {
@@ -1068,6 +1099,17 @@ app.get('/api/news-calendar', async (req, res) => {
     res.json({ status_code: 0, months });
   } catch (error) {
     res.status(500).json({ status_code: -1, msg: `读取新闻日历失败: ${error.message}` });
+  }
+});
+
+// 事件题材索引：每个题材每天的家数、分层和最高板（news-calendar.js 生成的 themes.json）
+app.get('/api/news-calendar-themes', async (req, res) => {
+  try {
+    const data = await readNewsCalendarFile('themes');
+    res.set('Cache-Control', 'no-store');
+    res.json({ status_code: 0, data });
+  } catch (error) {
+    res.status(500).json({ status_code: -1, msg: `读取题材索引失败: ${error.message}` });
   }
 });
 

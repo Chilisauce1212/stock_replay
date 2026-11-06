@@ -15,11 +15,17 @@ require('dotenv').config({ quiet: true });
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { classifyNews, cachedNews } = require('./news-theme-table');
+const { classifyNews, cachedNews, NEWS_V2_FROM } = require('./news-theme-table');
 const { fetchBodies } = require('./news-body');
 
 const REPORTS_DIR = path.join(__dirname, 'reports');
 const PROMPT_FILE = path.join(__dirname, 'prompts', 'news-classification.md');
+// 2026 年起的首板：5 个交易日新闻，不给模型涨停原因（2026-11-06 用户决定）；更早的仍用旧 prompt 和 3 个交易日
+const PROMPT_FILE_V2 = path.join(__dirname, 'prompts', 'news-classification-v2.md');
+const isV2 = row => String(row['首板日期']) >= NEWS_V2_FROM;
+// 2026 年起不参考涨停原因：「【异动解读】××涨停：A+B+C」「××涨停分析」这类标题就是同花顺的涨停原因，不给模型
+const REASON_TITLE = /异动解读|涨停分析|涨停原因/;
+const newsOf = (newsCache, row) => cachedNews(newsCache[row.key]).filter(item => !isV2(row) || !REASON_TITLE.test(item.title));
 const NEWS_CACHE_FILE = path.join(REPORTS_DIR, 'news-cache.json');
 const REASON_FILE = path.join(REPORTS_DIR, '首板涨停原因.json');
 const OUTPUT_FILE = path.join(REPORTS_DIR, 'news-llm.json');
@@ -88,10 +94,10 @@ function readJson(file, fallback) {
 }
 
 // system 消息：prompt 文件里「## Prompt 正文」之后的全部内容。
-function readSystemPrompt() {
-  const text = fs.readFileSync(PROMPT_FILE, 'utf8');
+function readSystemPrompt(file = PROMPT_FILE) {
+  const text = fs.readFileSync(file, 'utf8');
   const start = text.indexOf('## Prompt 正文');
-  if (start < 0) throw new Error(`${PROMPT_FILE} 里找不到「## Prompt 正文」`);
+  if (start < 0) throw new Error(`${file} 里找不到「## Prompt 正文」`);
   return text.slice(start + '## Prompt 正文'.length).trim();
 }
 
@@ -124,15 +130,17 @@ function bodySnippets(text, stockName, code, reasonWords) {
   return null;
 }
 
+// 2026 年起的首板不给涨停原因：输入里没有 limitUpReason，正文片段也只截点名本股的
 function buildInput(row, news, limitUpReason, bodies) {
   const stockName = row['名称'];
-  const reasonWords = String(limitUpReason || '').split(/[+＋、,，]/).map(word => word.trim()).filter(word => word.length >= 2);
+  const v2 = isV2(row);
+  const reasonWords = v2 ? [] : String(limitUpReason || '').split(/[+＋、,，]/).map(word => word.trim()).filter(word => word.length >= 2);
   return {
     key: row.key,
     stockName,
     code: row['代码'],
     date: row['首板日期'],
-    limitUpReason,
+    ...(v2 ? {} : { limitUpReason }),
     news: news.map((item, index) => {
       const text = String(bodies?.[item.url]?.text || '');
       const snippet = text && !item.title.includes(stockName) ? bodySnippets(text, stockName, row['代码'], reasonWords) : null;
@@ -211,13 +219,13 @@ function normalizeUsage(usage, format) {
 }
 
 // system 消息每次都一样，放在最前面，后面的请求能命中前缀缓存。
-async function callModel(system, input, { useSearch, thinking }) {
+async function callModel(system, input, { useSearch, thinking, maxTokens = 16000 }) {
   const format = apiFormat();
   const base = process.env.BASEURL.replace(/\/$/, '');
   const userContent = JSON.stringify(input);
   let response;
   if (format === 'anthropic') {
-    const body = { model: process.env.MODEL, max_tokens: 16000, system, messages: [{ role: 'user', content: userContent }] };
+    const body = { model: process.env.MODEL, max_tokens: maxTokens, system, messages: [{ role: 'user', content: userContent }] };
     if (useSearch) body.tools = [{ type: 'web_search_20250305', name: 'web_search', max_uses: MAX_SEARCHES }];
     if (!thinking) body.thinking = { type: 'disabled' };
     response = await fetch(`${base}/v1/messages`, {
@@ -233,7 +241,7 @@ async function callModel(system, input, { useSearch, thinking }) {
       headers: { 'content-type': 'application/json', authorization: `Bearer ${process.env.APIKEY}` },
       body: JSON.stringify({
         model: process.env.MODEL,
-        max_tokens: 16000,
+        max_tokens: maxTokens,
         enable_thinking: Boolean(thinking),
         messages: [{ role: 'system', content: system }, { role: 'user', content: userContent }],
       }),
@@ -253,10 +261,11 @@ async function callModel(system, input, { useSearch, thinking }) {
   return { text, searches, sources, usage: normalizeUsage(payload.usage || {}, format) };
 }
 
-async function judgeStock(system, promptHash, input, news, { useSearch, thinking }) {
+// limitUpReason 单独传进来只为存档（页面显示用），2026 年起不在 input 里，不给模型
+async function judgeStock(system, promptHash, input, news, { useSearch, thinking, limitUpReason }) {
   const base = {
     key: input.key, promptHash, inputHash: hashOf(input), model: process.env.MODEL, search: useSearch, thinking,
-    limitUpReason: input.limitUpReason, newsIds: news.map(newsId), bodies: input.news.filter(item => item.body).length,
+    limitUpReason, newsIds: news.map(newsId), bodies: input.news.filter(item => item.body).length,
     fetchedAt: new Date().toISOString(),
   };
   // 没有新闻：不用调用模型。
@@ -277,7 +286,7 @@ async function judgeStock(system, promptHash, input, news, { useSearch, thinking
 // 增量判断：旧判断里已有的新闻（按 时间|标题 对应）原样保留，只把新增的新闻送模型，再按当前新闻顺序合并。
 // 判断重要与否只看单条标题，所以逐条结果可以合并；已不在当前新闻里的旧判断丢弃。
 // 锚定新闻：旧锚定还在就保留，否则取模型对新增新闻选的锚定，都没有时取最早一条重要新闻。
-async function judgeStockIncremental(system, promptHash, input, news, old, { useSearch, thinking }) {
+async function judgeStockIncremental(system, promptHash, input, news, old, { useSearch, thinking, limitUpReason }) {
   const ids = news.map(newsId);
   const oldItem = item => old.newsIds[Number(item.id.slice(1)) - 1];
   const kept = new Map(old.result.news.map(item => [oldItem(item), item]));
@@ -285,7 +294,7 @@ async function judgeStockIncremental(system, promptHash, input, news, old, { use
   let fresh = null;
   if (freshIndexes.length) {
     const subInput = { ...input, news: freshIndexes.map((index, position) => ({ ...input.news[index], id: `n${position + 1}` })) };
-    fresh = await judgeStock(system, promptHash, subInput, freshIndexes.map(index => news[index]), { useSearch, thinking });
+    fresh = await judgeStock(system, promptHash, subInput, freshIndexes.map(index => news[index]), { useSearch, thinking, limitUpReason });
   }
   const freshAt = new Map(freshIndexes.map((index, position) => [index, fresh.result.news[position]]));
   const merged = ids.map((id, index) => ({ ...(kept.get(id) || freshAt.get(index)), id: `n${index + 1}` }));
@@ -309,7 +318,7 @@ async function judgeStockIncremental(system, promptHash, input, news, old, { use
     model: process.env.MODEL,
     search: useSearch,
     thinking,
-    limitUpReason: input.limitUpReason,
+    limitUpReason,
     newsIds: ids,
     bodies: input.news.filter(item => item.body).length,
     fetchedAt: new Date().toISOString(),
@@ -343,7 +352,7 @@ function compare(rows, saved, reviews, newsCache) {
     const entry = saved[row.key];
     const review = reviews[row.key];
     if (!entry || !review) continue;
-    const news = cachedNews(newsCache[row.key]);
+    const news = newsOf(newsCache, row);
     const ids = news.map(newsId);
     if (ids.join('\n') !== entry.newsIds.join('\n')) continue;
     const selected = new Set(review.noImportant ? [] : review.selected.filter(id => ids.includes(id)));
@@ -392,8 +401,12 @@ async function main(argv = process.argv.slice(2)) {
   for (const name of ['BASEURL', 'APIKEY', 'MODEL']) {
     if (!process.env[name]) throw new Error(`.env 里缺少 ${name}`);
   }
-  const system = readSystemPrompt();
-  const promptHash = hashOf(system);
+  // 两版 prompt：按首板日选，缓存也按各自的 prompt hash 判断
+  const prompts = Object.fromEntries([['v1', PROMPT_FILE], ['v2', PROMPT_FILE_V2]].map(([name, file]) => {
+    const system = readSystemPrompt(file);
+    return [name, { system, promptHash: hashOf(system) }];
+  }));
+  const promptOf = row => prompts[isV2(row) ? 'v2' : 'v1'];
   const report = readJson(path.join(REPORTS_DIR, `${options.report}.json`), null);
   if (!report) throw new Error(`找不到 reports/${options.report}.json，请先运行 npm run news-theme`);
   const reviews = readJson(path.join(REPORTS_DIR, `${options.report}.review.json`), {});
@@ -417,7 +430,7 @@ async function main(argv = process.argv.slice(2)) {
   // 先抓这些股票的新闻原文（有缓存，抓过的跳过）。
   let bodies = {};
   if (options.body) {
-    const items = rows.flatMap(row => cachedNews(newsCache[row.key]).map(item => ({ url: item.url, title: item.title })));
+    const items = rows.flatMap(row => newsOf(newsCache, row).map(item => ({ url: item.url, title: item.title })));
     const started = Date.now();
     bodies = await fetchBodies(items, {
       workers: 6,
@@ -425,19 +438,19 @@ async function main(argv = process.argv.slice(2)) {
     });
     process.stdout.write('\n');
   }
-  const inputs = new Map(rows.map(row => [row.key, buildInput(row, cachedNews(newsCache[row.key]), reasons[row.key]?.reason || '', bodies)]));
+  const inputs = new Map(rows.map(row => [row.key, buildInput(row, newsOf(newsCache, row), reasons[row.key]?.reason || '', bodies)]));
 
   const newsCount = [...inputs.values()].reduce((sum, input) => sum + input.news.length, 0);
   const bodyCount = [...inputs.values()].reduce((sum, input) => sum + input.news.filter(item => item.body).length, 0);
   console.log(`股票 ${rows.length} 只（新闻 ${newsCount} 条，有正文 ${bodyCount} 条），${process.env.MODEL}，`
-    + `${apiFormat() === 'anthropic' ? 'Anthropic' : 'OpenAI'} 格式，prompt ${promptHash}，${options.search ? '联网搜索' : '不联网'}`);
-  const context = { system, promptHash, inputs, newsCache, options };
+    + `${apiFormat() === 'anthropic' ? 'Anthropic' : 'OpenAI'} 格式，prompt ${prompts.v1.promptHash}（${NEWS_V2_FROM} 前）/ ${prompts.v2.promptHash}（${NEWS_V2_FROM} 起，不给涨停原因），${options.search ? '联网搜索' : '不联网'}`);
+  const context = { promptOf, inputs, newsCache, reasons, options };
   let failed = 0;
   if (options.cascade) {
     // 分层：先全部关思考跑，关思考结论和关键词规则不一致的再开思考重跑。
     const fastSaved = readJson(FAST_FILE, {});
     failed += await runCalls(rows, false, fastSaved, FAST_FILE, context, '第一轮 关思考');
-    const ruleHas = row => cachedNews(newsCache[row.key]).some(item => classifyNews(item, row['名称']).score > 0);
+    const ruleHas = row => newsOf(newsCache, row).some(item => classifyNews(item, row['名称']).score > 0);
     const escalate = rows.filter(row => !fastSaved[row.key] || fastSaved[row.key].result.hasImportantNews !== ruleHas(row));
     console.log(`关思考结论和关键词规则不一致 ${escalate.length} 只（${percent(escalate.length, rows.length)}），开思考重跑`);
     failed += await runCalls(escalate, true, saved, outputFile, context, '第二轮 开思考');
@@ -476,17 +489,17 @@ async function confirmLargeRun(count, options) {
 }
 
 // 缓存有效：prompt、搜索开关、思考开关、模型和输入（新闻、正文、涨停原因）都没变。返回失败只数。
-async function runCalls(rows, thinking, saved, file, { system, promptHash, inputs, newsCache, options }, label) {
+async function runCalls(rows, thinking, saved, file, { promptOf, inputs, newsCache, reasons, options }, label) {
   const isFresh = row => {
     const entry = saved[row.key];
-    return entry && !options.refresh && entry.promptHash === promptHash && entry.search === options.search
+    return entry && !options.refresh && entry.promptHash === promptOf(row).promptHash && entry.search === options.search
       && Boolean(entry.thinking) === thinking && entry.model === process.env.MODEL
       && entry.inputHash === hashOf(inputs.get(row.key));
   };
   const todo = rows.filter(row => !isFresh(row));
   // 增量时没有新增新闻的票只合并旧判断，不调用模型，不计入需要确认的只数
   const calls = options.incremental
-    ? todo.filter(row => !saved[row.key] || cachedNews(newsCache[row.key]).some(item => !saved[row.key].newsIds.includes(newsId(item)))).length
+    ? todo.filter(row => !saved[row.key] || newsOf(newsCache, row).some(item => !saved[row.key].newsIds.includes(newsId(item)))).length
     : todo.length;
   console.log(`${label}：${rows.length} 只，缓存可用 ${rows.length - todo.length} 只，需要处理 ${todo.length} 只，其中调用模型 ${calls} 只`);
   await confirmLargeRun(calls, options);
@@ -499,8 +512,9 @@ async function runCalls(rows, thinking, saved, file, { system, promptHash, input
     while (next < todo.length) {
       const row = todo[next++];
       try {
-        const news = cachedNews(newsCache[row.key]);
-        const settings = { useSearch: options.search, thinking };
+        const news = newsOf(newsCache, row);
+        const settings = { useSearch: options.search, thinking, limitUpReason: reasons[row.key]?.reason || '' };
+        const { system, promptHash } = promptOf(row);
         const old = options.incremental ? saved[row.key] : null;
         const entry = old
           ? await judgeStockIncremental(system, promptHash, inputs.get(row.key), news, old, settings)

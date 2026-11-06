@@ -18,9 +18,11 @@ const DEFAULT_OUTPUT = path.join(__dirname, 'reports', '四连板题材演绎.xl
 // 新闻按「代码|首板日」缓存，重跑时不重复请求；--refresh-news 重新获取。
 const NEWS_CACHE_FILE = path.join(__dirname, 'reports', 'news-cache.json');
 const IMPORTANT_SCORE = 2;
-// 新闻范围：首板日和前两个交易日，共 3 个连续交易日（按同花顺交易日历，不按个股 K 线，停牌不影响），
-// 这几个交易日之间的周末/假期新闻也包含在内。
-const NEWS_TRADING_DAYS = 3;
+// 新闻范围：首板日和之前的连续交易日（按同花顺交易日历，不按个股 K 线，停牌不影响），这几个交易日之间的周末/假期新闻也包含在内。
+// 2026 年起的首板用 5 个交易日（首板日和前四个交易日），新闻判断也不再给模型涨停原因（prompts/news-classification-v2.md）；
+// 更早的首板保持 3 个交易日和旧 prompt，旧判断结果仍然有效（2026-11-06 用户决定）。
+const NEWS_V2_FROM = '2026-01-01';
+const newsDaysFor = date => (String(date) >= NEWS_V2_FROM ? 5 : 3);
 const MAX_WINDOW = 22;
 const BEIJING_OFFSET_MS = 8 * 60 * 60 * 1000;
 const MANUAL_COLUMNS = ['人工锚定新闻', '人工类别', '人工题材', '备注'];
@@ -149,12 +151,13 @@ function formatBeijingTime(milliseconds) {
   return new Date(milliseconds + BEIJING_OFFSET_MS).toISOString().slice(0, 19).replace('T', ' ');
 }
 
-// 首板日和前两个交易日的个股新闻（含临时置顶），与回放页面的新闻面板同源。
+// 首板日和之前几个交易日的个股新闻（含临时置顶，天数见 newsDaysFor），与回放页面的新闻面板同源。
 async function fetchNews(baseUrl, code, signalDate) {
+  const days = newsDaysFor(signalDate);
   const url = new URL('/api/news', baseUrl);
   url.searchParams.set('code', code);
   url.searchParams.set('date', signalDate);
-  url.searchParams.set('days', String(NEWS_TRADING_DAYS));
+  url.searchParams.set('days', String(days));
   let lastError;
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
@@ -164,7 +167,7 @@ async function fetchNews(baseUrl, code, signalDate) {
         throw new Error(payload.msg || `新闻接口返回错误 (HTTP ${response.status})`);
       }
       return {
-        days: NEWS_TRADING_DAYS,
+        days,
         startDate: payload.startDate,
         endDate: payload.endDate,
         news: payload.data.map(item => ({
@@ -182,9 +185,9 @@ async function fetchNews(baseUrl, code, signalDate) {
   throw lastError;
 }
 
-// 缓存条目：{ days, startDate, endDate, news }；旧格式（数组，5 个交易日）或天数不同的条目视为没有缓存。
+// 缓存条目：{ days, startDate, endDate（首板日）, news }；旧格式（数组）或天数和首板日应有的天数不同的条目视为没有缓存。
 function isCurrentCacheEntry(entry) {
-  return Boolean(entry && !Array.isArray(entry) && entry.days === NEWS_TRADING_DAYS && Array.isArray(entry.news));
+  return Boolean(entry && !Array.isArray(entry) && entry.days === newsDaysFor(entry.endDate) && Array.isArray(entry.news));
 }
 
 function cachedNews(entry) {
@@ -536,7 +539,7 @@ async function main(argv = process.argv.slice(2)) {
   if (failed || newsFailed) process.exitCode = 1;
 }
 
-module.exports = { classifyNews, pickAnchor, cachedNews, findPeak, findBreak, CATEGORIES, IMPORTANT_SCORE, NEWS_CACHE_FILE };
+module.exports = { classifyNews, pickAnchor, cachedNews, isCurrentCacheEntry, fetchNews, newsDaysFor, NEWS_V2_FROM, findPeak, findBreak, CATEGORIES, IMPORTANT_SCORE, NEWS_CACHE_FILE };
 
 if (require.main === module) {
   main().catch(error => {
