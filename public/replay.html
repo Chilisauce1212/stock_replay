@@ -2382,8 +2382,29 @@
     renderReviewCalendar();
   }
 
+  // 全部交易日（自定义模式日历用），第一次打开自定义日历时取一次
+  let customTradeDays = null;
+  let customTradeDaysPromise = null;
+  function loadCustomTradeDays() {
+    if (!customTradeDaysPromise) {
+      customTradeDaysPromise = fetch('/api/trade-days')
+        .then(response => response.json())
+        .then(payload => {
+          if (payload.status_code !== 0) throw new Error(payload.msg);
+          customTradeDays = new Set(payload.dates);
+          if (!document.getElementById('reviewCalendar').hidden && isCustomSource()) renderReviewCalendar();
+        })
+        .catch(error => {
+          console.error(error);
+          customTradeDaysPromise = null; // 下次打开再试，这次先按只排除周末显示
+        });
+    }
+    return customTradeDaysPromise;
+  }
+
   function renderReviewCalendar() {
     const custom = isCustomSource();
+    if (custom && !customTradeDays) loadCustomTradeDays();
     const today = todayDate();
     const firstYear = custom ? CUSTOM_CALENDAR_FIRST_YEAR : Number(reviewDates[0].slice(0, 4));
     const lastYear = Number((custom ? today : reviewDates[reviewDates.length - 1]).slice(0, 4));
@@ -2420,9 +2441,10 @@
       button.className = 'review-calendar-day';
       button.textContent = String(day);
       if (custom) {
-        // 自定义模式没有交易日历：只排除周末和未来日期，节假日由行情接口提示
+        // 自定义模式：按同花顺交易日历（/api/trade-days）只开放交易日，节假日也排除；
+        // 交易日历还没取到或取不到时退回只排除周末和未来日期
         const weekday = new Date(calendarYear, calendarMonth - 1, day).getDay();
-        button.disabled = date > today || weekday === 0 || weekday === 6;
+        button.disabled = date > today || (customTradeDays ? !customTradeDays.has(date) : weekday === 0 || weekday === 6);
         if (date === customSelectedDate) button.classList.add('is-selected');
         button.addEventListener('click', () => selectCustomDate(date));
         cells.push(button);

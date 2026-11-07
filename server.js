@@ -384,6 +384,65 @@ function collectCombinationFieldValues(value, fieldName, results = []) {
   return results;
 }
 
+// 全部交易日（2010 年起，每日复盘自定义模式的日历用）：同花顺交易日历接口一次最多给几百天，从最近的交易日往前每次取 400 天翻页；
+// 缓存在内存里，每天（北京时间）第一次请求时重新取
+const TRADE_DAYS_FROM = '2010-01-01';
+let tradeDaysCache = { day: '', dates: null, pending: null };
+async function fetchTradeDayWindow(dateString, prev) {
+  const response = await axios.get(TRADE_DAY_URL, {
+    // next 必须 ≥1，传 0 时接口什么都不返回
+    params: { date: dateString.replaceAll('-', ''), stock: 'stock', next: 1, prev },
+    headers: { 'User-Agent': 'Mozilla/5.0', Referer: 'https://data.10jqka.com.cn/', ...(THS_COOKIE ? { Cookie: THS_COOKIE } : {}) },
+    timeout: 15000,
+  });
+  const data = response.data?.status_code === 0 ? response.data.data : null;
+  return { isTradeDay: Boolean(data?.trade_day), previous: Array.isArray(data?.prev_dates) ? data.prev_dates.map(toDateString).filter(Boolean) : [] };
+}
+async function loadAllTradeDays() {
+  const today = new Date(Date.now() + 8 * 3600_000).toISOString().slice(0, 10);
+  if (tradeDaysCache.day === today && tradeDaysCache.dates) return tradeDaysCache.dates;
+  if (tradeDaysCache.pending) return tradeDaysCache.pending;
+  tradeDaysCache.pending = (async () => {
+    // 先找到今天或之前最近的一个交易日作锚点（接口对非交易日不返回前序日期）
+    let anchor = today;
+    let window = null;
+    for (let step = 0; step < 20; step++) {
+      window = await fetchTradeDayWindow(anchor, 400);
+      if (window.isTradeDay) break;
+      const previous = new Date(`${anchor}T00:00:00Z`);
+      previous.setUTCDate(previous.getUTCDate() - 1);
+      anchor = previous.toISOString().slice(0, 10);
+    }
+    if (!window?.isTradeDay) throw new Error('找不到最近的交易日');
+    const dates = new Set([anchor]);
+    while (window.previous.length) {
+      window.previous.forEach(date => dates.add(date));
+      const earliest = window.previous[0];
+      if (earliest <= TRADE_DAYS_FROM) break;
+      window = await fetchTradeDayWindow(earliest, 400);
+      // 锚点本身是交易日，接口只给它之前的日期
+    }
+    const sorted = [...dates].filter(date => date >= TRADE_DAYS_FROM).sort();
+    tradeDaysCache = { day: today, dates: sorted, pending: null };
+    return sorted;
+  })().catch(error => {
+    tradeDaysCache.pending = null;
+    throw error;
+  });
+  return tradeDaysCache.pending;
+}
+
+app.get('/api/trade-days', async (req, res) => {
+  try {
+    const dates = await loadAllTradeDays();
+    res.set('Cache-Control', 'public, max-age=3600');
+    res.json({ status_code: 0, from: dates[0], to: dates[dates.length - 1], dates });
+  } catch (error) {
+    console.error(`交易日历获取失败: ${error.message}`);
+    res.status(502).json({ status_code: -1, msg: `交易日历获取失败: ${error.message}` });
+  }
+});
+
 // 新闻范围：回测日及之前 days - 1 个交易日（按同花顺交易日历，连续的交易日，中间的周末/假期新闻也包含在内）。
 async function getNewsDateRange(dateString, days = 5) {
   const response = await axios.get(TRADE_DAY_URL, {
