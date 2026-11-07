@@ -158,6 +158,13 @@ function buildMonths(byDay, days, stocksOf, times, newsCache, llm, evidence, eve
       }
     }
     if (!entry.themes) console.log(`事件题材 ${date} 没有结果`);
+    // 复看（第一遍没归类、第二遍模型按新闻归进当天已有题材的），记 via=2，页面标「复看补」
+    for (const item of entry.review?.assign || []) {
+      const theme = merge(item.theme);
+      if (!eventsByKey.has(item.key)) eventsByKey.set(item.key, []);
+      const list = eventsByKey.get(item.key);
+      if (!list.some(event => event.t === theme)) list.push({ t: theme, e: item.event, ...(item.newsIds[0] ? { n: item.newsIds[0] } : {}), via: 2 });
+    }
   }
   // 同标题补：模型偶尔漏掉一只（一天上百只首板时更常见，如 2026-11-02 的浙文影业）。没归到任何题材的首板，
   // 如果它的新闻里有某题材成员当天被引作依据的同一条标题，就补进那个题材，记 via=1（页面标「同标题补」）。

@@ -518,7 +518,8 @@
           if (!found) return '';
           const news = (newsOf(stock, date) || []).find(item => item.t === found.n);
           const source = found.n ? `<div class="src">${news?.u ? `<a href="${escapeAttr(news.u)}" target="_blank" rel="noopener">${escapeHtml(found.n)}</a>` : escapeHtml(found.n)}</div>` : '';
-          const shared = found.via ? ' <span class="tag" title="模型没把这只归进来；它的新闻里有这个题材其他票当天被引作依据的同一条标题，按同标题补进来">同标题补</span>' : '';
+          const shared = found.via === 2 ? ' <span class="tag" title="第一遍没归进来，复看时模型按它自己的新闻归进当天已有的这个题材">复看补</span>'
+            : found.via ? ' <span class="tag" title="模型没把这只归进来；它的新闻里有这个题材其他票当天被引作依据的同一条标题，按同标题补进来">同标题补</span>' : '';
           return `<span class="why">${escapeHtml(found.e)}</span>${shared}${source}`;
         }
         const evidenced = (evidenceOf(stock, date) || []).filter(item => item.e && item.n);
@@ -730,7 +731,7 @@
            <div class="origin" style="color:var(--muted)">下面是首板时的新闻</div>`
         : `<div class="origin"><b>涨停原因</b>：${escapeHtml(stock.r)}</div>`;
       const events = eventsOf(stock, date);
-      if (events?.length) origin += `<div class="evidence"><div style="color:var(--muted)">新闻事件题材${stock.s > 1 ? `（首板 ${stock.fd}）` : ''}：</div>${events.map(item => `<div class="yes">${escapeHtml(item.t)}：${escapeHtml(item.e)}${item.n ? `「${escapeHtml(item.n)}」` : ''}${item.via ? '（同标题补）' : ''}</div>`).join('')}</div>`;
+      if (events?.length) origin += `<div class="evidence"><div style="color:var(--muted)">新闻事件题材${stock.s > 1 ? `（首板 ${stock.fd}）` : ''}：</div>${events.map(item => `<div class="yes">${escapeHtml(item.t)}：${escapeHtml(item.e)}${item.n ? `「${escapeHtml(item.n)}」` : ''}${item.via === 2 ? '（复看补）' : item.via ? '（同标题补）' : ''}</div>`).join('')}</div>`;
       const concepts = evidenceOf(stock, date);
       if (concepts) origin += `<div class="evidence"><div style="color:var(--muted)">首板涨停原因佐证${stock.s > 1 ? `（${stock.fd}）` : ''}：</div>${concepts.map(item => `<div class="${item.e ? 'yes' : 'no'}">${item.e ? '✓' : '✗'} ${escapeHtml(item.c)}：${escapeHtml(item.r)}${item.n ? `「${escapeHtml(item.n)}」` : ''}</div>`).join('')}</div>`;
       const cached = newsOf(stock, date);

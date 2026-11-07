@@ -1319,9 +1319,10 @@
     const peakVsFirst = Number.isFinite(pile.peakMidVsFirstMidPct)
       ? `${pile.peakMidVsFirstMidPct.toFixed(1)}%`
       : '无法计算';
-    const anchorText = pile.priceAnchorCount
+    const anchorText = (pile.priceAnchorCount
       ? `连续涨停锚点 ${pile.priceAnchorCount}根（首根 ${pile.priceAnchorDate}）`
-      : '放量区间前没有紧邻的连续涨停板';
+      : '放量区间前没有紧邻的连续涨停板')
+      + (pile.leftExtensionDate ? `；向左多取 ${pile.leftExtensionDate}` : '；前一根属于上一个量堆，没向左多取');
     const contrastText = Number.isFinite(pile.contrastRatio)
       ? `放/缩 top50均值比 ${pile.contrastRatio.toFixed(2)}× / 要求 ${pile.contrastThresholdMultiple.toFixed(1)}×`
       : '前置缩量段暂无可比成交量';

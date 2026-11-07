@@ -188,6 +188,7 @@
     const piles = [];
     const volumePileByDate = new Map();
     const priceAnchorByDate = new Map();
+    const leftExtensionByDate = new Map(); // 区间向左多取的那根 K 线 → 量堆
     const contrastByDate = new Map();
     const contrastFilteredByDate = new Map();
     let previousPileEndIndex = -1;
@@ -249,6 +250,14 @@
         priceAnchorBars.push(previous);
       }
       const priceAnchorIndexSet = new Set(priceAnchorBars.map(point => point.index));
+      // 最后再向左多取一根 K 线（2026-11-07 用户要求），参与吸筹/兑现判断（找最低收盘价、区间首根中价）；
+      // 这根已经属于前一个量堆的区间（含其价格锚点）时不取，两个量堆不重叠
+      const leftIndex = firstRangeMember.index - 1;
+      const leftExtensionBar = leftIndex > previousPileEndIndex && leftIndex >= 0
+        && !volumePileByDate.has(points[leftIndex].date) && !priceAnchorByDate.has(points[leftIndex].date)
+        ? points[leftIndex]
+        : null;
+      if (leftExtensionBar) firstRangeMember = leftExtensionBar;
       const startIndex = firstRangeMember.index;
       const endIndex = lastVolumeMember.index;
       const auditBars = points.slice(startIndex, endIndex + 1).map(point => ({
@@ -267,6 +276,7 @@
         isVolumeCandidate: candidateSet.has(point.index),
         meetsGlobalMedianFilter: point.medianRatio >= settings.medianMultiple,
         isPriceAnchor: priceAnchorIndexSet.has(point.index),
+        isLeftExtension: point.index === leftExtensionBar?.index,
         includedInPile: includedSet.has(point.index),
         ...contrastDetails,
       }));
@@ -314,8 +324,12 @@
         ...contrastDetails,
         centerPrice,
         firstRangeMidPrice: firstBarMidPrice,
-        priceAnchorDate: priceAnchorBars.length ? firstRangeMember.date : null,
-        priceAnchorMidPrice: priceAnchorBars.length ? firstBarMidPrice : null,
+        // 价格锚点是向左连着的涨停 K 线里最早的一根（向左多取的那根不算锚点）
+        priceAnchorDate: priceAnchorBars.length ? priceAnchorBars[priceAnchorBars.length - 1].date : null,
+        priceAnchorMidPrice: priceAnchorBars.length
+          ? (priceAnchorBars[priceAnchorBars.length - 1].high + priceAnchorBars[priceAnchorBars.length - 1].low) / 2
+          : null,
+        leftExtensionDate: leftExtensionBar?.date || null,
         priceAnchorCount: priceAnchorBars.length,
         priceAnchorDates: [...priceAnchorBars].reverse().map(point => point.date),
         peakMidPrice,
@@ -337,6 +351,7 @@
       previousPileEndIndex = lastVolumeMember.index;
       for (const point of members) volumePileByDate.set(point.date, pile);
       for (const point of priceAnchorBars) priceAnchorByDate.set(point.date, pile);
+      if (leftExtensionBar) leftExtensionByDate.set(leftExtensionBar.date, pile);
       for (const point of [...members, ...priceAnchorBars]) {
         contrastByDate.set(point.date, contrastDetails);
       }
@@ -344,11 +359,14 @@
     const auditByDate = new Map(points.map(point => {
       const pile = volumePileByDate.get(point.date);
       const anchorPile = priceAnchorByDate.get(point.date);
-      const auditPile = pile || anchorPile;
+      const extensionPile = leftExtensionByDate.get(point.date);
+      const auditPile = pile || anchorPile || extensionPile;
       const contrastDetails = contrastByDate.get(point.date) || contrastFilteredByDate.get(point.date);
       const firstVolumeBar = auditPile?.auditBars.find(bar => bar.date === auditPile.firstVolumeDate);
       const isVolumeCandidate = candidateIndexSet.has(point.index);
-      const filterResult = anchorPile && !pile
+      const filterResult = extensionPile && !pile && !anchorPile
+        ? 'left-extension'
+        : anchorPile && !pile
         ? 'price-anchor-only'
         : !Number.isFinite(point.globalBaseline)
         ? 'insufficient-history'
@@ -386,6 +404,8 @@
         contrastReferenceStartDate: contrastDetails?.contrastReferenceStartDate || null,
         contrastReferenceEndDate: contrastDetails?.contrastReferenceEndDate || null,
         isPriceAnchor: Boolean(anchorPile && !pile),
+        isLeftExtension: Boolean(extensionPile && !pile && !anchorPile),
+        leftExtensionForPileStart: extensionPile?.startDate || null,
         priceAnchorForPileStart: anchorPile?.startDate || null,
         filterResult,
         classification: auditPile

@@ -6,6 +6,7 @@
 // 输入：全市场涨停名单、reports/news-cache.json（首板日和前四个交易日的新闻标题，含其间节假日；多只票共有的标题只列一次，缺的先补）。
 // 不给模型涨停原因（2026-11-06 用户决定）。没有事件新闻的票不归类。
 // 连板票沿用首板那天的题材（新闻日历里算）。不含北交所和 ST。
+// 第二遍「复看」：当天没归进任何题材的首板再调用一次，只能归进当天已有的题材（存在 review 里，页面标「复看补」）。
 // 输出：reports/theme-events.json，键是日期；prompt、模型、思考开关和当天输入都没变的不重新调用（词表变了不算）。
 //
 // 用法: npm run theme-events -- --start 2026-01-01 [--end 2026-12-31] [--thinking] [--out 文件名] [--yes] [--news-only]
@@ -59,6 +60,8 @@ async function fillNews(boards, cache) {
 const ROOT = __dirname;
 const REPORTS_DIR = path.join(ROOT, 'reports');
 const PROMPT_FILE = path.join(ROOT, 'prompts', 'theme-events.md');
+// 复看：第一遍没归类的首板再看一遍，只能归进当天已有的题材
+const REVIEW_PROMPT_FILE = path.join(ROOT, 'prompts', 'theme-events-review.md');
 const VOCABULARY_DAYS = 30;
 const VOCABULARY_MAX = 120;
 const CONFIRM_ABOVE = 20; // 超过这么多天要 --yes
@@ -82,10 +85,10 @@ function parseArgs(argv) {
 
 const readJson = (file, fallback) => { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return fallback; } };
 
-function readSystemPrompt() {
-  const text = fs.readFileSync(PROMPT_FILE, 'utf8');
+function readSystemPrompt(file = PROMPT_FILE) {
+  const text = fs.readFileSync(file, 'utf8');
   const start = text.indexOf('## Prompt 正文');
-  if (start < 0) throw new Error(`${PROMPT_FILE} 里找不到「## Prompt 正文」`);
+  if (start < 0) throw new Error(`${file} 里找不到「## Prompt 正文」`);
   return text.slice(start + '## Prompt 正文'.length).trim();
 }
 
@@ -189,7 +192,7 @@ function normalize(parsed, lookup, rejected) {
 async function main() {
   const options = parseArgs(process.argv.slice(2));
   if (options.help) {
-    console.log(fs.readFileSync(__filename, 'utf8').split('\n').slice(3, 12).map(line => line.replace(/^\/\/ ?/, '')).join('\n'));
+    console.log(fs.readFileSync(__filename, 'utf8').split('\n').slice(3, 13).map(line => line.replace(/^\/\/ ?/, '')).join('\n'));
     return;
   }
   for (const name of ['BASEURL', 'APIKEY', 'MODEL']) if (!process.env[name]) throw new Error(`.env 里缺少 ${name}`);
@@ -264,6 +267,72 @@ async function main() {
     }
     save();
   }
+  save();
+
+  // 复看：每天第一遍没归进任何题材的首板，再交给模型看能不能归进当天已有的题材（prompts/theme-events-review.md），
+  // 结果存在 saved[日期].review，不改第一遍的 themes；各天互不依赖，并发跑
+  const reviewSystem = readSystemPrompt(REVIEW_PROMPT_FILE);
+  const reviewHash = hashOf(reviewSystem);
+  const reviews = plans.map(plan => {
+    const entry = saved[plan.date];
+    if (!entry?.themes?.length) return null;
+    const grouped = new Set(entry.themes.flatMap(item => item.stocks.map(stock => stock.key)));
+    const stocks = plan.input.stocks.filter(stock => !grouped.has(plan.lookup.get(stock.id)));
+    const used = new Set(stocks.flatMap(stock => stock.news));
+    const themes = [...new Map(entry.themes.map(item => [merge(item.theme), { theme: merge(item.theme), event: item.event }])).values()];
+    // 近期用过的题材名（今天已有的不重复列），当天没有对应题材时优先沿用
+    const vocabulary = vocabularyBefore(plan.date, tradingDays, saved, merge).map(item => item.theme).filter(name => !themes.some(item => item.theme === name));
+    const input = { date: plan.date, themes, vocabulary, news: plan.input.news.filter(item => used.has(item.id)), stocks };
+    return { plan, entry, input, inputHash: hashOf(input) };
+  }).filter(Boolean);
+  const reviewTodo = reviews.filter(({ entry, inputHash }) => !(entry.review && entry.review.promptHash === reviewHash && entry.review.model === process.env.MODEL && entry.review.inputHash === inputHash));
+  console.log(`复看：${reviews.length} 天里需要处理 ${reviewTodo.length} 天，没归类的首板 ${reviewTodo.reduce((sum, item) => sum + item.input.stocks.length, 0)} 只，prompt ${reviewHash}`);
+  if (reviewTodo.length > CONFIRM_ABOVE && !options.yes) throw new Error(`复看要调用大模型 ${reviewTodo.length} 次，超过 ${CONFIRM_ABOVE} 次。确认后加 --yes 重跑`);
+  let nextReview = 0;
+  let reviewAssigned = 0;
+  await Promise.all(Array.from({ length: Math.min(4, reviewTodo.length) }, async () => {
+    while (nextReview < reviewTodo.length) {
+      const { plan, entry, input, inputHash } = reviewTodo[nextReview++];
+      const base = { promptHash: reviewHash, inputHash, model: process.env.MODEL, fetchedAt: new Date().toISOString() };
+      if (!input.stocks.length) {
+        entry.review = { ...base, assign: [], usage: {} };
+        continue;
+      }
+      const themeEvents = new Map(input.themes.map(item => [item.theme, item.event]));
+      let lastError;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          const reply = await callModel(reviewSystem, input, { useSearch: false, thinking: false, maxTokens: 8000 });
+          const parsed = parseReply(reply.text);
+          const assign = [];
+          for (const item of Array.isArray(parsed.assign) ? parsed.assign : []) {
+            const key = plan.lookup.get(String(item.id || '').trim());
+            const theme = merge(String(item.theme || '').trim());
+            const newsIds = (Array.isArray(item.news) ? item.news : []).map(id => plan.lookup.get(String(id))).filter(title => title && !/^\d{6}\|/.test(title)).slice(0, 3);
+            // 编号对得上、有依据新闻；当天已有的题材用当天的催化，新题材用模型给的 event（没给就用依据标题）；一只最多 2 个
+            if (!/^\d{6}\|/.test(key || '') || !theme || !newsIds.length) continue;
+            if (assign.filter(other => other.key === key).length >= 2 || assign.some(other => other.key === key && other.theme === theme)) continue;
+            const event = themeEvents.get(theme) || String(item.event || '').trim() || newsIds[0].slice(0, 30);
+            assign.push({ key, theme, event, newsIds, ...(themeEvents.has(theme) ? {} : { fresh: 1 }) });
+          }
+          entry.review = { ...base, assign, usage: reply.usage };
+          for (const field of Object.keys(usage)) usage[field] += Number(reply.usage[field] || 0);
+          reviewAssigned += new Set(assign.map(item => item.key)).size;
+          lastError = null;
+          break;
+        } catch (error) {
+          lastError = error;
+          await new Promise(resolve => setTimeout(resolve, 3000 * (attempt + 1)));
+        }
+      }
+      if (lastError) {
+        failed++;
+        console.error(`${plan.date} 复看失败：${lastError.message}`);
+      } else console.log(`${plan.date} 复看：${input.stocks.length} 只没归类的补进 ${new Set(entry.review.assign.map(item => item.key)).size} 只`);
+      save();
+    }
+  }));
+  if (reviewTodo.length) console.log(`复看共补进 ${reviewAssigned} 只`);
   save();
   const cost = price => (usage.cached * price.cached + usage.input * price.input + usage.output * price.output) / 1e6;
   const totalInput = usage.input + usage.cached;
