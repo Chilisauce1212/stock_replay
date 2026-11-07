@@ -146,6 +146,18 @@ async function main() {
     const file = path.join(inReview ? path.join(__dirname, 'daily-review') : testCaseDir, fileName);
     const old = inReview && fs.existsSync(file) ? new Map(JSON.parse(fs.readFileSync(file, 'utf8')).map(item => [`${item.code}|${item.date}`, item])) : new Map();
     const merged = cases.map(item => ({ ...old.get(`${item.code}|${item.date}`), ...item }));
+    // 行情没查到的记录（接口偶尔失败，一次全量会有上百条）不能当成「不再是四连板」删掉：原来在文件里的照样保留
+    // （2026-11-07 一次全量查询失败 139 条，误删了 28 只真四连板，如科森科技 10 板、粤桂股份 11 板）
+    if (inReview) {
+      const present = new Set(merged.map(item => `${item.code}|${item.date}`));
+      allCases.forEach((item, index) => {
+        const key = `${item.code}|${item.date}`;
+        if (Number.isFinite(prices[index]) || present.has(key) || !old.has(key)) return;
+        merged.push(old.get(key));
+        present.add(key);
+      });
+      merged.sort((left, right) => left.date.localeCompare(right.date) || left.code.localeCompare(right.code));
+    }
     fs.writeFileSync(file, `${JSON.stringify(merged, null, 2)}\n`, 'utf8');
   });
   console.log(`全量重算完成：大于30元 ${outputs[0][1].length} 条，小于3元 ${outputs[1][1].length} 条，三连板及以上 ${outputs[2][1].length} 条，四连板及以上 ${outputs[3][1].length} 条，五连板及以上 ${outputs[4][1].length} 条，未匹配 ${missing} 条`);

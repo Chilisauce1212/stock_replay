@@ -432,7 +432,7 @@ npm run volume-pile-report -- 一进二回测_20260106_20261231.json
 npm run volume-pile-report -- daily-review/文件A.json daily-review/文件B.json --out reports/量堆汇总.csv
 ```
 
-脚本对每条股票信号记录扫描信号日之前的历史 K 线，输出吸筹/承接候选量堆数、获利兑现倾向量堆数、最新量堆类型和该记录的收益率。量堆区间（[public/volume-pile.js](public/volume-pile.js)，页面和脚本共用）从第一根放量 K 线起，向左连着的涨停 K 线算价格锚点，最后再向左多取一根 K 线（2026-11-07 起；这根属于上一个量堆时不取），这根也参与吸筹/兑现判断（找区间最低收盘价、区间首根中价）。改动后约 7.7% 的量堆从吸筹变成兑现。固定检测配置见 [volume-pile-report.js](volume-pile-report.js)。文件可以指定为路径或 `daily-review/` 下的文件名。
+脚本对每条股票信号记录扫描信号日之前的历史 K 线，输出吸筹/承接候选量堆数、获利兑现倾向量堆数、最新量堆类型和该记录的收益率。量堆的吸筹/兑现判断见 [VOLUME_PILE_INDICATOR_PLAN.md](VOLUME_PILE_INDICATOR_PLAN.md)（页面和脚本共用 [public/volume-pile.js](public/volume-pile.js)）：最低收盘K到中枢涨幅、或最高收盘K对中枢涨幅达到阈值就算兑现（2026-11-07 起，原来第二条是末根K对中枢）。固定检测配置见 [volume-pile-report.js](volume-pile-report.js)。文件可以指定为路径或 `daily-review/` 下的文件名。
 
 可选参数：
 

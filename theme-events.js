@@ -18,7 +18,7 @@ const path = require('path');
 const { readLimitUpMonths } = require('./limit-up-list');
 const { makeTagger, buildDays } = require('./stock-pick');
 const { callModel, parseReply, hashOf, OFF_PEAK_PRICE, PEAK_PRICE } = require('./news-llm');
-const { isCurrentCacheEntry, fetchNews } = require('./news-theme-table');
+const { isCurrentCacheEntry, fetchNews, mergeNewsEntry } = require('./news-theme-table');
 
 const BASE_URL = process.env.REPLAY_BASE_URL || 'http://127.0.0.1:3000';
 const NEWS_CACHE_FILE = path.join(__dirname, 'reports', 'news-cache.json');
@@ -43,7 +43,7 @@ async function fillNews(boards, cache) {
   await Promise.all(Array.from({ length: 4 }, async () => {
     while (next < lacking.length) {
       const board = lacking[next++];
-      try { fresh[board.key] = await fetchNews(BASE_URL, board.code, board.key.split('|')[1]); } catch (error) {
+      try { fresh[board.key] = mergeNewsEntry(cache[board.key], await fetchNews(BASE_URL, board.code, board.key.split('|')[1])); } catch (error) {
         failed++;
         console.log(`新闻获取失败 ${board.key}：${error.message}`);
       }

@@ -715,7 +715,7 @@
 
     function newsHtml(list) {
       return list.map(item => `<div class="news${item.i ? ' important' : ''}">
-        <time>${escapeHtml((item.tm || '').slice(5, 16))}</time>${kindTags(item)}${item.u ? `<a href="${escapeAttr(item.u)}" target="_blank" rel="noopener">${escapeHtml(item.t)}</a>` : escapeHtml(item.t)}
+        <time>${escapeHtml((item.tm || '').slice(5, 16))}</time>${item.g ? '<span class="kind plain" style="--k:#6b7280" title="首板当时在同花顺个股资讯里，之后被撤掉了（现在客户端里找不到），缓存里留着">已撤</span>' : ''}${kindTags(item)}${item.u ? `<a href="${escapeAttr(item.u)}" target="_blank" rel="noopener">${escapeHtml(item.t)}</a>` : escapeHtml(item.t)}
         ${item.i && (item.nt || item.why) ? `<p>${escapeHtml(item.nt || item.why)}</p>` : ''}
       </div>`).join('');
     }

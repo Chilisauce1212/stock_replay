@@ -106,7 +106,7 @@ function toCsv(rows) {
     '吸筹承接量堆数', '获利兑现量堆数', '量堆总数', '最近量堆类型',
     '最近量堆开始日期', '最近量堆结束日期', '最近量堆峰值日期',
     '最近量堆放缩量Top50均值比', '最近量堆中枢', '最近量堆高点日期', '最近量堆高点左侧最低收盘日期',
-    '最近量堆最低收盘K到中枢涨幅', '最近量堆末根K对中枢涨幅', '首板量/最近量堆Top50均量',
+    '最近量堆最低收盘K到中枢涨幅', '最近量堆最高收盘K对中枢涨幅', '最近量堆末根K对中枢涨幅', '首板量/最近量堆Top50均量',
     '个股收益率百分比', '买入日期', '买入价',
     '卖出日期', '卖出价', '收益计算状态', '收益计算错误', '量堆检测状态', '量堆检测错误',
   ];
@@ -165,6 +165,7 @@ function resultRow(record, file, analysis, calculatedPnl, detectionError = '', p
     最近量堆高点日期: latest?.highestCloseDate || '',
     最近量堆高点左侧最低收盘日期: latest?.lowestCloseDate || '',
     最近量堆最低收盘K到中枢涨幅: roundedOrBlank(latest?.lowestCloseToCenterPct, 2),
+    最近量堆最高收盘K对中枢涨幅: roundedOrBlank(latest?.highestCloseToCenterPct, 2),
     最近量堆末根K对中枢涨幅: roundedOrBlank(latest?.lastBarToCenterPct, 2),
     '首板量/最近量堆Top50均量': latest?.pileTopHalfAverageVolume > 0
       ? roundedOrBlank(analysis.signalVolume / latest.pileTopHalfAverageVolume, 4)

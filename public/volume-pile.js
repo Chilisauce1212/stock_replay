@@ -27,6 +27,23 @@
     return /^\d{4}-\d{2}-\d{2}$/.test(text) ? text : '';
   }
 
+  // 当天成交均价换算到图表的复权价：K 线是前复权价，成交额是原始金额，成交额 ÷ 成交量得到的是原始均价。
+  // 复权因子只在除权日变，用前后各 5 天「复权中间价 ÷ 原始均价」的中位数估计当天的因子，乘上原始均价，再限制在当天高低价之间。
+  // 除权日前后几天会有约一个分红比例的误差。没有成交额时返回 NaN。
+  function adjustedAveragePrice(points, index) {
+    const rawAverage = point => (point.volume > 0 && point.amount > 0 ? point.amount / point.volume : NaN);
+    const own = rawAverage(points[index]);
+    if (!Number.isFinite(own)) return NaN;
+    const ratios = points.slice(Math.max(0, index - 5), index + 6)
+      .map(point => ((point.high + point.low) / 2) / rawAverage(point))
+      .filter(Number.isFinite)
+      .sort((left, right) => left - right);
+    if (!ratios.length) return NaN;
+    const factor = ratios[Math.floor(ratios.length / 2)];
+    const { high, low } = points[index];
+    return Math.min(high, Math.max(low, own * factor));
+  }
+
   // 活跃度：以检测数据最后一根 K 线为终点（用例中即首板前一日）。
   // 常态量取倒数第 6～125 根的成交量中位数，排除最近 5 日，避免首板前的异动抬高基准。
   // 2024–2026 一进二检验中两者都是越活跃越好，但效果不大，只适合排序或排除冷清票。
@@ -188,7 +205,6 @@
     const piles = [];
     const volumePileByDate = new Map();
     const priceAnchorByDate = new Map();
-    const leftExtensionByDate = new Map(); // 区间向左多取的那根 K 线 → 量堆
     const contrastByDate = new Map();
     const contrastFilteredByDate = new Map();
     let previousPileEndIndex = -1;
@@ -250,14 +266,6 @@
         priceAnchorBars.push(previous);
       }
       const priceAnchorIndexSet = new Set(priceAnchorBars.map(point => point.index));
-      // 最后再向左多取一根 K 线（2026-11-07 用户要求），参与吸筹/兑现判断（找最低收盘价、区间首根中价）；
-      // 这根已经属于前一个量堆的区间（含其价格锚点）时不取，两个量堆不重叠
-      const leftIndex = firstRangeMember.index - 1;
-      const leftExtensionBar = leftIndex > previousPileEndIndex && leftIndex >= 0
-        && !volumePileByDate.has(points[leftIndex].date) && !priceAnchorByDate.has(points[leftIndex].date)
-        ? points[leftIndex]
-        : null;
-      if (leftExtensionBar) firstRangeMember = leftExtensionBar;
       const startIndex = firstRangeMember.index;
       const endIndex = lastVolumeMember.index;
       const auditBars = points.slice(startIndex, endIndex + 1).map(point => ({
@@ -276,7 +284,6 @@
         isVolumeCandidate: candidateSet.has(point.index),
         meetsGlobalMedianFilter: point.medianRatio >= settings.medianMultiple,
         isPriceAnchor: priceAnchorIndexSet.has(point.index),
-        isLeftExtension: point.index === leftExtensionBar?.index,
         includedInPile: includedSet.has(point.index),
         ...contrastDetails,
       }));
@@ -307,10 +314,26 @@
       const lastBarToCenterPct = Number.isFinite(centerPrice) && centerPrice > 0
         ? (lastBarMid / centerPrice - 1) * 100
         : NaN;
+      // 高点：区间内收盘价最高的那根，默认用中间价对中枢（和低点一样用中间价）；
+      // highPriceBasis = 'vwap' 时用当天成交均价（成交额 ÷ 成交量，换算到复权价，见 adjustedAveragePrice）
+      const highestCloseMid = !highestCloseBar
+        ? NaN
+        : settings.highPriceBasis === 'vwap'
+          ? adjustedAveragePrice(points, highestCloseBar.index)
+          : (highestCloseBar.high + highestCloseBar.low) / 2;
+      const highestToCenterPct = Number.isFinite(highestCloseMid) && Number.isFinite(centerPrice) && centerPrice > 0
+        ? (highestCloseMid / centerPrice - 1) * 100
+        : NaN;
+      // 两种高点价格都算出来给提示显示，判断只用 highPriceBasis 选的那个
+      const highestBarMid = highestCloseBar ? (highestCloseBar.high + highestCloseBar.low) / 2 : NaN;
+      const highestBarAverage = highestCloseBar ? adjustedAveragePrice(points, highestCloseBar.index) : NaN;
+      const toCenter = price => (Number.isFinite(price) && Number.isFinite(centerPrice) && centerPrice > 0 ? (price / centerPrice - 1) * 100 : NaN);
+      // 兑现：低点到中枢的涨幅够，或者高点到中枢的距离够，满足一个就算（2026-11-07 用户改）。
+      // 原来第二个条件是末根到中枢；末根不一定是最高的，可能是从高点跌下来的，所以改成和高点比。末根的数字只留作参考。
       const profitTaking = (Number.isFinite(lowestToCenterPct)
         && lowestToCenterPct >= settings.profitThresholdPct)
-        || (Number.isFinite(lastBarToCenterPct)
-          && lastBarToCenterPct >= settings.profitThresholdPct);
+        || (Number.isFinite(highestToCenterPct)
+          && highestToCenterPct >= settings.profitThresholdPct);
       const pile = {
         startDate: points[startIndex].date,
         firstVolumeDate: firstVolumeMember.date,
@@ -324,17 +347,20 @@
         ...contrastDetails,
         centerPrice,
         firstRangeMidPrice: firstBarMidPrice,
-        // 价格锚点是向左连着的涨停 K 线里最早的一根（向左多取的那根不算锚点）
-        priceAnchorDate: priceAnchorBars.length ? priceAnchorBars[priceAnchorBars.length - 1].date : null,
-        priceAnchorMidPrice: priceAnchorBars.length
-          ? (priceAnchorBars[priceAnchorBars.length - 1].high + priceAnchorBars[priceAnchorBars.length - 1].low) / 2
-          : null,
-        leftExtensionDate: leftExtensionBar?.date || null,
+        priceAnchorDate: priceAnchorBars.length ? firstRangeMember.date : null,
+        priceAnchorMidPrice: priceAnchorBars.length ? firstBarMidPrice : null,
         priceAnchorCount: priceAnchorBars.length,
         priceAnchorDates: [...priceAnchorBars].reverse().map(point => point.date),
         peakMidPrice,
         peakMidVsFirstMidPct,
         highestCloseDate: highestCloseBar?.date || null,
+        highestCloseMidPrice: Number.isFinite(highestCloseMid) ? highestCloseMid : null,
+        highestCloseToCenterPct: Number.isFinite(highestToCenterPct) ? highestToCenterPct : null,
+        highPriceBasis: settings.highPriceBasis === 'vwap' ? 'vwap' : 'mid',
+        highestCloseBarMidPrice: Number.isFinite(highestBarMid) ? highestBarMid : null,
+        highestCloseBarMidToCenterPct: Number.isFinite(toCenter(highestBarMid)) ? toCenter(highestBarMid) : null,
+        highestCloseAveragePrice: Number.isFinite(highestBarAverage) ? highestBarAverage : null,
+        highestCloseAverageToCenterPct: Number.isFinite(toCenter(highestBarAverage)) ? toCenter(highestBarAverage) : null,
         lowestCloseDate: lowestCloseBar?.date || null,
         lowestCloseMidPrice: Number.isFinite(lowestCloseMid) ? lowestCloseMid : null,
         lowestCloseToCenterPct: Number.isFinite(lowestToCenterPct) ? lowestToCenterPct : null,
@@ -351,7 +377,6 @@
       previousPileEndIndex = lastVolumeMember.index;
       for (const point of members) volumePileByDate.set(point.date, pile);
       for (const point of priceAnchorBars) priceAnchorByDate.set(point.date, pile);
-      if (leftExtensionBar) leftExtensionByDate.set(leftExtensionBar.date, pile);
       for (const point of [...members, ...priceAnchorBars]) {
         contrastByDate.set(point.date, contrastDetails);
       }
@@ -359,14 +384,11 @@
     const auditByDate = new Map(points.map(point => {
       const pile = volumePileByDate.get(point.date);
       const anchorPile = priceAnchorByDate.get(point.date);
-      const extensionPile = leftExtensionByDate.get(point.date);
-      const auditPile = pile || anchorPile || extensionPile;
+      const auditPile = pile || anchorPile;
       const contrastDetails = contrastByDate.get(point.date) || contrastFilteredByDate.get(point.date);
       const firstVolumeBar = auditPile?.auditBars.find(bar => bar.date === auditPile.firstVolumeDate);
       const isVolumeCandidate = candidateIndexSet.has(point.index);
-      const filterResult = extensionPile && !pile && !anchorPile
-        ? 'left-extension'
-        : anchorPile && !pile
+      const filterResult = anchorPile && !pile
         ? 'price-anchor-only'
         : !Number.isFinite(point.globalBaseline)
         ? 'insufficient-history'
@@ -404,8 +426,6 @@
         contrastReferenceStartDate: contrastDetails?.contrastReferenceStartDate || null,
         contrastReferenceEndDate: contrastDetails?.contrastReferenceEndDate || null,
         isPriceAnchor: Boolean(anchorPile && !pile),
-        isLeftExtension: Boolean(extensionPile && !pile && !anchorPile),
-        leftExtensionForPileStart: extensionPile?.startDate || null,
         priceAnchorForPileStart: anchorPile?.startDate || null,
         filterResult,
         classification: auditPile
@@ -427,6 +447,12 @@
           : null,
         centerPrice: Number.isFinite(auditPile?.centerPrice) ? auditPile.centerPrice : null,
         highestCloseDate: auditPile?.highestCloseDate || null,
+        highestCloseMidPrice: Number.isFinite(auditPile?.highestCloseMidPrice)
+          ? auditPile.highestCloseMidPrice
+          : null,
+        highestCloseToCenterPct: Number.isFinite(auditPile?.highestCloseToCenterPct)
+          ? auditPile.highestCloseToCenterPct
+          : null,
         lowestCloseDate: auditPile?.lowestCloseDate || null,
         lowestCloseMidPrice: Number.isFinite(auditPile?.lowestCloseMidPrice)
           ? auditPile.lowestCloseMidPrice

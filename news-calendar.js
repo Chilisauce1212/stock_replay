@@ -122,6 +122,7 @@ function buildNews(key, newsCache, llm) {
       t: item.title,
       tm: item.time,
       u: item.url,
+      ...(item.gone ? { g: 1 } : {}), // 同花顺事后从个股时间线撤掉的（缓存里留着）
       ...(judge?.important ? { i: 1, cats: judge.categories || [], nt: judge.newThing || '', why: judge.reason || '' } : {}),
     };
   });

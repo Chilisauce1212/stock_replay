@@ -190,6 +190,22 @@ function isCurrentCacheEntry(entry) {
   return Boolean(entry && !Array.isArray(entry) && entry.days === newsDaysFor(entry.endDate) && Array.isArray(entry.news));
 }
 
+// 新闻缓存只增不减：同花顺事后会把新闻从个股时间线上撤掉（如 2026-10-28 上海沪工的「上海卫星互联网大会…星枢计划」两条，
+// 11-03 还在、11-06 再取就没了，手机客户端也找不到），重新获取时把旧缓存里同一窗口内、这次没取到的新闻并回来，标 gone: 1。
+// 这些是首板当晚交易员看得到的，照样给模型判断、页面显示。
+function mergeNewsEntry(previous, fresh) {
+  if (!previous || Array.isArray(previous) || !Array.isArray(previous.news) || !fresh) return fresh;
+  const freshIds = new Set(fresh.news.map(item => `${item.time}|${item.title}`));
+  const kept = previous.news
+    .filter(item => {
+      const day = String(item.time || '').slice(0, 10);
+      return day >= fresh.startDate && day <= fresh.endDate && !freshIds.has(`${item.time}|${item.title}`);
+    })
+    .map(item => ({ ...item, gone: 1 }));
+  if (!kept.length) return fresh;
+  return { ...fresh, news: [...fresh.news, ...kept].sort((left, right) => String(right.time).localeCompare(String(left.time))) };
+}
+
 function cachedNews(entry) {
   return isCurrentCacheEntry(entry) ? entry.news : [];
 }
@@ -454,7 +470,7 @@ async function main(argv = process.argv.slice(2)) {
       let newsError = '';
       if (!isCurrentCacheEntry(newsCache[key])) {
         try {
-          newsCache[key] = await fetchNews(options.baseUrl, record.code, record.date);
+          newsCache[key] = mergeNewsEntry(newsCache[key], await fetchNews(options.baseUrl, record.code, record.date));
         } catch (error) {
           newsError = error instanceof Error ? error.message : String(error);
           newsFailed++;
@@ -539,7 +555,7 @@ async function main(argv = process.argv.slice(2)) {
   if (failed || newsFailed) process.exitCode = 1;
 }
 
-module.exports = { classifyNews, pickAnchor, cachedNews, isCurrentCacheEntry, fetchNews, newsDaysFor, NEWS_V2_FROM, findPeak, findBreak, CATEGORIES, IMPORTANT_SCORE, NEWS_CACHE_FILE };
+module.exports = { classifyNews, pickAnchor, cachedNews, isCurrentCacheEntry, fetchNews, mergeNewsEntry, newsDaysFor, NEWS_V2_FROM, findPeak, findBreak, CATEGORIES, IMPORTANT_SCORE, NEWS_CACHE_FILE };
 
 if (require.main === module) {
   main().catch(error => {

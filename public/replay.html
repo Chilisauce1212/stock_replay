@@ -1319,14 +1319,19 @@
     const peakVsFirst = Number.isFinite(pile.peakMidVsFirstMidPct)
       ? `${pile.peakMidVsFirstMidPct.toFixed(1)}%`
       : '无法计算';
-    const anchorText = (pile.priceAnchorCount
+    const anchorText = pile.priceAnchorCount
       ? `连续涨停锚点 ${pile.priceAnchorCount}根（首根 ${pile.priceAnchorDate}）`
-      : '放量区间前没有紧邻的连续涨停板')
-      + (pile.leftExtensionDate ? `；向左多取 ${pile.leftExtensionDate}` : '；前一根属于上一个量堆，没向左多取');
+      : '放量区间前没有紧邻的连续涨停板';
+    // 最高收盘K：中间价和当天成交均价都显示，判断用的那个加「判断用」
+    const pctText = value => (Number.isFinite(value) ? `${value.toFixed(1)}%` : '无法计算');
+    const priceText = value => (Number.isFinite(value) ? value.toFixed(2) : '--');
+    const usesAverage = pile.highPriceBasis === 'vwap';
+    const highText = `中间价 ${priceText(pile.highestCloseBarMidPrice)} 对中枢 ${pctText(pile.highestCloseBarMidToCenterPct)}${usesAverage ? '' : '（判断用）'}；`
+      + `成交均价 ${priceText(pile.highestCloseAveragePrice)} 对中枢 ${pctText(pile.highestCloseAverageToCenterPct)}${usesAverage ? '（判断用）' : ''}`;
     const contrastText = Number.isFinite(pile.contrastRatio)
       ? `放/缩 top50均值比 ${pile.contrastRatio.toFixed(2)}× / 要求 ${pile.contrastThresholdMultiple.toFixed(1)}×`
       : '前置缩量段暂无可比成交量';
-    info.textContent = `${volumeActivityText()} | ${label}${pile.shortCluster ? '（短簇强峰）' : ''} ${pile.startDate}～${pile.endDate}（${pile.durationDays}个有效量日） | ${contrastText} | ${anchorText} | 高点 ${pile.highestCloseDate || '--'} 左侧最低收盘K ${pile.lowestCloseDate || '--'}（中间价 ${lowestMidText}）到中枢 ${lowestRise}；末根 ${pile.lastBarDate || '--'}（中间价 ${lastMidText}）对中枢 ${lastRise}；阈值 ${pile.profitThresholdPct}% | 加权中枢 ${pile.centerPrice.toFixed(2)}`;
+    info.textContent = `${volumeActivityText()} | ${label}${pile.shortCluster ? '（短簇强峰）' : ''} ${pile.startDate}～${pile.endDate}（${pile.durationDays}个有效量日） | ${contrastText} | ${anchorText} | 兑现看两条满足其一（阈值 ${pile.profitThresholdPct}%）：左侧最低收盘K ${pile.lowestCloseDate || '--'}（中间价 ${lowestMidText}）到中枢 ${lowestRise}；最高收盘K ${pile.highestCloseDate || '--'}：${highText} | 末根 ${pile.lastBarDate || '--'}（中间价 ${lastMidText}）对中枢 ${lastRise}（仅参考） | 加权中枢 ${pile.centerPrice.toFixed(2)}`;
     info.title = `区间首K中间价 ${firstMidText}；最大量日 ${pile.peakDate} 中间价 ${peakMidText}；峰值/首根涨幅 ${peakVsFirst}（仅供参考）。${contrastText}${Number.isFinite(pile.pileTopHalfAverageVolume) && Number.isFinite(pile.contractionTopHalfAverageVolume)
       ? `（放量段 Top ${pile.pileTopHalfDayCount}/${pile.pileVolumeValidDays}日均值 ${pile.pileTopHalfAverageVolume.toFixed(0)}；前置缩量段 Top ${pile.contractionTopHalfDayCount}/${pile.contractionVolumeValidDays}日均值 ${pile.contractionTopHalfAverageVolume.toFixed(0)}；参考 ${pile.contrastReferenceStartDate}～${pile.contrastReferenceEndDate}）`
       : ''}`;
@@ -1413,6 +1418,10 @@
           : null,
         lowestCloseToCenterPct: Number.isFinite(pile.lowestCloseToCenterPct)
           ? pile.lowestCloseToCenterPct
+          : null,
+        highestCloseMidPrice: Number.isFinite(pile.highestCloseMidPrice) ? pile.highestCloseMidPrice : null,
+        highestCloseToCenterPct: Number.isFinite(pile.highestCloseToCenterPct)
+          ? pile.highestCloseToCenterPct
           : null,
         lastBarDate: pile.lastBarDate,
         lastBarMidPrice: Number.isFinite(pile.lastBarMidPrice) ? pile.lastBarMidPrice : null,
