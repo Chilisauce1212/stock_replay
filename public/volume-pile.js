@@ -324,16 +324,23 @@
       const highestToCenterPct = Number.isFinite(highestCloseMid) && Number.isFinite(centerPrice) && centerPrice > 0
         ? (highestCloseMid / centerPrice - 1) * 100
         : NaN;
+      // 兑现第二条：左侧低点到高点的涨幅（区间里从低点涨上去了多少，低点买的人赚了多少）。
+      // 不能用「高点对中枢」：价格从高点一路跌、量堆在下面堆起来时，中枢被跌下来的价格拉低，高点对中枢也会很大，
+      // 但没人从低点赚钱（2026-06-12 新凤鸣 2026-02-11～05-07 的量堆：高点对中枢 19.4%，低点到高点只有 1.7%）
+      const lowestToHighestPct = Number.isFinite(highestCloseMid) && Number.isFinite(lowestCloseMid) && lowestCloseMid > 0
+        ? (highestCloseMid / lowestCloseMid - 1) * 100
+        : NaN;
       // 两种高点价格都算出来给提示显示，判断只用 highPriceBasis 选的那个
       const highestBarMid = highestCloseBar ? (highestCloseBar.high + highestCloseBar.low) / 2 : NaN;
       const highestBarAverage = highestCloseBar ? adjustedAveragePrice(points, highestCloseBar.index) : NaN;
       const toCenter = price => (Number.isFinite(price) && Number.isFinite(centerPrice) && centerPrice > 0 ? (price / centerPrice - 1) * 100 : NaN);
-      // 兑现：低点到中枢的涨幅够，或者高点到中枢的距离够，满足一个就算（2026-11-07 用户改）。
-      // 原来第二个条件是末根到中枢；末根不一定是最高的，可能是从高点跌下来的，所以改成和高点比。末根的数字只留作参考。
-      const profitTaking = (Number.isFinite(lowestToCenterPct)
-        && lowestToCenterPct >= settings.profitThresholdPct)
-        || (Number.isFinite(highestToCenterPct)
-          && highestToCenterPct >= settings.profitThresholdPct);
+      // 兑现（2026-11-08 用户定）：低点到高点的涨幅必须 ≥ 阈值（区间里真的从低点涨上去了），
+      // 并且「低点到中枢」或「高点对中枢」至少一个 ≥ 阈值。三个都用同一个阈值（profitThresholdPct）。
+      // 演变：最早是「低点到中枢 或 末根对中枢」（末根可能是从高点跌下来的）；11-07 改成「或 高点对中枢」，
+      // 会把下跌中堆起的量堆误判成兑现（新凤鸣 2026-02-11～05-07：高点对中枢 19.4%，低点到高点只有 1.7%）。末根对中枢只留作参考。
+      const threshold = settings.profitThresholdPct;
+      const meets = value => Number.isFinite(value) && value >= threshold;
+      const profitTaking = meets(lowestToHighestPct) && (meets(lowestToCenterPct) || meets(highestToCenterPct));
       const pile = {
         startDate: points[startIndex].date,
         firstVolumeDate: firstVolumeMember.date,
@@ -357,6 +364,7 @@
         highestCloseMidPrice: Number.isFinite(highestCloseMid) ? highestCloseMid : null,
         highestCloseToCenterPct: Number.isFinite(highestToCenterPct) ? highestToCenterPct : null,
         highPriceBasis: settings.highPriceBasis === 'vwap' ? 'vwap' : 'mid',
+        lowestToHighestPct: Number.isFinite(lowestToHighestPct) ? lowestToHighestPct : null,
         highestCloseBarMidPrice: Number.isFinite(highestBarMid) ? highestBarMid : null,
         highestCloseBarMidToCenterPct: Number.isFinite(toCenter(highestBarMid)) ? toCenter(highestBarMid) : null,
         highestCloseAveragePrice: Number.isFinite(highestBarAverage) ? highestBarAverage : null,

@@ -264,6 +264,7 @@
       <label title="隐藏新闻条数为 0 的票。没跑过新闻判断的票还不知道有没有新闻，会保留"><input id="hideNoNews" type="checkbox">隐藏无新闻</label>
       <label title="一只票有几个概念就出现在几组里"><input id="byTheme" type="checkbox">按题材分组</label>
       <label title="默认题材按新闻事件归（同一催化的票归一起，题材名是从事件提炼的关键词，连板票沿用首板那天的）；勾上改回按同花顺涨停原因的概念。没跑过事件归类的日期总是按概念"><input id="conceptThemes" type="checkbox">按涨停原因概念</label>
+      <label title="题材走势只画到页面当前日期，看不到之后的走势（复盘时避免看到未来）"><input id="trendToToday" type="checkbox">走势只到当天</label>
       <label title="按涨停原因概念时有效：题材标签只显示当天至少有一只票用自己的新闻佐证了这个涨停原因的；题材走势里只数和只列有佐证的票。没跑过佐证判断的日期不受影响"><input id="onlyEvidenced" type="checkbox">只看有佐证</label>
       <input id="search" type="search" placeholder="搜索名称 / 代码 / 原因" aria-label="搜索">
       <button class="btn" id="expandAll">全部展开</button>
@@ -434,6 +435,8 @@
           const found = byDay.get(at);
           return { date, count: found?.count || 0, top: found?.top || 0, topName: found?.topName || '', tiers: found?.tiers || [0, 0, 0], judged: Boolean(index.ed[at]), evidenced: 0 };
         });
+        // 勾了「走势只到当天」：页面当前日期之后的不画
+        if (el('trendToToday').checked) rows = rows.filter(row => row.date <= selectedDate);
       } else {
         const list = await trendDays(selectedDate);
         if (token !== themePanelToken) return;
@@ -494,8 +497,9 @@
         return `<button class="pt${classes(row)}" data-d="${row.date}" title="${tip}">${row.top ? `<i style="bottom:${level(row.top).toFixed(1)}%"></i><span style="bottom:calc(${level(row.top).toFixed(1)}% + 6px)">${row.top}</span>` : ''}</button>`;
       }).join('');
       // 列多时每列固定宽度、横向滚动；少时铺满
-      const scrolling = rows.length > THEME_TREND_DAYS + 1;
-      const innerStyle = scrolling ? ` style="width:${rows.length * TREND_COLUMN_PX}px"` : '';
+      // 事件题材的全部历史始终用固定列宽：列少时（如勾了「走势只到当天」、题材刚出现）不拉伸铺满，靠右对齐，最新一天在右边
+      const scrolling = byEvent || rows.length > THEME_TREND_DAYS + 1;
+      const innerStyle = scrolling ? ` style="width:${rows.length * TREND_COLUMN_PX}px;min-width:0;margin-left:auto"` : '';
       const nav = scrolling ? `<span class="trend-nav"><button class="btn" data-scroll="start" title="最早">«</button><button class="btn" data-scroll="-1" title="往前">‹</button><button class="btn" data-scroll="1" title="往后">›</button><button class="btn" data-scroll="end" title="最新">»</button></span>` : '';
       const strip = `<div class="strip-caption"><span>最高板（纵轴 1–${boardMax} 板）</span>${byEvent ? `<span class="tier-legend">家数：${TIERS.map(([name, color]) => `<span><s style="background:${color}"></s>${name}</span>`).join('')}</span>` : ''}${nav}</div>
         <div class="trend-scroll"><div class="trend-inner"${innerStyle}>
@@ -506,7 +510,7 @@
       const first = withStocks[0];
       const peak = withStocks.reduce((best, row) => (row.count > (best?.count || 0) ? row : best), null);
       const highest = withStocks.reduce((best, row) => (row.top > (best?.top || 0) ? row : best), null);
-      const span = byEvent ? '全部历史' : `近 ${rows.length} 个交易日`;
+      const span = !byEvent ? `近 ${rows.length} 个交易日` : el('trendToToday').checked ? `到 ${selectedDate} 为止` : '全部历史';
       const summary = first
         ? `${span}：首次出现 <b>${first.date}</b>；有涨停 <b>${withStocks.length}</b> 天；家数最多 <b>${peak.count}</b> 家（${peak.date}）；最高 <b>${highest.top}</b> 板（${escapeHtml(highest.topName)}，${highest.date}）；最近一次 <b>${withStocks.at(-1).date}</b>`
         : `${span}没有这个题材的票`;
@@ -749,7 +753,7 @@
       const key = `${stock.c}|${stock.fd || date}`;
       try {
         if (!liveNews.has(key)) {
-          const payload = await (await fetch(`/api/news?code=${stock.c}&date=${stock.fd || date}&days=${(stock.fd || date) < '2026-01-01' ? 3 : 5}`)).json();
+          const payload = await (await fetch(`/api/news?code=${stock.c}&date=${stock.fd || date}&days=${(stock.fd || date) < '2025-06-01' ? 3 : 5}`)).json();
           if (payload.status_code !== 0) throw new Error(payload.msg);
           liveNews.set(key, payload.data.map(item => ({
             t: item.title,
@@ -874,6 +878,11 @@
       if (event.target.matches('details.stock') && event.target.open) renderBody(event.target);
     }, true);
     for (const id of ['onlyImportant', 'hideNoNews', 'byTheme']) el(id).addEventListener('change', renderList);
+    el('trendToToday').addEventListener('change', () => {
+      panelDate = '';
+      el('themePanel').dataset.theme = ''; // 列变了，重新滚到当前日期
+      renderThemePanel();
+    });
     el('conceptThemes').addEventListener('change', () => {
       activeTheme = '';
       panelDate = '';

@@ -95,6 +95,9 @@ function readSystemPrompt(file = PROMPT_FILE) {
 // 明显不是事件的标题不交给模型，省 token：龙虎榜、资金流、融资融券、大宗交易。
 // 「【异动解读】××11月5日涨停：端侧AI+无线芯片+AIoT」「××涨停分析」其实就是同花顺的涨停原因，也去掉（不参考涨停原因）
 const NOISE = /龙虎榜|成交明细|主力资金|资金流|融资融券|融资余额|融券|大宗交易|高频透视|北向资金|异动解读|涨停分析|涨停原因/;
+// 盘点、复盘、梳理类标题：标题本身泛泛，但正文常点名本股（如「一图看懂Token服务产业链」里写「川润股份…液冷散热系统」），
+// 正文点名本股时把那一两句交给模型（mentions），算本股自己的依据（2026-11-08 用户要求）
+const ROUNDUP_TITLE = /盘点|梳理|透视|一图|一表|复盘|热点|名单|一览|汇总|全景|图谱|产业链/;
 
 // 每天的首板（不含北交所、ST）
 function firstBoardsByDay() {
@@ -108,8 +111,21 @@ function firstBoardsByDay() {
   }));
 }
 
+// 正文里点名本股的片段：前后各 50 字，一篇最多 2 处
+function mentionSnippets(text, name) {
+  const snippets = [];
+  let index = text.indexOf(name);
+  while (index >= 0 && snippets.length < 2) {
+    const start = Math.max(0, index - 50);
+    if (!snippets.some(item => Math.abs(item.start - start) < 50)) snippets.push({ start, text: text.slice(start, index + name.length + 50) });
+    index = text.indexOf(name, index + name.length);
+  }
+  return snippets.map(item => item.text.replace(/\s+/g, ' ').trim()).join(' … ');
+}
+
 // 标题去重后编号 n1、n2…，每只票列它自己的新闻编号；lookup：s1 → 代码|首板日，n1 → 标题
-function buildInput(date, boards, cache) {
+// bodies（news-body-cache）给了时，盘点类标题正文点名本股的片段放进 mentions（每只最多 3 篇）
+function buildInput(date, boards, cache, bodies = null) {
   const news = [];
   const titleIds = new Map();
   const stocks = [];
@@ -133,8 +149,19 @@ function buildInput(date, boards, cache) {
     if (!ids.length) continue;
     const id = `s${stocks.length + 1}`;
     lookup.set(id, board.key);
+    const mentions = [];
+    if (bodies && board.name) {
+      for (const item of cached.news) {
+        if (mentions.length >= 3) break;
+        const title = String(item.title || '').trim();
+        if (!ROUNDUP_TITLE.test(title) || title.includes(board.name) || NOISE.test(title)) continue;
+        const text = String(bodies[item.url]?.text || '');
+        const snippet = text ? mentionSnippets(text, board.name) : '';
+        if (snippet && !mentions.some(other => other.news === titleIds.get(title))) mentions.push({ news: titleIds.get(title), text: snippet });
+      }
+    }
     // 不给涨停原因（2026-11-06 用户决定），只按新闻归
-    stocks.push({ id, name: board.name, news: ids });
+    stocks.push({ id, name: board.name, news: ids, ...(mentions.length ? { mentions } : {}) });
   }
   return { input: { date, news, stocks }, lookup, missing };
 }
@@ -208,8 +235,9 @@ async function main() {
   const inRange = allDays.filter(day => day.date >= options.start && day.date <= options.end);
   await fillNews(inRange.flatMap(day => day.boards), cache);
   if (options.newsOnly) return;
+  const bodies = readJson(path.join(REPORTS_DIR, 'news-body-cache.json'), {});
   const plans = inRange.map(day => {
-    const { input, lookup, missing } = buildInput(day.date, day.boards, cache);
+    const { input, lookup, missing } = buildInput(day.date, day.boards, cache, bodies);
     return { ...day, input, lookup, missing, inputHash: hashOf(input) };
   });
   const isFresh = plan => {
@@ -341,7 +369,7 @@ async function main() {
   if (failed) process.exitCode = 1;
 }
 
-module.exports = { makeThemeMerger };
+module.exports = { makeThemeMerger, ROUNDUP_TITLE };
 
 if (require.main === module) main().catch(error => {
   console.error(`新闻事件归题材失败: ${error instanceof Error ? error.message : error}`);

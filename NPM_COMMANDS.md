@@ -498,7 +498,7 @@ npm run news-theme
 npm run news-theme -- --start 20250101 --end 20251231 --out reports/2025四连板题材演绎.xlsx
 ```
 
-默认从 `daily-review/四连板及以上.json` 取股票（只用 `code`、`date`、`stockName`），对每只股票调用 `/api/news` 获取新闻（与回放页面新闻面板同源，含临时置顶；2026 年起的首板传 `days=5`（首板日和前四个交易日），更早的传 `days=3`（首板日和前两个交易日），按同花顺交易日历取连续交易日，其间的周末/假期新闻也算；起始日写在「新闻起始日期」列），输出 `reports/四连板题材演绎.xlsx`。脚本见 [news-theme-table.js](news-theme-table.js)。
+默认从 `daily-review/四连板及以上.json` 取股票（只用 `code`、`date`、`stockName`），对每只股票调用 `/api/news` 获取新闻（与回放页面新闻面板同源，含临时置顶；2025-06-01 起的首板传 `days=5`（首板日和前四个交易日），更早的传 `days=3`（首板日和前两个交易日），按同花顺交易日历取连续交易日，其间的周末/假期新闻也算；起始日写在「新闻起始日期」列），输出 `reports/四连板题材演绎.xlsx`。脚本见 [news-theme-table.js](news-theme-table.js)。
 
 新闻按「代码|首板日」缓存在 `reports/news-cache.json`，重跑时不重复请求（新闻天数变了会自动重新获取）；加 `--refresh-news` 重新获取。
 

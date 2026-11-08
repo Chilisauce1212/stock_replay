@@ -20,10 +20,10 @@ const { fetchBodies } = require('./news-body');
 
 const REPORTS_DIR = path.join(__dirname, 'reports');
 const PROMPT_FILE = path.join(__dirname, 'prompts', 'news-classification.md');
-// 2026 年起的首板：5 个交易日新闻，不给模型涨停原因（2026-11-06 用户决定）；更早的仍用旧 prompt 和 3 个交易日
+// 2025-06-01 起（NEWS_V2_FROM）的首板：5 个交易日新闻，不给模型涨停原因（2026-11-06 用户决定）；更早的仍用旧 prompt 和 3 个交易日
 const PROMPT_FILE_V2 = path.join(__dirname, 'prompts', 'news-classification-v2.md');
 const isV2 = row => String(row['首板日期']) >= NEWS_V2_FROM;
-// 2026 年起不参考涨停原因：「【异动解读】××涨停：A+B+C」「××涨停分析」这类标题就是同花顺的涨停原因，不给模型
+// 2025-06-01 起不参考涨停原因：「【异动解读】××涨停：A+B+C」「××涨停分析」这类标题就是同花顺的涨停原因，不给模型
 const REASON_TITLE = /异动解读|涨停分析|涨停原因/;
 const newsOf = (newsCache, row) => cachedNews(newsCache[row.key]).filter(item => !isV2(row) || !REASON_TITLE.test(item.title));
 const NEWS_CACHE_FILE = path.join(REPORTS_DIR, 'news-cache.json');
@@ -130,7 +130,7 @@ function bodySnippets(text, stockName, code, reasonWords) {
   return null;
 }
 
-// 2026 年起的首板不给涨停原因：输入里没有 limitUpReason，正文片段也只截点名本股的
+// 2025-06-01 起的首板不给涨停原因：输入里没有 limitUpReason，正文片段也只截点名本股的
 function buildInput(row, news, limitUpReason, bodies) {
   const stockName = row['名称'];
   const v2 = isV2(row);

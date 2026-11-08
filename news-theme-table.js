@@ -19,9 +19,9 @@ const DEFAULT_OUTPUT = path.join(__dirname, 'reports', '四连板题材演绎.xl
 const NEWS_CACHE_FILE = path.join(__dirname, 'reports', 'news-cache.json');
 const IMPORTANT_SCORE = 2;
 // 新闻范围：首板日和之前的连续交易日（按同花顺交易日历，不按个股 K 线，停牌不影响），这几个交易日之间的周末/假期新闻也包含在内。
-// 2026 年起的首板用 5 个交易日（首板日和前四个交易日），新闻判断也不再给模型涨停原因（prompts/news-classification-v2.md）；
+// 2025-06-01 起的首板用 5 个交易日（首板日和前四个交易日），新闻判断也不再给模型涨停原因（prompts/news-classification-v2.md）；
 // 更早的首板保持 3 个交易日和旧 prompt，旧判断结果仍然有效（2026-11-06 用户决定）。
-const NEWS_V2_FROM = '2026-01-01';
+const NEWS_V2_FROM = '2025-06-01'; // 2026-11-08 从 2026-01-01 前移（用户要求 2025 年 6 月起也按新口径）
 const newsDaysFor = date => (String(date) >= NEWS_V2_FROM ? 5 : 3);
 const MAX_WINDOW = 22;
 const BEIJING_OFFSET_MS = 8 * 60 * 60 * 1000;
