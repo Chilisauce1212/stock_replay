@@ -273,7 +273,7 @@ async function judgeStock(system, promptHash, input, news, { useSearch, thinking
   let lastError;
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
-      const reply = await callModel(system, input, { useSearch, thinking });
+      const reply = await callModel(system, input, { useSearch, thinking, maxTokens: thinking ? 48000 : 16000 }); // 开思考时新闻多的票（如 60+ 条）16000 不够，回复会被截断（2026-11-11 沪电股份、东山精密）
       return { ...base, result: normalizeResult(parseReply(reply.text), input), searches: reply.searches, sources: reply.sources, usage: reply.usage };
     } catch (error) {
       lastError = error;
