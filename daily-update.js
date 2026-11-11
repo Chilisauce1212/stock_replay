@@ -9,6 +9,8 @@
 //   4. 新闻事件归题材（theme-events.js，关思考，T(X) 当天的首板调用一次，缺的新闻先补）
 //   5. 新闻日历（news-calendar.js，配了 R2 时 --upload）
 //   6. 删除 R2 上 30 天前的覆盖备份（backups/）
+//   自由流通市值在 1、2 两步里各跑一次（free-float.js，问财 WENCAI_DEBUG_PORT=9223）；失败不会让汇总变 ✗，要看日志里的 !!! 和
+//   「后续步骤有 N 项失败」，补跑 npm run free-float -- --today --upload 和 npm run free-float -- --upload
 //   涨停原因佐证（theme-evidence.js）2026-11-06 起不再每天跑，要看可以手动跑
 // 默认读写 R2（本地 daily-review/ 同步一份）；--local 强制只用本地文件，不读写 R2。
 // 新闻判断要调用大模型超过 100 只时会先询问，--yes 不询问直接调用。

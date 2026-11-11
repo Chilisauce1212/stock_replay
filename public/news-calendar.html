@@ -116,6 +116,12 @@
     .bar.selected i { outline: 1px solid var(--accent); }
     .bar.unjudged, .strip .pt.unjudged { opacity: 0.35; }
     #themePanel .bars { height: 92px; }
+    /* 四连板跨度：图表下面的横条，和柱子同一列宽 */
+    .four-spans { position: relative; border-top: 1px dashed var(--line); margin-top: 2px; }
+    .four-span { position: absolute; height: 15px; padding: 0 4px; box-sizing: border-box; border-radius: 3px; background: rgba(137, 148, 162, 0.18); border: 1px solid #4b5563; color: #aeb8c5; font-size: 11px; line-height: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    /* 属于当前题材的四连板标红 */
+    .four-span.in-theme { background: rgba(229, 72, 77, 0.28); border-color: #e5484d; color: #ffd0d1; }
+    .four-spans-empty { color: var(--muted); font-size: 12px; padding: 2px 0; }
     #themeSearchBar { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; margin-bottom: 8px; }
     #themeSearch { background: var(--panel-2); color: var(--text); border: 1px solid var(--line); border-radius: 4px; padding: 3px 8px; width: 220px; max-width: 100%; }
     #themeSearchHint { color: var(--muted); font-size: 12px; }
@@ -265,6 +271,7 @@
       <label title="一只票有几个概念就出现在几组里"><input id="byTheme" type="checkbox">按题材分组</label>
       <label title="默认题材按新闻事件归（同一催化的票归一起，题材名是从事件提炼的关键词，连板票沿用首板那天的）；勾上改回按同花顺涨停原因的概念。没跑过事件归类的日期总是按概念"><input id="conceptThemes" type="checkbox">按涨停原因概念</label>
       <label title="题材走势只画到页面当前日期，看不到之后的走势（复盘时避免看到未来）"><input id="trendToToday" type="checkbox">走势只到当天</label>
+      <label title="题材走势图下面固定画出全市场走到四连板及以上的票（不分题材）：从首板到最后一板的跨度、名称和最高板；属于当前题材的标红（按新闻事件归的题材才有这张图）"><input id="showFours" type="checkbox">四连板跨度</label>
       <label title="按涨停原因概念时有效：题材标签只显示当天至少有一只票用自己的新闻佐证了这个涨停原因的；题材走势里只数和只列有佐证的票。没跑过佐证判断的日期不受影响"><input id="onlyEvidenced" type="checkbox">只看有佐证</label>
       <input id="search" type="search" placeholder="搜索名称 / 代码 / 原因" aria-label="搜索">
       <button class="btn" id="expandAll">全部展开</button>
@@ -424,8 +431,11 @@
       // 每天一行：{ date, count, top, topName, tiers:[首板,2板,≥3板], judged, evidenced, stocks? }
       // 事件题材：从题材索引取，从第一次出现到最新一天（全部历史，可左右滚动）；概念题材：今天和之前约一个月，从月份数据里数
       let rows;
+      let fourSpans = []; // 四连板及以上的连板跨度 [首板日, 最后一板日, 名称, 最高板]
       if (byEvent) {
         const index = await loadThemeIndex();
+        // 全市场的四连板及以上，不分题材
+        fourSpans = (Array.isArray(index.fours) ? index.fours : []).map(([start, end, name, top, themes]) => [index.days[start], index.days[end], name, top, themes || '']);
         if (token !== themePanelToken) return;
         const series = index?.themes[theme] || [];
         const byDay = new Map(series.map(([at, count, top, first, second, third, topName]) => [at, { count, top, topName, tiers: [first, second, third] }]));
@@ -548,9 +558,39 @@
       const previous = panel.querySelector('.trend-scroll');
       const keepScroll = previous && panel.dataset.theme === theme ? previous.scrollLeft : null;
       panel.dataset.theme = theme;
+      // 四连板跨度：按列位置画横条，重叠的分行；只画在当前图表日期范围内的部分
+      let spans = '';
+      if (byEvent && el('showFours').checked) {
+        const position = new Map(rows.map((row, at) => [row.date, at]));
+        const firstDate = rows[0].date;
+        const lastDate = rows.at(-1).date;
+        const visible = fourSpans
+          .filter(([start, end]) => end >= firstDate && start <= lastDate)
+          .map(([start, end, name, top, themes]) => {
+            const from = position.get(start < firstDate ? firstDate : start);
+            const clippedEnd = end > lastDate ? lastDate : end;
+            return { from, to: position.get(clippedEnd), name, top, start, end, themes, cut: end > lastDate };
+          })
+          .filter(span => span.from !== undefined && span.to !== undefined)
+          .sort((left, right) => left.from - right.from || right.top - left.top);
+        const lanes = [];
+        for (const span of visible) {
+          const lane = lanes.findIndex(lastTo => lastTo < span.from);
+          span.lane = lane < 0 ? lanes.length : lane;
+          lanes[span.lane] = span.to + 3; // 名字写在条上，留几列间隔再放下一条
+        }
+        spans = visible.length
+          ? `<div class="four-spans" style="height:${lanes.length * 18 + 4}px">${visible.map(span => {
+            const inTheme = span.themes.split('、').includes(theme);
+            const tip = `${span.name}：${span.start} 首板 → ${span.end}，最高 ${span.top} 板；题材 ${span.themes || '无事件'}${span.cut ? '（之后的走势没画）' : ''}`;
+            return `<span class="four-span${inTheme ? ' in-theme' : ''}" style="left:${span.from * TREND_COLUMN_PX + 1}px;top:${span.lane * 18 + 2}px;width:${(span.to - span.from + 1) * TREND_COLUMN_PX - 2}px" title="${escapeAttr(tip)}">${escapeHtml(span.name)} ${span.top}板</span>`;
+          }).join('')}</div>`
+          : '<div class="four-spans-empty">这段时间全市场没有四连板及以上的票</div>';
+      }
       panel.innerHTML = `<h2>${escapeHtml(theme)} <small>${note}；点柱子看那天的详情</small></h2>
         ${strip}
         <div class="bars">${bars}</div>
+        ${spans}
         </div></div>
         <div class="panel-summary">${summary}</div>
         ${detail}`;
@@ -878,6 +918,7 @@
       if (event.target.matches('details.stock') && event.target.open) renderBody(event.target);
     }, true);
     for (const id of ['onlyImportant', 'hideNoNews', 'byTheme']) el(id).addEventListener('change', renderList);
+    el('showFours').addEventListener('change', () => renderThemePanel());
     el('trendToToday').addEventListener('change', () => {
       panelDate = '';
       el('themePanel').dataset.theme = ''; // 列变了，重新滚到当前日期

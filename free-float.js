@@ -14,8 +14,7 @@ require('dotenv').config({ quiet: true });
 
 const fs = require('fs');
 const path = require('path');
-const { chromium } = require('playwright');
-const { DEBUG_URL, MAX_CODES_PER_QUESTION, ensureChrome, runWencaiQuestion, chineseDate } = require('./first-board-reason');
+const { MAX_CODES_PER_QUESTION, connectChrome, runWencaiQuestion, chineseDate } = require('./first-board-reason');
 
 const ROOT = __dirname;
 const REVIEW_DIR = path.join(ROOT, 'daily-review');
@@ -149,8 +148,7 @@ async function main() {
 
   let failure = null;
   if (pending.length && options.maxQueries) {
-    await ensureChrome();
-    const browser = await chromium.connectOverCDP(DEBUG_URL);
+    const browser = await connectChrome();
     const page = await browser.contexts()[0].newPage();
     const state = { used: 0, max: options.maxQueries };
     try {

@@ -17,7 +17,7 @@ for (const name of ['NO_PROXY', 'no_proxy']) {
 
 const fs = require('fs');
 const path = require('path');
-const { spawn } = require('child_process');
+const { spawn, spawnSync } = require('child_process');
 const { chromium } = require('playwright');
 
 const DEFAULT_INPUT = path.join(__dirname, 'daily-review', '四连板及以上.json');
@@ -153,6 +153,23 @@ async function ensureChrome() {
     }
   }
   throw new Error('Chrome 启动超时，未能打开 9222 调试端口');
+}
+
+// 专用 Chrome（非 9222）偶尔会卡住：调试端口能连上，但 Playwright 接管已有标签页时一直等不到回应（2026-11-09 遇到过）。
+// 这时只关掉这个端口自己的 Chrome（按 --user-data-dir 找进程，不碰 9222 的），重新打开后再连一次；登录状态存在配置目录里，不会丢。
+async function connectChrome() {
+  await ensureChrome();
+  try {
+    return await chromium.connectOverCDP(DEBUG_URL, { timeout: 30000 });
+  } catch (error) {
+    if (DEBUG_PORT === '9222' || !/Timeout/i.test(error.message)) throw error;
+    console.warn(`连接 ${DEBUG_PORT} 端口的 Chrome 超时，重启这个专用 Chrome 后重试`);
+    spawnSync('powershell.exe', ['-NoProfile', '-Command',
+      `Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" | Where-Object { $_.CommandLine -like '*chrome_temp_${DEBUG_PORT}*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }`], { stdio: 'ignore' });
+    await sleep(2000);
+    await ensureChrome();
+    return chromium.connectOverCDP(DEBUG_URL, { timeout: 30000 });
+  }
 }
 
 // stream-query 是 SSE：每行 data:{...}，行情表在 section.result_page.components[].data.datas 里。
@@ -325,8 +342,7 @@ async function main(argv = process.argv.slice(2)) {
 
   // 2. 问财：先按月分组查区间（每问最多 9 个代码）；区间结果偶尔漏掉某天的数据，
   //    漏掉的再按「同一天的代码 + 单个日期」补查一次，仍然没有才记为找不到（retried）。
-  await ensureChrome();
-  const browser = await chromium.connectOverCDP(DEBUG_URL);
+  const browser = await connectChrome();
   const page = await browser.contexts()[0].newPage();
   const queryState = { used: 0, max: options.maxQueries };
   const rangeGroups = groupForWencai(pending.filter(record => !saved[keyOf(record)] || saved[keyOf(record)].source === 'limit_up_pool'));
@@ -392,7 +408,7 @@ async function main(argv = process.argv.slice(2)) {
     + `确认找不到 ${all.filter(item => !item.found && item.retried).length} 只，还没查完 ${left} 只`);
 }
 
-module.exports = { OUTPUT_FILE, DEBUG_URL, MAX_CODES_PER_QUESTION, ensureChrome, runWencaiQuestion, chineseDate };
+module.exports = { OUTPUT_FILE, DEBUG_URL, MAX_CODES_PER_QUESTION, ensureChrome, connectChrome, runWencaiQuestion, chineseDate };
 
 if (require.main === module) {
   main().catch(error => {

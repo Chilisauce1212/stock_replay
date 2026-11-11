@@ -371,11 +371,20 @@ async function main() {
   // 事件题材索引（页面搜题材、看全部历史用）：从第一天有事件归类起的全部交易日，每个题材每天的家数、首板/2板/≥3板家数、最高板和最高板的票
   const allDays = [...months.values()].flatMap(month => month.days);
   const firstEventDay = allDays.findIndex(day => day.ed);
-  const themeIndex = { days: [], ed: [], themes: {} };
+  // fours：全市场走到四连板及以上的票的连板跨度 [首板日序号, 最后一板日序号, 名称, 最高板, 所属事件题材]（页面「四连板跨度」开关用）
+  const themeIndex = { days: [], ed: [], themes: {}, fours: [] };
+  const runs = new Map(); // 代码|首板日 → { start, end, name, top, themes }
   if (firstEventDay >= 0) {
     allDays.slice(firstEventDay).forEach((day, index) => {
       themeIndex.days.push(day.d);
       themeIndex.ed.push(day.ed ? 1 : 0);
+      for (const stock of day.stocks) {
+        const key = `${stock.c}|${stock.fd || day.d}`;
+        const run = runs.get(key) || { start: index - (stock.s - 1), end: index, name: stock.n, top: 0, themes: stock.et || [] };
+        run.end = index;
+        run.top = Math.max(run.top, stock.s);
+        runs.set(key, run);
+      }
       for (const theme of day.ets) {
         const members = day.stocks.filter(stock => stock.et?.includes(theme.n));
         const top = members.reduce((best, stock) => (stock.s > (best?.s || 0) ? stock : best), null);
@@ -384,6 +393,11 @@ async function main() {
           members.filter(stock => stock.s === 1).length, members.filter(stock => stock.s === 2).length, members.filter(stock => stock.s >= 3).length, top?.n || '']);
       }
     });
+    // 全市场走到四连板及以上的票（不分题材，2026-11-09 用户改），按首板日排
+    themeIndex.fours = [...runs.values()]
+      .filter(run => run.top >= 4)
+      .sort((left, right) => left.start - right.start)
+      .map(run => [Math.max(0, run.start), run.end, run.name, run.top, run.themes.join('、')]);
   }
   writeJson(path.join(OUTPUT_DIR, 'themes.json'), themeIndex);
   if (r2) await r2.writeJson(`${R2_PREFIX}themes.json`, themeIndex);
