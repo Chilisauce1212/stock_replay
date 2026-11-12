@@ -96,6 +96,11 @@
     .chip.active { border-color: var(--accent); color: #eaecef; }
     .chip small { color: var(--muted); }
     .chip em { font-style: normal; color: var(--accent); font-size: 12px; }
+    .chip em.fx { color: #f0a020; }
+    .fx-note .fx-hint { color: var(--muted); }
+    .fx-note { margin: 4px 0 6px; padding: 4px 8px; border-left: 3px solid #f0a020; background: rgba(240,160,32,.08); color: #e8c27a; font-size: 12px; line-height: 1.5; }
+    .tag.fx { border-color: #f0a020; color: #f0a020; }
+    .bar .fx-dot { color: #f0a020; font-weight: 700; margin-right: 1px; }
     .chip .ev { color: #5fd38d; font-size: 12px; }
     .chip.static { opacity: 0.5; }
     .tag.ev { border-color: #2e9e78; color: #5fd38d; }
@@ -285,6 +290,7 @@
     const WEEK = ['周一', '周二', '周三', '周四', '周五'];
     const HEAT_MAX = 150;
     const THEME_TREND_DAYS = 21; // 题材走势看今天之前多少个交易日（连今天约一个月）
+    const NEW_THEME_DAYS = 4; // 事件题材前这么多个交易日都没出现过，标「新」
     let showAllThemes = false; // 只有 1 家的题材默认收起
     // 重要新闻的类别（大模型判断）：暖色两类是弱类，其余是强类
     const IMPORTANT_KINDS = {
@@ -384,9 +390,12 @@
         const shown = day.ets.filter(theme => showAllThemes || theme.c > 1 || theme.n === activeTheme);
         const single = day.ets.filter(theme => theme.c === 1).length;
         el('themes').innerHTML = shown.map(theme => {
-          const isNew = theme.tr.length && theme.tr.every(count => count === 0);
-          const title = `新闻里是同一类催化事件的票。今天 ${theme.c} 家${theme.l ? `，其中连板 ${theme.l} 只` : ''}，最高 ${theme.top} 板；近 ${theme.tr.length} 个交易日每天家数：${theme.tr.join(' → ') || '无'}`;
-          return `<button class="chip${theme.n === activeTheme ? ' active' : ''}" data-theme="${escapeAttr(theme.n)}" title="${escapeAttr(title)}">${escapeHtml(theme.n)} ${theme.c}${theme.top > 1 ? `<small>（最高${theme.top}板）</small>` : ''}${isNew ? ' <em>新</em>' : ''}</button>`;
+          // 新题材：前 4 个交易日都没有这个题材（2026-11-12 用户定，如 2026-04-09 储能）
+          const isNew = theme.tr.length && theme.tr.slice(-NEW_THEME_DAYS).every(count => count === 0);
+          const title = `新闻里是同一类催化事件的票。今天 ${theme.c} 家${theme.l ? `，其中连板 ${theme.l} 只` : ''}，最高 ${theme.top} 板；近 ${theme.tr.length} 个交易日每天家数：${theme.tr.join(' → ') || '无'}${theme.fx ? `
+
+⚠ 可能分化：${divergenceText(theme.fx)}` : ''}`;
+          return `<button class="chip${theme.n === activeTheme ? ' active' : ''}" data-theme="${escapeAttr(theme.n)}" title="${escapeAttr(title)}">${escapeHtml(theme.n)} ${theme.c}${theme.top > 1 ? `<small>（最高${theme.top}板）</small>` : ''}${isNew ? ' <em>新</em>' : ''}${theme.fx ? ' <em class="fx">分化?</em>' : ''}</button>`;
         }).join('') + (single ? `<button class="chip" id="toggleSingles">${showAllThemes ? '收起只有 1 家的' : `还有 ${single} 个只有 1 家`}</button>` : '');
         return;
       }
@@ -405,6 +414,15 @@
       }).join('') + (single ? `<button class="chip" id="toggleSingles">${showAllThemes ? '收起只有 1 家的' : `还有 ${single} 个只有 1 家`}</button>` : '');
     }
 
+    // 题材内部分化提示的文字（news-calendar.js 用 theme-divergence.js 算的 fx）：只提醒，不下结论
+    // fx.t：首板共同的新标题 [[标题, 挂了几只首板]]；fx.w：这些标题里高位票当初没出现过的两字词（高亮用）
+    // 分化提示的文字：模型（mn 说明、mk 关键词）和关键词法（t 首板共同的新标题）任一判了就有
+    const divergenceText = fx => {
+      const parts = [];
+      if (fx.mn) parts.push(`模型：${fx.mn}（区分关键词：${(fx.mk || []).join('、')}）`);
+      if (fx.t?.length) parts.push(`标题：今天 ${fx.f} 只首板里，${fx.t.map(([title, count]) => `${count} 只都有「${title}」`).join('；')}；${fx.h.map(item => `${item.n}（${item.s}板）`).join('、')} 首板时的新闻里没有`);
+      return `${parts.join('。')}。可能是同题材下的新发酵，请看各票依据自己判断`;
+    };
     const escapeHtml = text => String(text ?? '').replace(/[&<>"]/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[char]));
     const escapeAttr = escapeHtml;
 
@@ -438,12 +456,12 @@
         fourSpans = (Array.isArray(index.fours) ? index.fours : []).map(([start, end, name, top, themes]) => [index.days[start], index.days[end], name, top, themes || '']);
         if (token !== themePanelToken) return;
         const series = index?.themes[theme] || [];
-        const byDay = new Map(series.map(([at, count, top, first, second, third, topName]) => [at, { count, top, topName, tiers: [first, second, third] }]));
+        const byDay = new Map(series.map(([at, count, top, first, second, third, topName, fx]) => [at, { count, top, topName, tiers: [first, second, third], fx: Boolean(fx) }]));
         const start = series.length ? Math.max(0, series[0][0] - 2) : Math.max(0, index.days.indexOf(selectedDate) - THEME_TREND_DAYS);
         rows = index.days.slice(start).map((date, offset) => {
           const at = start + offset;
           const found = byDay.get(at);
-          return { date, count: found?.count || 0, top: found?.top || 0, topName: found?.topName || '', tiers: found?.tiers || [0, 0, 0], judged: Boolean(index.ed[at]), evidenced: 0 };
+          return { date, count: found?.count || 0, top: found?.top || 0, topName: found?.topName || '', tiers: found?.tiers || [0, 0, 0], judged: Boolean(index.ed[at]), evidenced: 0, fx: Boolean(found?.fx) };
         });
         // 勾了「走势只到当天」：页面当前日期之后的不画
         if (el('trendToToday').checked) rows = rows.filter(row => row.date <= selectedDate);
@@ -458,7 +476,7 @@
           const judged = day.evd > 0;
           const stocks = onlyEvidenced && judged ? evidenced : all;
           const top = stocks.reduce((best, stock) => (stock.s > (best?.s || 0) ? stock : best), null);
-          return { date: day.d, count: stocks.length, top: top?.s || 0, topName: top?.n || '', tiers: [0, 0, 0], judged, evidenced: evidenced.length };
+          return { date: day.d, count: stocks.length, top: top?.s || 0, topName: stocks.filter(stock => stock.s === top?.s).map(stock => stock.n).join('、'), tiers: [0, 0, 0], judged, evidenced: evidenced.length };
         });
       }
       if (!rows.length) {
@@ -480,13 +498,13 @@
         const height = row.count / max * 44;
         const evidencedHeight = !byEvent && row.judged && row.count ? height * row.evidenced / row.count : 0;
         const title = byEvent
-          ? `${row.date}：${row.count} 家（${TIERS.map(([name], at) => `${name} ${row.tiers[at]}`).join('，')}），最高 ${row.top} 板${row.judged ? '' : '（这天的首板没跑过事件归类，只有沿用的连板票）'}`
+          ? `${row.date}：${row.count} 家（${TIERS.map(([name], at) => `${name} ${row.tiers[at]}`).join('，')}），最高 ${row.top} 板${row.judged ? '' : '（这天的首板没跑过事件归类，只有沿用的连板票）'}${row.fx ? '；⚠ 首板和高位票的依据可能不是同一件事，点开看详情' : ''}`
           : `${row.date}：${row.count} 家${row.judged ? `，有佐证 ${row.evidenced} 家` : '，没跑过佐证判断'}，最高 ${row.top} 板`;
         const fill = byEvent
           ? `<i class="tiers" style="height:${height.toFixed(0)}px">${TIERS.map(([, color], at) => (row.tiers[at] ? `<s style="height:${(row.tiers[at] / row.count * 100).toFixed(1)}%;background:${color}"></s>` : '')).join('')}</i>`
           : `<i style="height:${height.toFixed(0)}px">${evidencedHeight ? `<b style="height:${evidencedHeight.toFixed(0)}px"></b>` : ''}</i>`;
         return `<button class="bar${classes(row)}" data-d="${row.date}" title="${escapeAttr(title)}">
-        <span>${row.count || ''}</span>${fill}<span class="day">${label(row, index)}</span></button>`;
+        <span>${row.fx ? '<b class="fx-dot">!</b>' : ''}${row.count || ''}</span>${fill}<span class="day">${label(row, index)}</span></button>`;
       }).join('');
 
       // 最高板折线：纵轴 1 到 max(5, 这段最高板)，没有票的日子断开
@@ -526,12 +544,15 @@
         : `${span}没有这个题材的票`;
 
       // 选中那天的详情：每只票的板数、首板日、归到这个题材的催化和依据新闻
+      let fxNews = null; // 这天题材可能分化时，首板的新闻简介换成的代表新闻
       const detailOf = (stock, date) => {
         if (byEvent) {
           const found = (eventsOf(stock, date) || []).find(item => item.t === theme);
           if (!found) return '';
           const news = (newsOf(stock, date) || []).find(item => item.t === found.n);
-          const source = found.n ? `<div class="src">${news?.u ? `<a href="${escapeAttr(news.u)}" target="_blank" rel="noopener">${escapeHtml(found.n)}</a>` : escapeHtml(found.n)}</div>` : '';
+          // 分化时首板的新闻简介统一换成代表新闻（首板里最能说明这次发酵的一条，news-calendar.js 算的 fx.rt），不用逐只展开对照
+          const shown = stock.s === 1 && fxNews ? { t: fxNews.t, u: fxNews.u } : found.n ? { t: found.n, u: news?.u } : null;
+          const source = shown ? `<div class="src">${shown.u ? `<a href="${escapeAttr(shown.u)}" target="_blank" rel="noopener">${escapeHtml(shown.t)}</a>` : escapeHtml(shown.t)}</div>` : '';
           const shared = found.via === 2 ? ' <span class="tag" title="第一遍没归进来，复看时模型按它自己的新闻归进当天已有的这个题材">复看补</span>'
             : found.via ? ' <span class="tag" title="模型没把这只归进来；它的新闻里有这个题材其他票当天被引作依据的同一条标题，按同标题补进来">同标题补</span>' : '';
           return `<span class="why">${escapeHtml(found.e)}</span>${shared}${source}`;
@@ -549,8 +570,12 @@
       const activeStocks = (activeDay?.stocks || []).filter(stock => (byEvent ? stock.et?.includes(theme)
         : stock.ths.includes(theme) && (!onlyEvidenced || !activeDay.evd || stock.ev?.includes(theme))));
       const fresh = activeStocks.filter(stock => stock.s === 1).length;
+      const fx = byEvent ? activeDay?.ets?.find(item => item.n === theme)?.fx : null;
+      const lowRelated = new Set((fx?.h || []).map(item => item.n));
+      fxNews = fx?.rt || null;
+      const fxNote = fx ? `<div class="fx-note">⚠ 可能分化（${fx.h.map(item => `${escapeHtml(item.n)} ${item.s}板`).join('、')} 和今天 ${fx.f} 只首板）${fx.mn ? `<div>模型：${escapeHtml(fx.mn)}；区分关键词：${escapeHtml((fx.mk || []).join('、'))}</div>` : ''}${fx.t?.length ? `<div>标题：${fx.t.map(([title, count]) => `${count} 只首板都有「${escapeHtml(title)}」`).join('；')}，高位票首板时的新闻里没有</div>` : ''}${fx.rt ? `<div>下面首板的新闻简介换成了代表新闻（${fx.rt.c} 只首板都有）</div>` : ''}<div class="fx-hint">请看下面各票依据自己判断</div></div>` : '';
       const detail = `<div class="panel-day"><h3><span>${active.date}</span><span>${activeStocks.length} 家（首板 ${fresh}，连板 ${activeStocks.length - fresh}）</span><span>最高 ${active.top || 0} 板</span>${active.date !== selectedDate ? `<button class="btn" data-goto="${active.date}">切到这天</button>` : ''}</h3>
-        ${activeStocks.length ? [...activeStocks].sort((left, right) => right.s - left.s).map(stock => `<div class="panel-stock"><span class="name">${escapeHtml(stock.n)}</span>${stock.s > 1 ? `<span class="tag">${stock.s}板</span> <span class="why">首板 ${stock.fd.slice(5)}</span> ` : '<span class="tag">首板</span> '}${detailOf(stock, active.date)}</div>`).join('') : '<div class="hint">这天没有这个题材的涨停</div>'}</div>`;
+        ${fxNote}${activeStocks.length ? [...activeStocks].sort((left, right) => right.s - left.s).map(stock => `<div class="panel-stock"><span class="name">${escapeHtml(stock.n)}</span>${stock.s > 1 ? `<span class="tag">${stock.s}板</span> <span class="why">首板 ${stock.fd.slice(5)}</span> ${lowRelated.has(stock.n) ? '<span class="tag fx" title="它首板那几天的新闻里没有今天首板共同的这些新闻">和今天首板关联低</span> ' : ''}` : '<span class="tag">首板</span> '}${detailOf(stock, active.date)}</div>`).join('') : '<div class="hint">这天没有这个题材的涨停</div>'}</div>`;
 
       const note = byEvent ? '新闻里是同一类催化事件的票，连板票沿用首板那天的；柱高按看得到的范围缩放，数字是实际家数；黄色下划线是页面当前日期'
         : onlyEvidenced ? '只数用自己新闻佐证了这个题材的票（没跑过佐证判断的日期照常）' : '涨停原因含这个概念的都算，绿色是有佐证的';
@@ -973,11 +998,17 @@
         const payload = await (await fetch('/api/news-calendar')).json();
         if (payload.status_code !== 0) throw new Error(payload.msg);
         months = payload.months;
-        const wanted = /^\d{4}-\d{2}-\d{2}$/.test(location.hash.slice(1)) ? location.hash.slice(1) : '';
+        // #日期 或 #日期/题材（复盘页「新闻题材」链接过来时直接打开这个题材）
+        const [hashDate, hashTheme] = decodeURIComponent(location.hash.slice(1)).split('/');
+        const wanted = /^\d{4}-\d{2}-\d{2}$/.test(hashDate || '') ? hashDate : '';
         const month = wanted && months.includes(wanted.slice(0, 7)) ? wanted.slice(0, 7) : months.at(-1);
         const data = await loadMonth(month);
         await selectDate(data.days.some(day => day.d === wanted) ? wanted : data.days.at(-1).d);
         fillThemeSearch();
+        if (hashTheme) {
+          el('themeSearch').value = hashTheme;
+          await pickSearchedTheme();
+        }
       } catch (error) {
         el('list').innerHTML = `<div class="hint">加载失败：${escapeHtml(error.message)}</div>`;
       }

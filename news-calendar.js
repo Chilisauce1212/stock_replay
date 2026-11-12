@@ -23,6 +23,7 @@ const path = require('path');
 const { RULES, makeTagger, buildDays } = require('./stock-pick');
 const { fetchPool, updateLimitUpList } = require('./limit-up-list');
 const { Worker, healthyHosts } = require('./tdx_tick');
+const { divergence } = require('./theme-divergence');
 const { makeThemeMerger } = require('./theme-events');
 
 const ROOT = __dirname;
@@ -147,13 +148,19 @@ function buildMonths(byDay, days, stocksOf, times, newsCache, llm, evidence, eve
   // 首板 → 它归到的事件题材 [{ t 题材, e 当天催化, n 依据新闻标题 }]
   // 题材名按合并表 theme-event-merge.json 合并（人形机器人、物理AI → 机器人），同一只票合并后重复的只留第一条
   const merge = makeThemeMerger();
+  // 模型判断的题材分化（theme-divergence-llm.js）：{ 日期: { themes: { 题材: { split, keywords, note } } } }
+  const modelDivergence = fs.existsSync(path.join(ROOT, 'reports', 'theme-divergence.json')) ? JSON.parse(fs.readFileSync(path.join(ROOT, 'reports', 'theme-divergence.json'), 'utf8')) : {};
   const eventsByKey = new Map();
+  // 首板|题材 → 模型引用的依据标题，算题材内部分化用（theme-divergence.js）
+  const evidenceTitles = new Map();
+  const addEvidence = (key, theme, titles) => evidenceTitles.set(`${key}|${theme}`, [...(evidenceTitles.get(`${key}|${theme}`) || []), ...titles]);
   for (const [date, entry] of Object.entries(events)) {
     for (const item of entry.themes || []) {
       const theme = merge(item.theme);
       for (const stock of item.stocks) {
         if (!eventsByKey.has(stock.key)) eventsByKey.set(stock.key, []);
         const list = eventsByKey.get(stock.key);
+        addEvidence(stock.key, theme, stock.newsIds);
         if (list.some(event => event.t === theme)) continue;
         list.push({ t: theme, e: item.event, ...(stock.newsIds[0] ? { n: stock.newsIds[0] } : {}) });
       }
@@ -164,6 +171,7 @@ function buildMonths(byDay, days, stocksOf, times, newsCache, llm, evidence, eve
       const theme = merge(item.theme);
       if (!eventsByKey.has(item.key)) eventsByKey.set(item.key, []);
       const list = eventsByKey.get(item.key);
+      addEvidence(item.key, theme, item.newsIds);
       if (!list.some(event => event.t === theme)) list.push({ t: theme, e: item.event, ...(item.newsIds[0] ? { n: item.newsIds[0] } : {}), via: 2 });
     }
   }
@@ -305,7 +313,53 @@ function buildMonths(byDay, days, stocksOf, times, newsCache, llm, evidence, eve
       .sort((left, right) => right[1] - left[1])
       .map(([name, count]) => {
         const members = stocks.filter(stock => stock.et?.includes(name));
+        // 题材内部分化：今天首板的依据和二板及以上的票（它们首板那天的依据）关键词重合很少时标出来，让用户点开自己判断
+        const side = stock => {
+          const key = `${stock.c}|${stock.fd || date}`;
+          const event = (eventsByKey.get(key) || []).find(item => item.t === name);
+          return { name: stock.n, streak: stock.s, titles: (newsOf(key)?.news || []).map(item => item.t), evidence: evidenceTitles.get(`${key}|${name}`) || [], e: event?.e || '' };
+        };
+        // 两种方法任一判为分化就标：关键词法（首板共同的新标题，theme-divergence.js）、模型（theme-divergence-llm.js）
+        // fx.src：k 关键词法、m 模型、mk 都判了；mk/mn 是模型给的区分关键词和说明，t 是关键词法找到的共同新标题，w 是关键词法的两字词（选代表新闻用），rt 是代表新闻
+        const firstSide = members.filter(stock => stock.s === 1).map(side);
+        const highSide = members.filter(stock => stock.s >= 2).map(side);
+        const byKeyword = divergence(name, firstSide, highSide);
+        const byModel = modelDivergence[date]?.themes?.[name]?.split ? modelDivergence[date].themes[name] : null;
+        let fx = null;
+        if (byKeyword || byModel) {
+          const events = new Map();
+          for (const item of firstSide) if (item.e) events.set(item.e, (events.get(item.e) || 0) + 1);
+          const [fe, fc] = [...events.entries()].sort((left, right) => right[1] - left[1])[0] || ['', 0];
+          fx = {
+            src: byKeyword && byModel ? 'mk' : byModel ? 'm' : 'k',
+            f: firstSide.length, fe, fc,
+            ...(byKeyword ? { t: byKeyword.t } : {}),
+            ...(byModel ? { mk: byModel.keywords, mn: byModel.note } : {}),
+            ...(byKeyword ? { w: byKeyword.w } : {}),
+            h: highSide.filter(item => item.titles.length || item.evidence.length).map(item => ({ n: item.name, s: item.streak, e: item.e })),
+          };
+          // 代表新闻：首板里最能说明这次发酵的一条，页面上这些首板的新闻简介都换成它（2026-11-12 用户要求，不用逐只展开对照）。
+          // 打分 = 挂了几只首板 × 标题里有几个区分关键词的两字词（模型给的关键词优先，没有就用标题法的）
+          const keyWords = new Set(byModel ? byModel.keywords.flatMap(word => Array.from({ length: Math.max(0, word.length - 1) }, (_, at) => word.slice(at, at + 2))) : byKeyword.w);
+          const titleSupport = new Map();
+          for (const stock of members.filter(item => item.s === 1)) {
+            for (const item of newsOf(`${stock.c}|${date}`)?.news || []) {
+              const found = titleSupport.get(item.t) || { t: item.t, u: item.u || '', count: 0 };
+              found.count++;
+              titleSupport.set(item.t, found);
+            }
+          }
+          let best = null;
+          for (const item of titleSupport.values()) {
+            let hits = 0;
+            for (let at = 0; at + 1 < item.t.length; at++) if (keyWords.has(item.t.slice(at, at + 2))) hits++;
+            const score = item.count * hits;
+            if (hits && (!best || score > best.score)) best = { ...item, score };
+          }
+          if (best) fx.rt = { t: best.t, u: best.u, c: best.count };
+        }
         return {
+          ...(fx ? { fx } : {}),
           n: name,
           c: count,
           l: members.filter(stock => stock.s >= 2).length,
@@ -390,7 +444,7 @@ async function main() {
         const top = members.reduce((best, stock) => (stock.s > (best?.s || 0) ? stock : best), null);
         if (!themeIndex.themes[theme.n]) themeIndex.themes[theme.n] = [];
         themeIndex.themes[theme.n].push([index, members.length, top?.s || 0,
-          members.filter(stock => stock.s === 1).length, members.filter(stock => stock.s === 2).length, members.filter(stock => stock.s >= 3).length, top?.n || '']);
+          members.filter(stock => stock.s === 1).length, members.filter(stock => stock.s === 2).length, members.filter(stock => stock.s >= 3).length, members.filter(stock => stock.s === top?.s).map(stock => stock.n).join('、'), theme.fx ? 1 : 0]); // 最后一项：这天题材内部可能分化（theme-divergence.js）
       }
     });
     // 全市场走到四连板及以上的票（不分题材，2026-11-09 用户改），按首板日排

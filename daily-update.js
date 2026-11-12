@@ -7,7 +7,7 @@
 //      （turnover_json.js 起始 结束，见 review-pipeline.js）；1 月份同时处理上一年的文件（12 月末的票要到 1 月才算得出盈亏）
 //   3. 连板情绪周期（limit-up-cycle.js，配了 R2 时 --upload）
 //   4. 新闻事件归题材（theme-events.js，关思考，T(X) 当天的首板调用一次，缺的新闻先补）
-//   5. 新闻日历（news-calendar.js，配了 R2 时 --upload）
+//   5. 新闻日历（news-calendar.js，配了 R2 时 --upload）；中间让模型判断当天的题材分化（theme-divergence-llm.js，几分钱）
 //   6. 删除 R2 上 30 天前的覆盖备份（backups/）
 //   自由流通市值在 1、2 两步里各跑一次（free-float.js，问财 WENCAI_DEBUG_PORT=9223）；失败不会让汇总变 ✗，要看日志里的 !!! 和
 //   「后续步骤有 N 项失败」，补跑 npm run free-float -- --today --upload 和 npm run free-float -- --upload
@@ -88,8 +88,17 @@ async function main() {
     results.push(['新闻事件归题材', false]);
   }
   try {
+    // 先生成一次日历（分化判断的输入来自日历月份文件），再让模型判断当天的题材分化，最后重新生成并上传
     console.log('\n========== node news-calendar.js ==========');
-    execFileSync(process.execPath, [path.join(ROOT, 'news-calendar.js'), '--fill-ticks', ...(r2Client ? ['--upload'] : [])], { stdio: 'inherit', cwd: ROOT });
+    execFileSync(process.execPath, [path.join(ROOT, 'news-calendar.js'), '--fill-ticks'], { stdio: 'inherit', cwd: ROOT });
+    try {
+      console.log('\n========== node theme-divergence-llm.js ==========');
+      execFileSync(process.execPath, [path.join(ROOT, 'theme-divergence-llm.js'), '--start', date, '--end', date], { stdio: 'inherit', cwd: ROOT });
+      results.push(['题材分化判断', true]);
+    } catch {
+      results.push(['题材分化判断', false]);
+    }
+    execFileSync(process.execPath, [path.join(ROOT, 'news-calendar.js'), ...(r2Client ? ['--upload'] : [])], { stdio: 'inherit', cwd: ROOT });
     results.push(['新闻日历', true]);
   } catch {
     results.push(['新闻日历', false]);

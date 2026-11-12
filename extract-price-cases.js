@@ -1,6 +1,8 @@
 const fs = require('fs');
 const path = require('path');
 const axios = require('axios');
+require('dotenv').config({ quiet: true });
+const r2 = require('./r2-storage');
 
 const KLINE_URL = 'https://quota-h.10jqka.com.cn/fuyao/common_hq_aggr/quote/v1/single_kline';
 const testCaseDir = path.join(__dirname, 'test-cases');
@@ -133,6 +135,10 @@ async function main() {
   }
   await Promise.all(Array.from({ length: requestConcurrency }, worker));
 
+  // 本地 daily-review 可能比 R2 旧（缺记录）：旧值以 R2 为底、本地覆盖，否则本地缺的、查不到行情的记录会被误删（2026-11-11 少了 30 条）
+  const remoteFour = r2.r2Client
+    ? await r2.readJson('daily-review/四连板及以上.json').catch(error => (r2.isMissing(error) ? [] : Promise.reject(error)))
+    : [];
   const outputs = [
     ['大于30元.json', allCases.filter((_, index) => prices[index] > 30)],
     ['小于3元.json', allCases.filter((_, index) => prices[index] < 3)],
@@ -144,7 +150,7 @@ async function main() {
     // 四连板及以上放在每日复盘里：保留已算好的 pnl、judge、freeFloatCap
     const inReview = fileName === '四连板及以上.json';
     const file = path.join(inReview ? path.join(__dirname, 'daily-review') : testCaseDir, fileName);
-    const old = inReview && fs.existsSync(file) ? new Map(JSON.parse(fs.readFileSync(file, 'utf8')).map(item => [`${item.code}|${item.date}`, item])) : new Map();
+    const old = new Map(inReview ? [...(Array.isArray(remoteFour) ? remoteFour : []), ...(fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : [])].map(item => [`${item.code}|${item.date}`, item]) : []);
     const merged = cases.map(item => ({ ...old.get(`${item.code}|${item.date}`), ...item }));
     // 行情没查到的记录（接口偶尔失败，一次全量会有上百条）不能当成「不再是四连板」删掉：原来在文件里的照样保留
     // （2026-11-07 一次全量查询失败 139 条，误删了 28 只真四连板，如科森科技 10 板、粤桂股份 11 板）
