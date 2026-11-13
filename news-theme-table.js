@@ -211,12 +211,12 @@ function mergeNews(previous, fresh) {
   return { ...fresh, news: [...fresh.news, ...kept].sort((left, right) => String(right.time).localeCompare(String(left.time))) };
 }
 
-// 首板当天收盘后新闻还会陆续更新（2026-11-13 用户发现 15:30 取的新闻不全），首板日北京时间 20:00 前取的算没取全：
-// 过了 20:00 再跑时重新获取一次（和旧缓存合并，不丢已撤的）。没有 fetchedAt 的老条目不重取。
-const NEWS_SETTLED_HOUR = 20;
+// 首板当天收盘后新闻还会陆续挂到个股时间线上（2026-11-13 用户发现：15:30 取的不全；北纬科技 11-11 13:59 的
+// 「Claude新模型机器人控制…」当天取时还没挂上，事后才出现）。首板日次日北京时间 08:00（开盘前，复盘能看到的最晚时间）
+// 之前取的算没取全，过了这个时间再跑时重新获取一次（和旧缓存合并，不丢已撤的）。没有 fetchedAt 的老条目不重取。
 function fetchedTooEarly(entry) {
   if (!entry?.fetchedAt || !/^\d{4}-\d{2}-\d{2}$/.test(entry.endDate || '')) return false;
-  const settled = Date.parse(`${entry.endDate}T${String(NEWS_SETTLED_HOUR).padStart(2, '0')}:00:00+08:00`);
+  const settled = Date.parse(`${entry.endDate}T08:00:00+08:00`) + 24 * 3600e3;
   return Date.parse(entry.fetchedAt) < settled && Date.now() >= settled;
 }
 
