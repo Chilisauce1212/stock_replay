@@ -11,8 +11,10 @@
 // 记录的 date = 二板日 D（买入日的前一交易日），盈亏直接用 pnl.js（买入日 = date 的下一个交易日，成本为涨停价，卖点规则同一进二）。
 // 涨停名单来自 reports/全市场涨停原因.json（封死口径，脚本开始时自动补到 --end）；逐笔来自通达信。不需要网站服务和问财。
 //
-// 用法: node erjinsan-cases.js --start 20240104 --end 20261231 [--min-boards 5] [--workers 6]
-//   --start/--end 是三板日（买入日）范围；输出 daily-review/二进三五连板及以上.json（已有记录的 pnl、judge、freeFloatCap 保留），明细写 reports/二进三五连板及以上.detail.json
+//   --min-boards 2：不看买入之后的板数（三板没封住的也算），就是普通的二进三回测（2026-11-13 用户要求生成 2026 年的）。
+//
+// 用法: node erjinsan-cases.js --start 20240104 --end 20261231 [--min-boards 5] [--out 二进三五连板及以上] [--workers 6]
+//   --start/--end 是三板日（买入日）范围；输出 daily-review/<out>.json（已有记录的 pnl、judge、freeFloatCap 保留），明细写 reports/<out>.detail.json
 require('dotenv').config({ quiet: true });
 
 const fs = require('fs');
@@ -20,19 +22,18 @@ const path = require('path');
 const { Worker, healthyHosts } = require('./tdx_tick');
 const { updateLimitUpList } = require('./limit-up-list');
 
-const OUT_FILE = path.join(__dirname, 'daily-review', '二进三五连板及以上.json');
-const DETAIL_FILE = path.join(__dirname, 'reports', '二进三五连板及以上.detail.json');
 const LATEST_TOUCH = '10:30';
 const LIMIT_RATIO = 0.1; // 主板非 ST
 
 function parseArgs(argv) {
-  const options = { start: '', end: '', workers: 6, minBoards: 5 };
+  const options = { start: '', end: '', workers: 6, minBoards: 5, out: '二进三五连板及以上' };
   for (let index = 0; index < argv.length; index++) {
     const argument = argv[index];
     if (argument === '--start') options.start = String(argv[++index] || '');
     else if (argument === '--end') options.end = String(argv[++index] || '');
     else if (argument === '--workers') options.workers = Math.min(12, Math.max(1, Number(argv[++index]) || 6));
-    else if (argument === '--min-boards') options.minBoards = Math.max(3, Number(argv[++index]) || 5);
+    else if (argument === '--min-boards') options.minBoards = Math.max(2, Number(argv[++index]) || 5);
+    else if (argument === '--out') options.out = String(argv[++index] || '').replace(/[.]json$/, '');
     else if (argument === '--help' || argument === '-h') options.help = true;
     else throw new Error(`未知参数: ${argument}`);
   }
@@ -47,9 +48,11 @@ const marketCode = code => `${code}.${code.startsWith('6') ? 'SH' : 'SZ'}`;
 async function main() {
   const options = parseArgs(process.argv.slice(2));
   if (options.help) {
-    console.log(fs.readFileSync(__filename, 'utf8').split('\n').slice(3, 16).map(line => line.replace(/^\/\/ ?/, '')).join('\n'));
+    console.log(fs.readFileSync(__filename, 'utf8').split('\n').slice(3, 18).map(line => line.replace(/^\/\/ ?/, '')).join('\n'));
     return;
   }
+  const OUT_FILE = path.join(__dirname, 'daily-review', `${options.out}.json`);
+  const DETAIL_FILE = path.join(__dirname, 'reports', `${options.out}.detail.json`);
   process.env.NO_PROXY = [process.env.NO_PROXY, 'localhost', '127.0.0.1'].filter(Boolean).join(',');
   const start = dash(options.start);
   const end = dash(options.end);
@@ -65,7 +68,7 @@ async function main() {
   const days = [...byDay.keys()].sort();
   const sealed = (dayIndex, code) => dayIndex < days.length && byDay.get(days[dayIndex]).has(code);
 
-  // 候选：F、D 封死，F-1 没封；T 及之后连续封死，使从 F 起的连板数 ≥ minBoards（T 本身也要封死，否则不可能 ≥ 3）
+  // 候选：F、D 封死，F-1 没封；T 及之后连续封死，使从 F 起的连板数 ≥ minBoards（minBoards=2 时不要求 T 封死）
   const tasks = [];
   for (let index = 3; index < days.length; index++) {
     const tradeDay = days[index];
@@ -79,7 +82,7 @@ async function main() {
       tasks.push({ code, name: item.name, first: days[index - 2], signal: days[index - 1], tradeDay, boards });
     }
   }
-  console.log(`三板日 ${start} ~ ${end}（涨停名单最新到 ${days.at(-1)}）：二板后最终 ≥ ${options.minBoards} 连板的主板股票 ${tasks.length} 只，逐笔判断三板日买点…`);
+  console.log(`三板日 ${start} ~ ${end}（涨停名单最新到 ${days.at(-1)}）：${options.minBoards > 2 ? `二板后最终 ≥ ${options.minBoards} 连板的` : '二板的'}主板股票 ${tasks.length} 只，逐笔判断三板日买点…`);
 
   const hosts = await healthyHosts();
   const workers = Array.from({ length: options.workers }, (_, index) => new Worker(hosts, index, 0.02));

@@ -5,10 +5,11 @@
 //   1. 今日首板（turnover_json.js --today，含连板股票、自由流通市值、新闻判断）
 //   2. T(X) 所在年份的一进二回测：追加 → 每日复盘 / 连板股票同步 → 小于 30 元 → 盈亏 → 新闻判断 → 写入每日复盘
 //      （turnover_json.js 起始 结束，见 review-pipeline.js）；1 月份同时处理上一年的文件（12 月末的票要到 1 月才算得出盈亏）
-//   3. 连板情绪周期（limit-up-cycle.js，配了 R2 时 --upload）
-//   4. 新闻事件归题材（theme-events.js，关思考，T(X) 当天的首板调用一次，缺的新闻先补）
-//   5. 新闻日历（news-calendar.js，配了 R2 时 --upload）；中间让模型判断当天的题材分化（theme-divergence-llm.js，几分钱）
-//   6. 删除 R2 上 30 天前的覆盖备份（backups/）
+//   3. T(X) 所在年份的二进三回测（erjinsan-cases.js --min-boards 2 → pnl.js → 上传；二板一字、三板 10:30 前打板，暂不做新闻判断）；1 月同时处理上一年
+//   4. 连板情绪周期（limit-up-cycle.js，配了 R2 时 --upload）
+//   5. 新闻事件归题材（theme-events.js，关思考，T(X) 当天的首板调用一次，缺的新闻先补）
+//   6. 新闻日历（news-calendar.js，配了 R2 时 --upload）；中间让模型判断当天的题材分化（theme-divergence-llm.js，几分钱）
+//   7. 删除 R2 上 30 天前的覆盖备份（backups/）
 //   自由流通市值在 1、2 两步里各跑一次（free-float.js，问财 WENCAI_DEBUG_PORT=9223）；失败不会让汇总变 ✗，要看日志里的 !!! 和
 //   「后续步骤有 N 项失败」，补跑 npm run free-float -- --today --upload 和 npm run free-float -- --upload
 //   涨停原因佐证（theme-evidence.js）2026-11-06 起不再每天跑，要看可以手动跑
@@ -31,7 +32,7 @@ for (const argument of process.argv.slice(2)) {
 if (options.local) process.env.FORCE_LOCAL = 'true';
 
 require('dotenv').config({ quiet: true });
-const { r2Client, listJsonKeys, pruneBackups } = require('./r2-storage');
+const { r2Client, listJsonKeys, pruneBackups, writeJson } = require('./r2-storage');
 const { latestClosedTradeDay } = require('./limit-up-list');
 
 const ROOT = __dirname;
@@ -55,9 +56,17 @@ async function rangeOfYear(year) {
   return match ? [match[1], match[2]] : [`${year}0101`, `${year}1231`];
 }
 
+// 某一年的二进三回测文件名：本地已有就沿用（如 二进三回测_20260105_20261231），没有就新建 二进三回测_当年0101_当年1231
+function erjinsanFileOfYear(year) {
+  const match = fs.readdirSync(path.join(ROOT, 'daily-review'))
+    .map(name => /^(二进三回测_(\d{8})_(\d{8}))\.json$/.exec(name))
+    .find(item => item && item[2].startsWith(year) && item[3].startsWith(year));
+  return match ? match[1] : `二进三回测_${year}0101_${year}1231`;
+}
+
 async function main() {
   if (options.help) {
-    console.log(fs.readFileSync(__filename, 'utf8').split('\n').slice(3, 14).map(line => line.replace(/^\/\/ ?/, '')).join('\n'));
+    console.log(fs.readFileSync(__filename, 'utf8').split('\n').slice(3, 15).map(line => line.replace(/^\/\/ ?/, '')).join('\n'));
     return;
   }
   const { date } = await latestClosedTradeDay();
@@ -70,6 +79,24 @@ async function main() {
   for (const item of years) {
     const [start, end] = await rangeOfYear(String(item));
     results.push([`一进二回测_${start}_${end}`, runTurnover([start, end, ...(options.yes ? ['--yes'] : [])])]);
+  }
+  // 二进三回测（2026-11-13 用户要求加入流程）：重新生成当年样本（已有记录的 pnl 保留）→ 补算盈亏 → 上传；1 月同时处理上一年
+  for (const item of years) {
+    const file = erjinsanFileOfYear(String(item));
+    try {
+      console.log(`\n========== node erjinsan-cases.js ${item}（${file}）==========`);
+      execFileSync(process.execPath, [path.join(ROOT, 'erjinsan-cases.js'), '--start', `${item}0101`, '--end', `${item}1231`, '--min-boards', '2', '--out', file], { stdio: 'inherit', cwd: ROOT });
+      execFileSync(process.execPath, [path.join(ROOT, 'pnl.js'), file], { stdio: 'inherit', cwd: ROOT });
+      if (r2Client) {
+        const records = JSON.parse(fs.readFileSync(path.join(ROOT, 'daily-review', `${file}.json`), 'utf8'));
+        await writeJson(`daily-review/${file}.json`, records);
+        console.log(`  已更新 R2 daily-review/${file}.json（${records.length} 条）`);
+      }
+      results.push([file, true]);
+    } catch (error) {
+      console.error(`!!! ${file} 失败: ${error.message}`);
+      results.push([file, false]);
+    }
   }
   try {
     console.log('\n========== node limit-up-cycle.js ==========');
