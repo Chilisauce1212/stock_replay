@@ -18,14 +18,14 @@ const path = require('path');
 const { readLimitUpMonths } = require('./limit-up-list');
 const { makeTagger, buildDays } = require('./stock-pick');
 const { callModel, parseReply, hashOf, OFF_PEAK_PRICE, PEAK_PRICE } = require('./news-llm');
-const { isCurrentCacheEntry, fetchNews, mergeNewsEntry } = require('./news-theme-table');
+const { isCurrentCacheEntry, needsRefetch, fetchNews, mergeNewsEntry } = require('./news-theme-table');
 
 const BASE_URL = process.env.REPLAY_BASE_URL || 'http://127.0.0.1:3000';
 const NEWS_CACHE_FILE = path.join(__dirname, 'reports', 'news-cache.json');
 
 // 缺新闻的首板先用 /api/news 补到 news-cache.json（不花钱，要先开网站服务），每 500 只存一次
 async function fillNews(boards, cache) {
-  const lacking = boards.filter(board => !isCurrentCacheEntry(cache[board.key]));
+  const lacking = boards.filter(board => needsRefetch(cache[board.key])); // 首板日 20:00 前取的也重取
   if (!lacking.length) return;
   console.log(`补新闻 ${lacking.length} 只`);
   const fresh = {};

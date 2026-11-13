@@ -1144,6 +1144,20 @@ app.get('/api/limit-up-cycle', async (req, res) => {
   }
 });
 
+// 可转债名单（convertible-bonds.js 生成）：本地 reports/可转债.json 有就读本地，没有（线上）再读 R2
+app.get('/api/convertible-bonds', async (req, res) => {
+  try {
+    const file = path.join(REPORTS_DIR, '可转债.json');
+    const data = fs.existsSync(file) || USE_LOCAL_JSON || !sharedR2Client
+      ? JSON.parse(fs.readFileSync(file, 'utf8'))
+      : await readJson('convertible-bonds/可转债.json');
+    res.set('Cache-Control', 'no-store');
+    res.json({ status_code: 0, data });
+  } catch (error) {
+    res.status(500).json({ status_code: -1, msg: `读取可转债名单失败: ${error.message}` });
+  }
+});
+
 // 新闻日历（news-calendar.js 生成）：本地 reports/新闻日历/ 有就读本地，没有（线上）再读 R2
 const readNewsCalendarFile = async name => {
   const file = path.join(REPORTS_DIR, '新闻日历', `${name}.json`);

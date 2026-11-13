@@ -6,7 +6,7 @@
 //   2. T(X) 所在年份的一进二回测：追加 → 每日复盘 / 连板股票同步 → 小于 30 元 → 盈亏 → 新闻判断 → 写入每日复盘
 //      （turnover_json.js 起始 结束，见 review-pipeline.js）；1 月份同时处理上一年的文件（12 月末的票要到 1 月才算得出盈亏）
 //   3. T(X) 所在年份的二进三回测（erjinsan-cases.js --min-boards 2 → pnl.js → 上传；二板一字、三板 10:30 前打板，暂不做新闻判断）；1 月同时处理上一年
-//   4. 连板情绪周期（limit-up-cycle.js，配了 R2 时 --upload）
+//   4. 可转债名单（convertible-bonds.js，复盘页「有转债只能空仓」用）→ 连板情绪周期（limit-up-cycle.js，配了 R2 时 --upload）
 //   5. 新闻事件归题材（theme-events.js，关思考，T(X) 当天的首板调用一次，缺的新闻先补）
 //   6. 新闻日历（news-calendar.js，配了 R2 时 --upload）；中间让模型判断当天的题材分化（theme-divergence-llm.js，几分钱）
 //   7. 删除 R2 上 30 天前的覆盖备份（backups/）
@@ -97,6 +97,14 @@ async function main() {
       console.error(`!!! ${file} 失败: ${error.message}`);
       results.push([file, false]);
     }
+  }
+  try {
+    // 可转债名单（复盘页「有转债只能空仓」用），全量重取，3 次请求
+    console.log('\n========== node convertible-bonds.js ==========');
+    execFileSync(process.execPath, [path.join(ROOT, 'convertible-bonds.js'), ...(r2Client ? ['--upload'] : [])], { stdio: 'inherit', cwd: ROOT });
+    results.push(['可转债名单', true]);
+  } catch {
+    results.push(['可转债名单', false]);
   }
   try {
     console.log('\n========== node limit-up-cycle.js ==========');

@@ -145,6 +145,7 @@
     .chart-area .legend {
       flex: 0 0 auto;
       position: relative;
+      align-items: center; /* 文字项和带输入框的买入限制垂直居中对齐 */
       margin-bottom: 0;
       padding-bottom: 0;
     }
@@ -769,6 +770,13 @@
         grid-row: 1;
       }
     }
+    /* 买入限制：拆成 legend 的直接子项，和「成交金额」「自由流通」同字体、同间距、同一条基线 */
+    .buy-rules { display: contents; }
+    .buy-rules[hidden] { display: none; }
+    .buy-rules label, .buy-rules > span { display: inline-flex; align-items: center; gap: 4px; color: #b0b8c4; font: inherit; line-height: inherit; cursor: pointer; }
+    .buy-rules input[type="number"] { box-sizing: border-box; width: 52px; height: 18px; padding: 0 4px; margin: 0; background: #1e2329; color: #eaecef; border: 1px solid #474d57; border-radius: 3px; font: inherit; }
+    .buy-rules input[type="checkbox"] { width: 13px; height: 13px; margin: 0; accent-color: #f0b90b; }
+    .buy-rules .cb-hit { color: #f0b90b; }
   </style>
 </head>
 <body>
@@ -829,6 +837,11 @@
         <span id="codeVal" style="color: #f0b90b;">股票代码: --</span>
         <span id="amountVal" style="color: #b0b8c4;">成交金额: --</span>
         <span id="freeFloatVal" style="color: #b0b8c4;" title="首板日的自由流通市值（问财）">自由流通: --</span>
+        <span id="buyRules" class="buy-rules" hidden>
+          <label title="信号日自由流通市值超过上限时只能空仓；留空不限。没有自由流通市值数据的票不受限">流通上限:<input id="freeFloatLimit" type="number" min="0" step="10" placeholder="不限" inputmode="decimal" onchange="updateBuyRules()">亿</label>
+          <label title="信号日已上市、还没摘牌的可转债（东方财富可转债名单）"><input id="skipConvertible" type="checkbox" checked onchange="updateBuyRules()">有转债只能空仓</label>
+          <span id="convertibleVal"></span>
+        </span>
         <span id="successBoard" class="result-board">成功: <span id="successCount">0</span></span>
         <span id="failureBoard" class="result-board">失败: <span id="failureCount">0</span></span>
         <span id="totalBoard" class="result-board">总数: <span id="totalCount">0</span><span id="dailyRecordStatus"></span></span>
@@ -1915,6 +1928,7 @@
     document.getElementById('failureBoard').style.display = dailyReview ? 'none' : '';
     document.getElementById('totalBoard').style.display = '';
     document.getElementById('reviewPnlBoard').hidden = !dailyReview;
+    document.getElementById('buyRules').hidden = !dailyReview;
     document.getElementById('favoriteGroup').hidden = dailyReview || !FAVORITES_ENABLED;
     document.getElementById('newFavoriteGroup').hidden = dailyReview || !FAVORITES_ENABLED;
     document.getElementById('reviewDateButton').hidden = !dailyReview;
@@ -2025,7 +2039,83 @@
 
   // 买入前先用一笔试算的交易跑账户：已满 4 只持仓或资金不够一手时返回原因。
   // 买入价按首板收盘价的 1.1 倍估算，卖出日按最短持有（二板日次日）估算，避免误挡之后的交易。
+  // 买入限制（2026-11-13 用户要求）：自由流通市值超过上限、或信号日有可转债时只能空仓。设置存在本机浏览器里
+  const BUY_RULES_KEY = 'replay.buyRules';
+  let convertibleBonds = null; // 正股代码 → [{ c, n, l: 上市日, d: 摘牌日 }]
+  let convertibleBondsError = '';
+
+  function loadBuyRules() {
+    try {
+      const saved = JSON.parse(localStorage.getItem(BUY_RULES_KEY) || '{}');
+      if (Number(saved.freeFloatLimit) > 0) document.getElementById('freeFloatLimit').value = saved.freeFloatLimit;
+      document.getElementById('skipConvertible').checked = saved.skipConvertible !== false; // 默认打开
+    } catch {}
+  }
+
+  async function loadConvertibleBonds() {
+    try {
+      const payload = await (await fetch('/api/convertible-bonds')).json();
+      if (payload.status_code !== 0) throw new Error(payload.msg || '读取失败');
+      convertibleBonds = payload.data.bonds || {};
+    } catch (error) {
+      convertibleBondsError = error.message;
+    }
+    refreshBuyRules();
+  }
+
+  // 信号日（买入前一个交易日）已上市、还没摘牌的可转债
+  function convertibleBondOf(caseItem) {
+    const list = convertibleBonds?.[caseItem?.code] || [];
+    const date = caseItem?.date || '';
+    return list.find(bond => bond.l && bond.l <= date && (!bond.d || bond.d > date)) || null;
+  }
+
+  function buyRuleBlockedReason() {
+    if (!activeCase || !isDailyReviewSource()) return '';
+    const limit = Number(document.getElementById('freeFloatLimit').value);
+    const cap = Number(activeCase.freeFloatCap);
+    if (limit > 0 && cap > 0 && cap / 1e8 > limit) return `自由流通 ${(cap / 1e8).toFixed(1)} 亿，超过上限 ${limit} 亿`;
+    if (document.getElementById('skipConvertible').checked) {
+      const bond = convertibleBondOf(activeCase);
+      if (bond) return `当时有可转债（${bond.n}）`;
+    }
+    return '';
+  }
+
+  function updateConvertibleInfo() {
+    const box = document.getElementById('convertibleVal');
+    if (!activeCase) { box.textContent = ''; return; }
+    if (!convertibleBonds) { box.textContent = convertibleBondsError ? '转债: 名单读取失败' : ''; return; }
+    const bond = convertibleBondOf(activeCase);
+    box.textContent = bond ? `转债: ${bond.n}` : '转债: 无';
+    box.className = bond ? 'cb-hit' : '';
+    box.title = bond ? `${bond.c} ${bond.n}，${bond.l} 上市${bond.d ? `，${bond.d} 摘牌` : '，未摘牌'}` : '信号日没有已上市未摘牌的可转债';
+  }
+
+  // 改了设置或名单加载完：当前这只还没决定时重新判断能不能买
+  function refreshBuyRules() {
+    updateConvertibleInfo();
+    if (!activeCase || caseResolved || !isDailyReviewSource() || !fullData.length) return;
+    setTestButtons(true);
+    setDailyReviewButtons();
+    if (!document.getElementById('buyButton').disabled) {
+      document.getElementById('testStatus').innerText = `正在回放 ${activeCase.stockName || activeCase.marketCode} ${activeCase.date}`;
+    }
+  }
+
+  function updateBuyRules() {
+    try {
+      localStorage.setItem(BUY_RULES_KEY, JSON.stringify({
+        freeFloatLimit: Number(document.getElementById('freeFloatLimit').value) || 0,
+        skipConvertible: document.getElementById('skipConvertible').checked,
+      }));
+    } catch {}
+    refreshBuyRules();
+  }
+
   function reviewBuyBlockedReason() {
+    const ruleBlocked = buyRuleBlockedReason();
+    if (ruleBlocked) return ruleBlocked;
     if (!currentCaseHasFutureData || portfolioTrades.some(trade => trade.id === String(activeCase.id))) return '';
     const signalIndex = fullData.findIndex(bar => chartDate(bar.date) >= activeCase.date);
     if (signalIndex < 0 || chartDate(fullData[signalIndex].date) !== activeCase.date) return '';
@@ -3620,6 +3710,7 @@
       document.getElementById('codeVal').innerText = displayCodeLabel();
       document.getElementById('amountVal').innerText = formatAmount(last.amount);
       document.getElementById('freeFloatVal').innerText = formatFreeFloat();
+      updateConvertibleInfo();
       updateChartWatermark();
       updateVolumePileInfo(String(last.date || '').split('T')[0]);
     }
@@ -4117,6 +4208,7 @@
 
   function buyAtCurrentCandle() {
     if (!activeCase || activeTrade || currentIndex === 0) return;
+    if (buyRuleBlockedReason()) return;
     if (isDailyReviewSource()) {
       if (!currentCaseHasFutureData) {
         freezeVolumePileDetectionRange(activeCase);
@@ -4232,6 +4324,8 @@
 
   window.onload = () => {
     initializeVolumePileSettings();
+    loadBuyRules();
+    loadConvertibleBonds();
     initChart();
     loadFilesForSource();
     updateSourceMode();

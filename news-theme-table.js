@@ -194,7 +194,12 @@ function isCurrentCacheEntry(entry) {
 // 11-03 还在、11-06 再取就没了，手机客户端也找不到），重新获取时把旧缓存里同一窗口内、这次没取到的新闻并回来，标 gone: 1。
 // 这些是首板当晚交易员看得到的，照样给模型判断、页面显示。
 function mergeNewsEntry(previous, fresh) {
-  if (!previous || Array.isArray(previous) || !Array.isArray(previous.news) || !fresh) return fresh;
+  if (!fresh) return fresh;
+  return { ...mergeNews(previous, fresh), fetchedAt: new Date().toISOString() };
+}
+
+function mergeNews(previous, fresh) {
+  if (!previous || Array.isArray(previous) || !Array.isArray(previous.news)) return fresh;
   const freshIds = new Set(fresh.news.map(item => `${item.time}|${item.title}`));
   const kept = previous.news
     .filter(item => {
@@ -204,6 +209,19 @@ function mergeNewsEntry(previous, fresh) {
     .map(item => ({ ...item, gone: 1 }));
   if (!kept.length) return fresh;
   return { ...fresh, news: [...fresh.news, ...kept].sort((left, right) => String(right.time).localeCompare(String(left.time))) };
+}
+
+// 首板当天收盘后新闻还会陆续更新（2026-11-13 用户发现 15:30 取的新闻不全），首板日北京时间 20:00 前取的算没取全：
+// 过了 20:00 再跑时重新获取一次（和旧缓存合并，不丢已撤的）。没有 fetchedAt 的老条目不重取。
+const NEWS_SETTLED_HOUR = 20;
+function fetchedTooEarly(entry) {
+  if (!entry?.fetchedAt || !/^\d{4}-\d{2}-\d{2}$/.test(entry.endDate || '')) return false;
+  const settled = Date.parse(`${entry.endDate}T${String(NEWS_SETTLED_HOUR).padStart(2, '0')}:00:00+08:00`);
+  return Date.parse(entry.fetchedAt) < settled && Date.now() >= settled;
+}
+
+function needsRefetch(entry) {
+  return !isCurrentCacheEntry(entry) || fetchedTooEarly(entry);
 }
 
 function cachedNews(entry) {
@@ -468,7 +486,7 @@ async function main(argv = process.argv.slice(2)) {
       const record = records[index];
       const key = `${record.code}|${record.date}`;
       let newsError = '';
-      if (!isCurrentCacheEntry(newsCache[key])) {
+      if (needsRefetch(newsCache[key])) {
         try {
           newsCache[key] = mergeNewsEntry(newsCache[key], await fetchNews(options.baseUrl, record.code, record.date));
         } catch (error) {
@@ -555,7 +573,7 @@ async function main(argv = process.argv.slice(2)) {
   if (failed || newsFailed) process.exitCode = 1;
 }
 
-module.exports = { classifyNews, pickAnchor, cachedNews, isCurrentCacheEntry, fetchNews, mergeNewsEntry, newsDaysFor, NEWS_V2_FROM, findPeak, findBreak, CATEGORIES, IMPORTANT_SCORE, NEWS_CACHE_FILE };
+module.exports = { classifyNews, pickAnchor, cachedNews, isCurrentCacheEntry, needsRefetch, fetchNews, mergeNewsEntry, newsDaysFor, NEWS_V2_FROM, findPeak, findBreak, CATEGORIES, IMPORTANT_SCORE, NEWS_CACHE_FILE };
 
 if (require.main === module) {
   main().catch(error => {
