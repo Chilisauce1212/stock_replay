@@ -233,6 +233,13 @@ class Worker {
     return pages.reverse().flat(); // pages arrive newest-first
   }
 
+  // 这一天有没有成交（停牌日没有）：只取最后 1 笔，比 fetchDay 便宜得多。
+  // 深市停牌日什么都不返回；沪市停牌日返回一笔 15:00、成交量 0、价格为停牌前收盘价的记录，所以要看成交量
+  async hasTrades(code, ymd) {
+    const body = await this.conn.request(histTransactionPkg(marketOf(code), code, 0, 1, ymd));
+    return parseTicks(body).some((tick) => tick.vol > 0);
+  }
+
   async run(code, ymd) {
     for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
       try {

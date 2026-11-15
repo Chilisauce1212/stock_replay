@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 'use strict';
 
-// 生成一进二回测用例：首板日 D 收盘涨停（D-1 未涨停）、主板；二板日 T（D 的下一个交易日）
+// 生成一进二回测用例：首板日 D 收盘涨停（D-1 未涨停）、主板；二板日 T（D 的下一个交易日，按个股交易日算、停牌跳过）
 // 10:30 前（含 10:30 那一分钟）在涨停价买得到，且不是一字板。买入时点：
 //   - 竞价没有涨停开盘：第一次在涨停价成交时；
 //   - 竞价涨停开盘：不买，等开盘后跌破涨停价、再回到涨停价（二次回封）时才买。
@@ -76,50 +76,93 @@ async function main() {
     : dash(options.start);
   if (lastSignal) console.log(`已有 ${existing.length} 条，最后首板日 ${lastSignal}，从二板日 ${start} 接着查`);
   const { byDay, days } = indexLimitUps(await updateLimitUpList(end));
-  // 二板日 T 在范围内，且 T 的前两个交易日都有涨停数据
-  const pairs = [];
-  for (let index = 2; index < days.length; index++) {
-    const tradeDay = days[index];
-    if (tradeDay < start || tradeDay > end) continue;
-    pairs.push({ prior: days[index - 2], signal: days[index - 1], tradeDay });
+  // 首板、二板按个股自己的交易日算（和 K 线图、pnl.js 一致，停牌日跳过；2026-11-15 用户要求，同二进三）：
+  //   - 首板日 D 的前一个「个股交易日」没有涨停：D-1 停牌的，往前找到停牌前最后一个交易日再看
+  //     （以前按全市场交易日，停牌前已涨停、复牌又涨停的被当成首板，如 2026-01-12 嘉美包装）；
+  //   - 二板日 T = D 之后个股第一个交易日：首板后停牌的顺延到复牌日（以前记成失败「可能停牌」，样本里漏掉）。
+  // 二板日 T 在 start ~ end 内。T 可能因停牌比 D 晚很多，所以 D 往前多看 40 个交易日；这些早的 D 先问一次 D+1 有没有成交，
+  // 有成交就说明 T = D+1 早于 start，直接跳过。停牌用 hasTrades（只取 1 笔成交）判断。
+  const startIndex = days.findIndex(day => day >= start);
+  if (startIndex < 1 || days[startIndex] > end) {
+    if (existing.length) {
+      console.log('涨停名单里还没有更新的二板日，无需追加。');
+      return;
+    }
+    throw new Error(`全市场涨停原因.json 里没有 ${start} ~ ${end} 的二板日，超过一年的日期需要先用问财补齐涨停名单`);
   }
-  if (!pairs.length && existing.length) {
-    console.log('涨停名单里还没有更新的二板日，无需追加。');
-    return;
-  }
-  if (!pairs.length) throw new Error(`全市场涨停原因.json 里没有 ${start} ~ ${end} 的二板日，超过一年的日期需要先用问财补齐涨停名单`);
+  const sealed = (dayIndex, code) => dayIndex >= 0 && dayIndex < days.length && byDay.get(days[dayIndex]).has(code);
+  const firstSeal = new Map(); // code → 第一次出现在涨停名单的下标
+  days.forEach((day, dayIndex) => {
+    for (const code of byDay.get(day).keys()) if (!firstSeal.has(code)) firstSeal.set(code, dayIndex);
+  });
+  const known = new Set(existing.map(item => `${item.code}|${item.date}`));
   const lastKnown = days.at(-1);
-  console.log(`二板日 ${pairs[0].tradeDay} ~ ${pairs.at(-1).tradeDay}（涨停名单最新到 ${lastKnown}，二板日需要再晚一天才能判断）`);
+  console.log(`二板日 ${days[startIndex]} ~ ${end < lastKnown ? end : lastKnown}（涨停名单最新到 ${lastKnown}，二板日需要再晚一天才能判断）`);
 
   const tasks = [];
-  for (const { prior, signal, tradeDay } of pairs) {
-    for (const [code, item] of byDay.get(signal)) {
+  for (let index = Math.max(1, startIndex - 41); index < days.length - 1 && days[index] <= end; index++) {
+    for (const [code, item] of byDay.get(days[index])) {
       // 不按名称排除 ST：问财区间结果里的简称是现在的名称；当时是 ST 的票涨跌幅 5%，二板日到不了 +10%，逐笔判断自然排除
-      if (!/^(60|00)/.test(code) || byDay.get(prior).has(code)) continue;
-      tasks.push({ code, name: item.name, signal, tradeDay });
+      if (!/^(60|00)/.test(code) || sealed(index - 1, code) || known.has(`${code}|${days[index]}`)) continue;
+      if (index + 1 < startIndex && sealed(index + 1, code)) continue; // 二板日 D+1 早于 start
+      tasks.push({ code, name: item.name, signalIndex: index });
     }
   }
-  console.log(`主板首板 ${tasks.length} 只，逐笔判断中…`);
+  console.log(`待判断的主板涨停 ${tasks.length} 条（含 start 前 40 个交易日、可能停牌顺延的），逐笔判断中…`);
+  const tradedCache = new Map();
+  let suspendChecks = 0;
+  let suspendedCases = 0;
 
   const hosts = await healthyHosts();
   const workers = Array.from({ length: options.workers }, (_, index) => new Worker(hosts, index, 0.02));
   const results = [];
   const failures = [];
+  const notFirst = [];
   let next = 0;
   let done = 0;
   let touched = 0;
   await Promise.all(workers.map(async worker => {
     while (next < tasks.length) {
-      const task = tasks[next++];
+      const raw = tasks[next++];
+      const { code, signalIndex: D } = raw;
+      const task = { code, name: raw.name, signal: days[D] };
       try {
         if (!worker.conn) await worker._connect();
         const trades = async day => (await worker.fetchDay(task.code, day.replaceAll('-', ''))).filter(tick => tick.vol > 0 && tick.time >= '09:25');
+        // 个股这一天有没有成交：在涨停名单里的肯定有；否则问一次通达信
+        const traded = async dayIndex => {
+          if (sealed(dayIndex, code)) return true;
+          const key = `${code}|${dayIndex}`;
+          if (!tradedCache.has(key)) {
+            suspendChecks++;
+            tradedCache.set(key, await worker.hasTrades(code, days[dayIndex].replaceAll('-', '')));
+          }
+          return tradedCache.get(key);
+        };
+        // 二板日：D 之后个股第一个交易日。范围内的 D 直接取 D+1 的逐笔（没有成交就是停牌，往后找）
+        let T = D + 1;
+        let ticks = null;
+        if (T >= startIndex) {
+          ticks = await trades(days[T]);
+          if (!ticks.length) { ticks = null; T++; }
+        }
+        if (!ticks) while (T < days.length && !(await traded(T))) T++;
+        if (T >= days.length || days[T] < start || days[T] > end) { done++; continue; } // 还在停牌，或二板日不在范围内
+        task.tradeDay = days[T];
+        if (T > D + 1) task.suspended = true;
+        if (!ticks) ticks = await trades(task.tradeDay);
+        if (!ticks.length) throw new Error('二板日没有逐笔成交');
         const signalTicks = await trades(task.signal);
         if (!signalTicks.length) throw new Error('首板日没有逐笔成交');
         // 逐笔是原始价：首板日最后一笔就是收盘价，二板日涨停价 = 收盘价 × 1.1
         const limit = round2(signalTicks.at(-1).price * (1 + LIMIT_RATIO));
-        const ticks = await trades(task.tradeDay);
-        if (!ticks.length) throw new Error('二板日没有逐笔成交（可能停牌）');
+        // 首板：D 的上一个个股交易日不能涨停（D-1 没封已经筛过；之前涨停过的才可能是停牌跨过 D-1，放到买得到之后再查）
+        const notFirstBoard = async () => {
+          if (!((firstSeal.get(code) ?? Infinity) < D - 1)) return false;
+          let j = D - 1;
+          while (j >= 0 && j >= D - 250 && !(await traded(j))) j--;
+          return j >= 0 && j < D - 1 && sealed(j, code);
+        };
         const atLimit = tick => tick.price >= limit - 0.005;
         const oneWord = ticks.every(atLimit);
         const openAtLimit = ticks[0].time === '09:25' && atLimit(ticks[0]);
@@ -133,7 +176,13 @@ async function main() {
         }
         if (buy && !oneWord) {
           touched++;
-          if (buy.time <= LATEST_TOUCH) results.push({ ...task, firstTouch: buy.time, openAtLimit });
+          if (buy.time <= LATEST_TOUCH) {
+            if (await notFirstBoard()) notFirst.push(task);
+            else {
+              if (task.suspended) suspendedCases++;
+              results.push({ ...task, firstTouch: buy.time, openAtLimit });
+            }
+          }
         }
       } catch (error) {
         failures.push({ ...task, error: error.message });
@@ -150,8 +199,9 @@ async function main() {
   }));
   workers.forEach(worker => worker.close());
   console.log();
+  console.log(`按个股交易日判断停牌，问了通达信 ${suspendChecks} 次；首板后停牌、复牌日买入的 ${suspendedCases} 条；停牌前已涨停、不算首板的 ${notFirst.length} 条`);
+  notFirst.slice(0, 8).forEach(item => console.log(`  不算首板 ${item.signal} ${item.code} ${item.name}`));
 
-  const known = new Set(existing.map(item => `${item.code}|${item.date}`));
   results.sort((left, right) => left.signal.localeCompare(right.signal) || left.code.localeCompare(right.code));
   const added = results.filter(item => !known.has(`${item.code}|${item.signal}`)).map((item, index) => ({
     id: `${existing.length + index}-${item.signal.replaceAll('-', '')}-${marketCode(item.code)}`,
