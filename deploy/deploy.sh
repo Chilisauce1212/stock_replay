@@ -4,4 +4,4 @@
 set -e
 cd "$(dirname "$0")/.."
 SSH="ssh -i /c/Users/admin/.ssh/id_ed25519 -o UserKnownHostsFile=/c/Users/admin/.ssh/known_hosts -o BatchMode=yes root@47.117.105.254"
-git archive --format=tar HEAD | gzip | $SSH 'cd /root/stock_replay && tar xzf - && npm ci --no-audit --no-fund --silent && cp deploy/stock-replay-daily.service deploy/stock-replay-daily.timer /etc/systemd/system/ && systemctl daemon-reload && echo 部署完成'
+git -c core.autocrlf=false archive --format=tar HEAD | gzip | $SSH 'cd /root/stock_replay && tar xzf - && npm ci --no-audit --no-fund --silent && cp deploy/stock-replay-daily.service deploy/stock-replay-daily.timer /etc/systemd/system/ && systemctl daemon-reload && echo 部署完成'
