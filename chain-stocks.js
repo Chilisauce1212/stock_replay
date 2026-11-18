@@ -2,9 +2,6 @@ require('dotenv').config();
 
 const fs = require('fs');
 const path = require('path');
-const { spawn } = require('child_process');
-const axios = require('axios');
-const { chromium } = require('playwright');
 const { makeTagger, buildDays } = require('./stock-pick');
 const { readLimitUpMonths, updateLimitUpList } = require('./limit-up-list');
 
@@ -91,31 +88,6 @@ function normalizeRecord(row, date) {
     consecutiveBoards,
     limitUpReason: limitUpReason || '暂无',
   };
-}
-
-async function ensureChromeDebugging() {
-  const debugUrl = 'http://127.0.0.1:9222/json/version';
-  const chromePath = process.env.CHROME_PATH || 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
-  const userDataDir = 'C:\\chrome_temp';
-  try {
-    const response = await axios.get(debugUrl, { timeout: 1000 });
-    if (response.status >= 200 && response.status < 300) return;
-  } catch { /* Chrome 尚未启动 */ }
-  if (!fs.existsSync(chromePath)) throw new Error(`找不到 Chrome: ${chromePath}`);
-  const chrome = spawn(chromePath, ['--remote-debugging-port=9222', `--user-data-dir=${userDataDir}`], {
-    detached: true,
-    stdio: 'ignore',
-  });
-  chrome.unref();
-  const deadline = Date.now() + 15000;
-  while (Date.now() < deadline) {
-    try {
-      const response = await axios.get(debugUrl, { timeout: 1000 });
-      if (response.status >= 200 && response.status < 300) return;
-    } catch { /* 继续等待 */ }
-    await sleep(500);
-  }
-  throw new Error('Chrome 启动超时，未能打开 9222 调试端口');
 }
 
 async function waitForManualLogin(page) {
@@ -292,8 +264,8 @@ async function main() {
   console.log(`从全市场涨停名单生成 ${todo.length - viaIwencai.length} 个日期，已写入 ${OUTPUT_FILE}`);
   if (!viaIwencai.length) return;
 
-  await ensureChromeDebugging();
-  const browser = await chromium.connectOverCDP('http://127.0.0.1:9222');
+  // 问财浏览器和 first-board-reason.js 共用：默认 headless + 登录状态文件（2026-11-18 起不再连 9222）
+  const browser = await require('./first-board-reason').connectChrome();
   const context = browser.contexts()[0];
   const page = await context.newPage();
   try {
@@ -306,7 +278,8 @@ async function main() {
       await sleep(2000);
     }
   } finally {
-    await page.close();
+    await page.close().catch(() => {});
+    await browser.close().catch(() => {});
   }
   console.log(`完成：共处理 ${dates.length} 个回测日。上传时运行 npm run upload。`);
 }

@@ -817,7 +817,7 @@ npm run free-float -- --today --upload    # 只处理今日首板，有票没拿
 
 给 `daily-review/` 下今日首板和一进二回测文件的每条记录写 `freeFloatCap`（首板当天的自由流通市值，元），页面固定显示在成交额右边，不随鼠标所指的 K 线变化。
 
-- 通达信只有流通股本（含持股 5% 以上的大股东），没有自由流通股，所以用问财（Chrome 调试端口，需要登录；账号每天约 100 次，和涨停原因共用）。9222 被别的程序占用，`.env` 里设了 `WENCAI_DEBUG_PORT=9223`，用 `C:chrome_temp_9223` 配置目录单独开一个 Chrome。
+- 通达信只有流通股本（含持股 5% 以上的大股东），没有自由流通股，所以用问财（Chrome 调试端口，需要登录；账号每天约 100 次，和涨停原因共用）。2026-11-18 起默认用 headless 浏览器（见第 30 节）；`WENCAI_HEADLESS=0` 才改回旧方式：连 `WENCAI_DEBUG_PORT`（.env 里是 9223，9222 被别的程序占用）的有界面 Chrome。
 - 专用 Chrome 偶尔卡住（端口能连上，但接管标签页时超时 30 秒）：脚本会只关掉这个端口自己的 Chrome、重新打开后再连一次（`first-board-reason.js` 的 `connectChrome`），登录状态不丢；9222 不会被自动重启。
 - 按月分组，每问最多 9 个代码，一次拿到区间内每天的值；从最近的日期往前查，结果缓存在 `reports/自由流通市值.json`，查过的跳过。
 - `npm run turnover` / `npm run daily-update` 会自动跑（第 3 节第 5 步），每天新增约 4 问；历史记录每天顺带补 20 问左右。
@@ -847,3 +847,15 @@ node convertible-bonds.js --upload
 - 从东方财富数据中心取全部可转债（含已摘牌），按正股整理成 `reports/可转债.json`（R2 `convertible-bonds/可转债.json`），每日更新自动跑。
 - 复盘页（每日复盘模式）工具栏：「流通上限 N 亿」——自由流通市值超过就只能空仓（没有自由流通数据的票不受限）；「有转债只能空仓」——信号日已上市、还没摘牌的可转债。设置存在本机浏览器里，换设备要重新设。
 - 工具栏一直显示「转债: XX转债 / 无」，鼠标悬停看上市、摘牌日期。
+
+## 30. 问财 headless（可部署到无界面服务器）
+
+```bash
+npm run wencai-login                     # 只能在有界面的电脑上跑：打开 9223 的普通 Chrome，登录后导出登录状态
+npx playwright install chromium          # 第一次用要装 Playwright 自带的 Chromium（Linux：npx playwright install --with-deps chromium）
+```
+
+- 问财查询（first-board-reason.js、free-float.js、chain-stocks.js 补旧日期）默认用 Playwright 自带的 Chromium 无界面启动，加载 `reports/wencai-state.json` 里的登录 cookie（`WENCAI_STATE_FILE` 可改路径）。2026-11-18 实测和有界面时结果一致，每问约 5 秒。
+- 登录不能在 headless 里做：同花顺登录页会拒绝自动化浏览器（返回 Nginx forbidden）。所以登录在有界面的电脑上跑 `npm run wencai-login`，再把文件拷到服务器同一路径（scp 等）。文件里是登录凭证，已在 .gitignore 里，不要提交、不要外传。
+- 登录约 3 个月过期（这次导出的到 2027-02-14）。剩 14 天起每次查询打 `!!! 问财登录 N 天后过期`；过期或被踢时报「问财要求登录」，不会当成查不到。每次跑完会把最新 cookie 写回文件。
+- `WENCAI_HEADLESS=0` 改回连有界面 Chrome 的旧方式；`WENCAI_BROWSER_CHANNEL=chrome` 改用本机装的 Chrome。

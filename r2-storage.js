@@ -16,11 +16,15 @@ const r2Client = !FORCE_LOCAL && R2_ENDPOINT && process.env.R2_ACCESS_KEY_ID && 
   ? new S3Client({
     endpoint: R2_ENDPOINT,
     region: 'auto',
-    requestHandler: (process.env.HTTPS_PROXY || process.env.https_proxy || process.env.HTTP_PROXY || process.env.http_proxy)
-      ? new NodeHttpHandler({
-        httpsAgent: new HttpsProxyAgent(process.env.HTTPS_PROXY || process.env.https_proxy || process.env.HTTP_PROXY || process.env.http_proxy),
-      })
-      : undefined,
+    // 超时（2026-11-16）：经代理的请求偶尔挂住不返回，news-calendar --upload 卡了半小时；设了超时 SDK 会断开并重试（默认 3 次）。
+    // requestTimeout 是连接空闲多久算超时，几 MB 的月份文件正常十几秒传完，不会误伤
+    requestHandler: new NodeHttpHandler({
+      connectionTimeout: 15_000,
+      requestTimeout: 90_000,
+      ...((process.env.HTTPS_PROXY || process.env.https_proxy || process.env.HTTP_PROXY || process.env.http_proxy)
+        ? { httpsAgent: new HttpsProxyAgent(process.env.HTTPS_PROXY || process.env.https_proxy || process.env.HTTP_PROXY || process.env.http_proxy) }
+        : {}),
+    }),
     credentials: {
       accessKeyId: process.env.R2_ACCESS_KEY_ID,
       secretAccessKey: process.env.R2_SECRET_ACCESS_KEY,

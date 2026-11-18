@@ -155,9 +155,60 @@ async function ensureChrome() {
   throw new Error('Chrome 启动超时，未能打开 9222 调试端口');
 }
 
+// 问财浏览器默认用 headless（2026-11-18 用户要求：以后部署到没有界面的 Linux 服务器上自动跑）：
+//   Playwright 自带的 Chromium 无界面启动，加载登录状态文件（cookie），查询和有界面时一样。
+//   登录本身只能在有界面的电脑上做（同花顺登录页会拒绝自动化浏览器）：npm run wencai-login 打开普通 Chrome 登录后导出，
+//   把文件拷到服务器同一路径（或用 WENCAI_STATE_FILE 指定）。登录约 3 个月过期，剩 14 天起每次运行都会打 !!! 提醒。
+//   WENCAI_HEADLESS=0 改回旧方式：连本机有界面的 Chrome 调试端口（WENCAI_DEBUG_PORT）。
+const HEADLESS = process.env.WENCAI_HEADLESS !== '0';
+const STATE_FILE = process.env.WENCAI_STATE_FILE || path.join(__dirname, 'reports', 'wencai-state.json');
+const LOGIN_COOKIES = ['user', 'ticket', 'sess_tk', 'userid'];
+const LOGIN_HINT = '在有界面的电脑上运行 npm run wencai-login 登录问财，再把 reports/wencai-state.json 拷到这台机器的同一路径';
+
+// 登录 cookie 里最早的过期时间（毫秒）；没有登录 cookie 返回 0
+function loginExpiry(state) {
+  const cookies = (state?.cookies || []).filter(cookie => /iwencai\.com$/.test(cookie.domain) && LOGIN_COOKIES.includes(cookie.name));
+  if (LOGIN_COOKIES.some(name => !cookies.some(cookie => cookie.name === name))) return 0;
+  return Math.min(...cookies.map(cookie => (cookie.expires > 0 ? cookie.expires * 1000 : Infinity)));
+}
+
+async function launchHeadless() {
+  if (!fs.existsSync(STATE_FILE)) throw new Error(`问财要求登录：没有登录状态文件 ${STATE_FILE}。${LOGIN_HINT}`);
+  const state = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'));
+  const expiry = loginExpiry(state);
+  const daysLeft = Math.floor((expiry - Date.now()) / 86400e3);
+  if (!expiry || daysLeft < 0) throw new Error(`问财要求登录：登录状态文件里的登录已过期或不完整。${LOGIN_HINT}`);
+  const expiryText = Number.isFinite(expiry) ? new Date(expiry + 8 * 3600e3).toISOString().slice(0, 10) : '会话结束';
+  if (daysLeft < 14) console.warn(`!!! 问财登录 ${daysLeft} 天后过期（${expiryText}），${LOGIN_HINT}`);
+  let browser;
+  try {
+    browser = await chromium.launch({ headless: true, ...(process.env.WENCAI_BROWSER_CHANNEL ? { channel: process.env.WENCAI_BROWSER_CHANNEL } : {}) });
+  } catch (error) {
+    if (/Executable doesn't exist|npx playwright install/i.test(error.message)) {
+      throw new Error('没有装 Playwright 的 Chromium：运行 npx playwright install chromium（Linux 用 npx playwright install --with-deps chromium）');
+    }
+    throw error;
+  }
+  const context = await browser.newContext({ storageState: STATE_FILE, locale: 'zh-CN' });
+  // 关闭前把最新 cookie 写回文件（服务器续期过的话登录就能一直延续）；只在仍是登录状态时写，避免用退出后的状态覆盖
+  const close = browser.close.bind(browser);
+  browser.close = async () => {
+    try {
+      const latest = await context.storageState();
+      if (loginExpiry(latest) > Date.now()) {
+        fs.writeFileSync(`${STATE_FILE}.tmp`, JSON.stringify(latest, null, 1));
+        fs.renameSync(`${STATE_FILE}.tmp`, STATE_FILE);
+      }
+    } catch { /* 写不回也不影响这次的结果 */ }
+    return close();
+  };
+  return browser;
+}
+
 // 专用 Chrome（非 9222）偶尔会卡住：调试端口能连上，但 Playwright 接管已有标签页时一直等不到回应（2026-11-09 遇到过）。
 // 这时只关掉这个端口自己的 Chrome（按 --user-data-dir 找进程，不碰 9222 的），重新打开后再连一次；登录状态存在配置目录里，不会丢。
 async function connectChrome() {
+  if (HEADLESS) return launchHeadless();
   await ensureChrome();
   try {
     return await chromium.connectOverCDP(DEBUG_URL, { timeout: 30000 });
@@ -226,16 +277,26 @@ async function runWencaiQuestion(page, question) {
     }
   }, { timeout: 90_000 });
   await page.goto(`https://www.iwencai.com/unifiedwap/result?w=${encodeURIComponent(question)}`, { waitUntil: 'domcontentloaded', timeout: 60_000 });
-  if (/upass\.10jqka\.com\.cn|\/login/.test(page.url())) {
-    throw new Error('问财要求登录，请在 Chrome 窗口登录后重跑');
-  }
+  const loginError = () => new Error(`问财要求登录。${HEADLESS ? LOGIN_HINT : '请在 Chrome 窗口登录后重跑'}`);
+  if (/upass\.10jqka\.com\.cn|\/login/.test(page.url())) throw loginError();
   // 免费次数用完时不会发数据请求，只在页面上提示，所以同时盯着页面文字。
   const quotaPromise = page.waitForFunction(() => /使用次数已超/.test(document.body?.innerText || ''), null, { timeout: 90_000, polling: 1000 })
     .then(() => 'quota');
+  // 没登录时（headless 下常见）页面跳到 /screener 并弹出 upass 登录框，不会发数据请求
+  let loginTimer;
+  const loginPromise = new Promise(resolve => {
+    loginTimer = setInterval(() => {
+      if (page.isClosed()) return clearInterval(loginTimer);
+      if (page.frames().some(frame => /upass\.(iwencai|10jqka)\.com(\.cn)?\/login/.test(frame.url()))) resolve('login');
+    }, 1000);
+  });
   streamPromise.catch(() => {});
   quotaPromise.catch(() => {});
-  const response = await Promise.race([streamPromise, quotaPromise]);
-  if (response === 'quota') throw new Error('问财免费次数已用完（每日约 100 次），请在 Chrome 里换账号后重跑，已获取的会跳过');
+  const response = await Promise.race([streamPromise, quotaPromise, loginPromise]).finally(() => clearInterval(loginTimer));
+  if (response === 'login') throw loginError();
+  if (response === 'quota') throw new Error('问财免费次数已用完（每日约 100 次），请换账号登录后重跑，已获取的会跳过');
+  // 登录失效（cookie 过期或被踢）时数据请求直接返回 401「未登陆,请登录后再试」，不当成空结果
+  if (/"status":401|未登陆|未登录/.test(text.slice(0, 500))) throw loginError();
   const allRows = parseStreamRows(text);
   const rows = allRows.filter(row => /\d{6}/.test(String(row.code || row['股票代码'] || '')));
   // 条件数超限、次数用完等提示也放在 datas 里，是带 content 的一行。
@@ -408,7 +469,7 @@ async function main(argv = process.argv.slice(2)) {
     + `确认找不到 ${all.filter(item => !item.found && item.retried).length} 只，还没查完 ${left} 只`);
 }
 
-module.exports = { OUTPUT_FILE, DEBUG_URL, MAX_CODES_PER_QUESTION, ensureChrome, connectChrome, runWencaiQuestion, chineseDate };
+module.exports = { OUTPUT_FILE, DEBUG_URL, MAX_CODES_PER_QUESTION, STATE_FILE, loginExpiry, ensureChrome, connectChrome, runWencaiQuestion, chineseDate };
 
 if (require.main === module) {
   main().catch(error => {
