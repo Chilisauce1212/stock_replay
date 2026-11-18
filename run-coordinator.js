@@ -9,8 +9,8 @@
 //   - 跑的时候每 2 分钟更新 heartbeatAt；超过 15 分钟没更新算对方挂了（断电、断网、卡死），可以接手
 //   - 主（primary）：标记已 done 且成功、或别人正在跑（心跳新鲜）就不跑
 //   - 备（fallback）：标记 done 且成功就不跑；对方正在跑就每 5 分钟看一次，最多等 4 小时；没有标记、心跳过期、或对方跑完但失败了就接手
-// 本地缓存同步 R2 state/stock-replay-state.tar.gz（+ state/meta.json）：拿到标记后，如果 R2 上的状态是另一台更新的、比本机上次同步新，
-// 先下载解压覆盖到本机；跑完（成功或失败）都把本机状态打包上传，再把标记改成 done。
+// 本地缓存经 R2 state/v2/ 增量同步（state-sync.js，按内容哈希、大缓存分块，只传变了的）：拿到标记后，如果 R2 上的状态是另一台更新的、
+// 比本机上次同步新，先下载变了的部分；跑完（成功或失败）都上传本机变了的部分，再把标记改成 done。
 //
 // 用法: node run-coordinator.js --role primary|fallback [--host 名字] [--stale-minutes 15] [--max-wait-hours 4]
 //   维护：--sync-up 只把本机状态传到 R2；--sync-down 只从 R2 拉共享状态（另一台更新时才拉，--force 强制拉）
@@ -20,10 +20,11 @@ require('dotenv').config({ quiet: true });
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { spawn, execFileSync } = require('child_process');
+const { spawn } = require('child_process');
 const { GetObjectCommand, PutObjectCommand } = require('@aws-sdk/client-s3');
 const { r2Client, R2_BUCKET } = require('./r2-storage');
 const { latestClosedTradeDay } = require('./limit-up-list');
+const stateSync = require('./state-sync');
 
 const ROOT = __dirname;
 const options = { role: '', host: process.env.STOCK_REPLAY_HOST || os.hostname(), staleMinutes: 15, maxWaitHours: 4, syncUp: false, syncDown: false, force: false, testCommand: '', statusPrefix: 'run-status/', heartbeatSeconds: 120, pollSeconds: 300 };
@@ -45,12 +46,6 @@ for (let index = 2; index < process.argv.length; index++) {
 if (!options.syncUp && !options.syncDown && !['primary', 'fallback'].includes(options.role)) throw new Error('--role 必须是 primary 或 fallback');
 if (!r2Client) throw new Error('R2 未配置，主备协调要用 R2');
 
-const STATE_KEY = 'state/stock-replay-state.tar.gz';
-const META_KEY = 'state/meta.json';
-const LOCAL_SYNC_FILE = path.join(ROOT, 'reports', '.state-sync.json');
-// 同步的目录；日志、问财登录状态（凭证，各机器自己的）、临时文件不同步
-const STATE_DIRS = ['reports', 'daily-review', 'test-cases'];
-const STATE_EXCLUDES = ['reports/daily-update-*.log', 'reports/wencai-state.json', 'reports/.state-sync.json', '*.tmp'];
 
 const now = () => new Date().toISOString();
 const log = message => console.log(`[协调 ${new Date(Date.now() + 8 * 3600e3).toISOString().slice(11, 19)}] ${message}`);
@@ -165,54 +160,17 @@ async function claim(key, tradeDate) {
   }
 }
 
-function readLocalSync() {
-  try {
-    return JSON.parse(fs.readFileSync(LOCAL_SYNC_FILE, 'utf8'));
-  } catch {
-    return {};
-  }
-}
-
-function writeLocalSync(value) {
-  fs.mkdirSync(path.dirname(LOCAL_SYNC_FILE), { recursive: true });
-  fs.writeFileSync(LOCAL_SYNC_FILE, JSON.stringify(value, null, 1));
-}
-
-// R2 上的状态是另一台上传的、且比本机上次上传/下载都新，就下载解压覆盖
+// 共享状态增量同步（state-sync.js）：R2 上的是另一台更新的、且比本机上次同步新，才下载变了的部分
 async function syncDown() {
-  const meta = await getStatus(META_KEY);
-  if (!meta) return log('R2 上还没有共享状态，用本机的');
-  const local = readLocalSync();
-  const last = Math.max(Date.parse(local.uploadedAt || 0) || 0, Date.parse(local.downloadedAt || 0) || 0);
-  if (!options.force && meta.value.host === options.host) return log(`R2 上的共享状态是本机 ${meta.value.uploadedAt} 传的，不用下载`);
-  if (!options.force && Date.parse(meta.value.uploadedAt) <= last) return log(`R2 上的共享状态（${meta.value.host} ${meta.value.uploadedAt}）不比本机新，不用下载`);
-  log(`下载 ${meta.value.host} ${meta.value.uploadedAt} 上传的共享状态（${(meta.value.bytes / 1048576).toFixed(0)} MB）…`);
   const started = Date.now();
-  const response = await r2Client.send(new GetObjectCommand({ Bucket: R2_BUCKET, Key: STATE_KEY }));
-  const temporary = path.join(os.tmpdir(), `stock-replay-state-${process.pid}.tar.gz`);
-  await new Promise((resolve, reject) => {
-    const out = fs.createWriteStream(temporary);
-    response.Body.pipe(out).on('finish', resolve).on('error', reject);
-    response.Body.on('error', reject);
-  });
-  execFileSync('tar', ['-xzf', temporary, '-C', ROOT], { stdio: 'inherit' });
-  fs.unlinkSync(temporary);
-  writeLocalSync({ ...local, downloadedAt: meta.value.uploadedAt, downloadedFrom: meta.value.host });
-  log(`共享状态已覆盖到本机，用时 ${Math.round((Date.now() - started) / 1000)} 秒`);
+  await stateSync.download(ROOT, options.host, { force: options.force, log });
+  log(`同步检查用时 ${Math.round((Date.now() - started) / 1000)} 秒`);
 }
 
 async function syncUp() {
   const started = Date.now();
-  const temporary = path.join(os.tmpdir(), `stock-replay-state-${process.pid}.tar.gz`);
-  const dirs = STATE_DIRS.filter(dir => fs.existsSync(path.join(ROOT, dir)));
-  execFileSync('tar', ['-czf', temporary, ...STATE_EXCLUDES.map(pattern => `--exclude=${pattern}`), '-C', ROOT, ...dirs], { stdio: 'inherit' });
-  const bytes = fs.statSync(temporary).size;
-  await r2Client.send(new PutObjectCommand({ Bucket: R2_BUCKET, Key: STATE_KEY, Body: fs.createReadStream(temporary), ContentLength: bytes, ContentType: 'application/gzip' }));
-  fs.unlinkSync(temporary);
-  const uploadedAt = now();
-  await r2Client.send(new PutObjectCommand({ Bucket: R2_BUCKET, Key: META_KEY, Body: JSON.stringify({ host: options.host, uploadedAt, bytes }), ContentType: 'application/json' }));
-  writeLocalSync({ ...readLocalSync(), uploadedAt });
-  log(`本机状态已上传 R2（${(bytes / 1048576).toFixed(0)} MB，用时 ${Math.round((Date.now() - started) / 1000)} 秒）`);
+  await stateSync.upload(ROOT, options.host, log);
+  log(`上传用时 ${Math.round((Date.now() - started) / 1000)} 秒`);
 }
 
 async function main() {
