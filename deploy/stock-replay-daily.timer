@@ -1,9 +1,9 @@
-# 每个交易日 21:00（北京时间）跑每日更新；节假日脚本自己会更新到最近一个交易日
+# 阿里云兜底：每个交易日 22:30（北京时间）检查，软路由（21:00 做主）没跑完才接手；节假日脚本自己会更新到最近一个交易日
 [Unit]
 Description=stock_replay 每日更新定时器
 
 [Timer]
-OnCalendar=Mon..Fri 21:00 Asia/Shanghai
+OnCalendar=Mon..Fri 22:30 Asia/Shanghai
 Persistent=true
 
 [Install]

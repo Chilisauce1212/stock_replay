@@ -1,4 +1,5 @@
-# 每日复盘数据更新（阿里云服务器，2026-11-18 部署）。手动跑一次：systemctl start stock-replay-daily
+# 每日复盘数据更新（阿里云服务器，2026-11-18 部署；2026-11-19 起做兜底：家里软路由 21:00 做主，这里 22:30 检查，软路由没跑完才接手）。
+# 手动跑一次：systemctl start --no-block stock-replay-daily（软路由已跑完会直接退出）
 [Unit]
 Description=stock_replay 每日更新
 Wants=network-online.target
@@ -12,7 +13,10 @@ ExecStart=/bin/sh /root/stock_replay/deploy/run-daily.sh
 # Node 默认按 cgroup 内存限制自动定堆上限（MemoryHigh=900M 时只有约 450 MB），新闻判断、归题材要整份读入
 # news-body-cache.json（237 MB）等缓存，光读入就要约 440 MB 堆，所以显式给 1100 MB 堆（2026-11-18 18:00 测试时 OOM）
 Environment=NODE_OPTIONS=--max-old-space-size=1100
+Environment=STOCK_REPLAY_ROLE=fallback
+Environment=STOCK_REPLAY_HOST=aliyun
 MemoryHigh=1300M
 MemoryMax=1500M
 Nice=10
-TimeoutStartSec=3h
+# 兜底时可能先等软路由最多 4 小时，再自己跑约 1 小时
+TimeoutStartSec=6h

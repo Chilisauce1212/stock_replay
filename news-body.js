@@ -87,22 +87,33 @@ async function fetchViaApi(url, title) {
   return text.slice(0, STORED_LENGTH);
 }
 
-// 同花顺页面偶尔超时或中途跳转，失败重试一次。
+// 同花顺页面偶尔超时或中途跳转，失败隔 2 秒重试一次。
 async function fetchOne(context, url, title) {
   try {
     return await fetchOnce(context, url, title);
   } catch {
+    await new Promise(resolve => setTimeout(resolve, 2000));
     return fetchOnce(context, url, title);
   }
 }
+
+// 没渲染完的同花顺页面只有外壳文字（「Fix Bug of Android render…」几十个字）或「服务器太忙啦」，不能当正文存
+// （2026-11-18 服务器 CPU 紧时 18% 的同花顺正文是这种外壳，以前超过 30 字就当正文存了）
+const looksLikeShell = text => text.length < 200 && /Fix Bug of Android render|服务器太忙/.test(text);
 
 async function fetchOnce(context, url, title) {
   const page = await context.newPage();
   try {
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 40_000 });
     await page.waitForLoadState('networkidle', { timeout: 6_000 }).catch(() => {});
-    const text = await extractText(page, title);
+    let text = await extractText(page, title);
+    if (looksLikeShell(text)) {
+      // 还在渲染：再等正文出来（最多 8 秒）
+      await page.waitForFunction(() => String(document.body?.innerText || '').length > 300, null, { timeout: 8_000, polling: 300 }).catch(() => {});
+      text = await extractText(page, title);
+    }
     if (/doesn't work properly without JavaScript/.test(text) || text.length < 30) throw new Error('页面没有正文');
+    if (looksLikeShell(text)) throw new Error('页面没渲染完（只有外壳）');
     return text.slice(0, STORED_LENGTH);
   } finally {
     await page.close().catch(() => {});
@@ -117,7 +128,7 @@ async function fetchBodies(items, { workers = 6, retryFailed = false, onProgress
     if (!/^https?:\/\//.test(item.url) || seen.has(item.url)) return false;
     seen.add(item.url);
     const saved = cache[item.url];
-    return !saved || (retryFailed && saved.error);
+    return !saved || (retryFailed && saved.error) || (saved.text && looksLikeShell(saved.text)); // 以前存下的外壳也重抓
   });
   if (!todo.length) return cache;
   // 新闻站点都在国内，走系统代理（如 7897）经常超时，直连约 0.5 秒。
