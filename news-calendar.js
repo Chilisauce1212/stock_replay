@@ -465,6 +465,7 @@ async function main() {
 }
 
 main().catch(error => {
-  console.error(`新闻日历生成失败: ${error.message}`);
+  console.error(`新闻日历生成失败: ${error.message || error.name || error}`);
+  if (!error.message) console.error(error); // R2 等错误有时 message 为空（2026-11-18 服务器上），打出完整对象
   process.exitCode = 1;
 });

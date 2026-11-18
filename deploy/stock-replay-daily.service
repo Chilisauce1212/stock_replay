@@ -8,8 +8,11 @@ After=network-online.target
 Type=oneshot
 WorkingDirectory=/root/stock_replay
 ExecStart=/bin/sh /root/stock_replay/deploy/run-daily.sh
-# 这台机器只有 1.7 GB 内存，还跑着 new-api、nginx 等：超过上限只杀这个任务，不影响别的服务
-MemoryHigh=900M
-MemoryMax=1300M
+# 这台机器只有 1.7 GB 内存（另有 2 GB swap），还跑着 new-api、nginx 等（合计约 150 MB）：超过上限只杀这个任务，不影响别的服务
+# Node 默认按 cgroup 内存限制自动定堆上限（MemoryHigh=900M 时只有约 450 MB），新闻判断、归题材要整份读入
+# news-body-cache.json（237 MB）等缓存，光读入就要约 440 MB 堆，所以显式给 1100 MB 堆（2026-11-18 18:00 测试时 OOM）
+Environment=NODE_OPTIONS=--max-old-space-size=1100
+MemoryHigh=1300M
+MemoryMax=1500M
 Nice=10
 TimeoutStartSec=3h

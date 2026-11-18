@@ -22,7 +22,7 @@ const REPORTS_DIR = path.join(ROOT, 'reports');
 const PROMPT_FILE = path.join(ROOT, 'prompts', 'theme-evidence.md');
 const NEWS_CACHE_FILE = path.join(REPORTS_DIR, 'news-cache.json');
 const CONFIRM_ABOVE = 100;
-const BASE_URL = process.env.REPLAY_BASE_URL || 'http://127.0.0.1:3000';
+const BASE_URL = process.env.REPLAY_BASE_URL || `http://127.0.0.1:${process.env.PORT || 3000}`; // 服务器上网站服务在 PORT=3100（3000 是 new-api）
 
 function parseArgs(argv) {
   const options = { start: '', end: '9999-12-31', keys: [], sample: 0, workers: 6, thinking: false, out: 'theme-evidence.json', yes: false };

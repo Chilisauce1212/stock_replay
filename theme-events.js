@@ -20,7 +20,7 @@ const { makeTagger, buildDays } = require('./stock-pick');
 const { callModel, parseReply, hashOf, OFF_PEAK_PRICE, PEAK_PRICE } = require('./news-llm');
 const { isCurrentCacheEntry, needsRefetch, fetchNews, mergeNewsEntry } = require('./news-theme-table');
 
-const BASE_URL = process.env.REPLAY_BASE_URL || 'http://127.0.0.1:3000';
+const BASE_URL = process.env.REPLAY_BASE_URL || `http://127.0.0.1:${process.env.PORT || 3000}`; // 服务器上网站服务在 PORT=3100（3000 是 new-api）
 const NEWS_CACHE_FILE = path.join(__dirname, 'reports', 'news-cache.json');
 
 // 缺新闻的首板先用 /api/news 补到 news-cache.json（不花钱，要先开网站服务），每 500 只存一次
@@ -28,6 +28,16 @@ async function fillNews(boards, cache) {
   const lacking = boards.filter(board => needsRefetch(cache[board.key])); // 首板日 20:00 前取的也重取
   if (!lacking.length) return;
   console.log(`补新闻 ${lacking.length} 只`);
+  // 服务器上平时没开网站服务（本机一般开着）：没开就临时启动一个，补完关掉
+  const stopServer = await require('./review-pipeline').ensureServer(BASE_URL);
+  try {
+    await fetchLacking(lacking, cache);
+  } finally {
+    stopServer();
+  }
+}
+
+async function fetchLacking(lacking, cache) {
   const fresh = {};
   const save = () => {
     const latest = readJson(NEWS_CACHE_FILE, {});

@@ -85,7 +85,10 @@ async function fetchBodies(items, { workers = 6, retryFailed = false, onProgress
   });
   if (!todo.length) return cache;
   // 新闻站点都在国内，走系统代理（如 7897）经常超时，直连约 0.5 秒。
-  const browser = await chromium.launch({ channel: 'chrome', headless: true, args: ['--no-proxy-server'] });
+  // 本机用系统装的 Chrome；服务器上没有 Chrome，退回 Playwright 自带的 Chromium（npx playwright install chromium）
+  const launchOptions = { headless: true, args: ['--no-proxy-server'] };
+  const browser = await chromium.launch({ ...launchOptions, channel: 'chrome' })
+    .catch(() => chromium.launch(launchOptions));
   const context = await browser.newContext({ userAgent: MOBILE_UA, viewport: { width: 390, height: 844 } });
   // 图片、字体、媒体不影响正文，拦掉加快速度。
   await context.route('**/*', route => (
