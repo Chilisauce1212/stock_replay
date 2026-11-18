@@ -2,7 +2,8 @@
 'use strict';
 
 // 抓新闻链接的原文正文，给大模型判断新闻用：股票名称、事件原因经常只出现在正文里。
-// 同花顺新闻页（news./t./mp.10jqka.com.cn）和微信文章要执行脚本才有正文，所以用无头 Chrome 渲染后取文字。
+// 同花顺新闻页（news./t./mp.10jqka.com.cn）和微信文章要执行脚本才有正文，所以用无头 Chrome 渲染后取文字；
+// 其中同花顺号文章（mp.10jqka.com.cn）先直接取页面调用的正文接口，失败再用浏览器。
 // 正文按链接缓存在 reports/news-body-cache.json，抓过的不再抓（失败的也记下，--retry-failed 重抓）。
 // 用法: npm run news-body -- [--report 四连板题材演绎] [--workers 6] [--retry-failed]
 
@@ -51,6 +52,41 @@ async function extractText(page, title) {
   }, { title });
 }
 
+// 同花顺号文章（mp.10jqka.com.cn/...?contentId=xxx）的正文直接取页面自己调用的公开接口，不开浏览器（2026-11-18 起）：
+// 服务器只有 2 核，浏览器渲染一篇要 2 秒多，接口 0.1 秒。不是这类链接返回 null；接口失败抛错，由调用方退回浏览器。
+// news.10jqka.com.cn 的接口地址要用页面脚本里的混淆算法编码文章号，不去还原，仍用浏览器。
+const MP_API = 'https://mp.10jqka.com.cn/lgt/article_query/open/api/article/v1/detail?content_id=';
+const ENTITIES = { nbsp: ' ', ensp: ' ', emsp: ' ', thinsp: ' ', amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", ldquo: '“', rdquo: '”', lsquo: '‘', rsquo: '’', mdash: '—', hellip: '…', middot: '·' };
+
+function htmlToText(html) {
+  return String(html)
+    .replace(/<(script|style)[\s\S]*?<\/\1>/gi, ' ')
+    .replace(/<br\s*\/?>|<\/(p|div|li|h\d|tr|section)>/gi, '\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&#x([0-9a-f]+);/gi, (match, hex) => String.fromCodePoint(parseInt(hex, 16)))
+    .replace(/&#(\d+);/g, (match, decimal) => String.fromCodePoint(Number(decimal)))
+    .replace(/&([a-z]+);/gi, (match, name) => ENTITIES[name.toLowerCase()] ?? match);
+}
+
+async function fetchViaApi(url, title) {
+  let contentId;
+  try {
+    const parsed = new URL(url);
+    if (parsed.hostname !== 'mp.10jqka.com.cn') return null;
+    contentId = parsed.searchParams.get('contentId');
+  } catch {
+    return null;
+  }
+  if (!contentId) return null;
+  const response = await fetch(`${MP_API}${encodeURIComponent(contentId)}`, { headers: { 'user-agent': MOBILE_UA }, signal: AbortSignal.timeout(15_000) });
+  if (!response.ok) throw new Error(`正文接口 HTTP ${response.status}`);
+  const json = await response.json();
+  if (json.status_code !== 0 || !json.data?.content) throw new Error(`正文接口: ${json.status_msg || '没有正文'}`);
+  const text = `${json.data.title || title || ''} ${htmlToText(json.data.content)}`.replace(/\s+/g, ' ').trim();
+  if (text.length < 30) throw new Error('正文接口: 正文太短');
+  return text.slice(0, STORED_LENGTH);
+}
+
 // 同花顺页面偶尔超时或中途跳转，失败重试一次。
 async function fetchOne(context, url, title) {
   try {
@@ -86,21 +122,38 @@ async function fetchBodies(items, { workers = 6, retryFailed = false, onProgress
   if (!todo.length) return cache;
   // 新闻站点都在国内，走系统代理（如 7897）经常超时，直连约 0.5 秒。
   // 本机用系统装的 Chrome；服务器上没有 Chrome，退回 Playwright 自带的 Chromium（npx playwright install chromium）
-  const launchOptions = { headless: true, args: ['--no-proxy-server'] };
-  const browser = await chromium.launch({ ...launchOptions, channel: 'chrome' })
-    .catch(() => chromium.launch(launchOptions));
-  const context = await browser.newContext({ userAgent: MOBILE_UA, viewport: { width: 390, height: 844 } });
-  // 图片、字体、媒体不影响正文，拦掉加快速度。
-  await context.route('**/*', route => (
-    ['image', 'font', 'media'].includes(route.request().resourceType()) ? route.abort() : route.continue()
-  ));
+  // 浏览器用到时才启动（全是接口能取的链接时不启动）
+  let browserPromise;
+  const getContext = () => {
+    browserPromise ||= (async () => {
+      const launchOptions = { headless: true, args: ['--no-proxy-server'] };
+      const browser = await chromium.launch({ ...launchOptions, channel: 'chrome' })
+        .catch(() => chromium.launch(launchOptions));
+      const context = await browser.newContext({ userAgent: MOBILE_UA, viewport: { width: 390, height: 844 } });
+      // 图片、字体、媒体不影响正文，拦掉加快速度。
+      await context.route('**/*', route => (
+        ['image', 'font', 'media'].includes(route.request().resourceType()) ? route.abort() : route.continue()
+      ));
+      return { browser, context };
+    })();
+    return browserPromise.then(({ context }) => context);
+  };
+  const viaApi = { ok: 0, fallback: 0 };
   let next = 0;
   let done = 0;
   async function worker() {
     while (next < todo.length) {
       const item = todo[next++];
       try {
-        cache[item.url] = { text: await fetchOne(context, item.url, item.title), fetchedAt: new Date().toISOString() };
+        let text = null;
+        try {
+          text = await fetchViaApi(item.url, item.title);
+          if (text) viaApi.ok++;
+        } catch {
+          viaApi.fallback++; // 接口失败，退回浏览器
+        }
+        text ||= await fetchOne(await getContext(), item.url, item.title);
+        cache[item.url] = { text, fetchedAt: new Date().toISOString() };
       } catch (error) {
         cache[item.url] = { text: '', error: String(error.message || error).slice(0, 200), fetchedAt: new Date().toISOString() };
       }
@@ -115,8 +168,9 @@ async function fetchBodies(items, { workers = 6, retryFailed = false, onProgress
     await Promise.all(Array.from({ length: Math.min(workers, todo.length) }, worker));
   } finally {
     writeBodyCache(cache);
-    await browser.close().catch(() => {});
+    if (browserPromise) await browserPromise.then(({ browser }) => browser.close()).catch(() => {});
   }
+  if (viaApi.ok || viaApi.fallback) console.log(`\n同花顺号正文接口取到 ${viaApi.ok} 篇，接口失败退回浏览器 ${viaApi.fallback} 篇`);
   return cache;
 }
 
@@ -153,7 +207,7 @@ async function main(argv = process.argv.slice(2)) {
   console.log(`\n新闻链接 ${urls.length} 个，有正文 ${ok} 个，失败 ${urls.length - ok} 个。缓存 ${path.relative(__dirname, BODY_CACHE_FILE)}`);
 }
 
-module.exports = { fetchBodies, readBodyCache, BODY_CACHE_FILE };
+module.exports = { fetchBodies, readBodyCache, fetchViaApi, BODY_CACHE_FILE };
 
 if (require.main === module) {
   main().catch(error => {
