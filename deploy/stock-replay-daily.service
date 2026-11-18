@@ -1,0 +1,15 @@
+# 每日复盘数据更新（阿里云服务器，2026-11-18 部署）。手动跑一次：systemctl start stock-replay-daily
+[Unit]
+Description=stock_replay 每日更新
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/root/stock_replay
+ExecStart=/bin/sh /root/stock_replay/deploy/run-daily.sh
+# 这台机器只有 1.7 GB 内存，还跑着 new-api、nginx 等：超过上限只杀这个任务，不影响别的服务
+MemoryHigh=900M
+MemoryMax=1300M
+Nice=10
+TimeoutStartSec=3h
