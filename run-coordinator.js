@@ -84,6 +84,39 @@ async function putStatus(key, value, etag) {
 
 const fresh = status => status && Date.now() - Date.parse(status.value.heartbeatAt || status.value.startedAt) < options.staleMinutes * 60e3;
 
+// Bark 推送到用户 iPhone（2026-11-19）：.env 的 BARK_URL=https://api.day.app/<密钥>；没配就不发，发送失败只记日志。
+// 失败、兜底接手用 timeSensitive（专注模式下也提醒），成功用普通通知；测试命令（--test-command）不发
+async function notify(title, body, { urgent = false } = {}) {
+  const base = String(process.env.BARK_URL || '').replace(/\/+$/, '');
+  if (!base || options.testCommand) return;
+  const query = new URLSearchParams({ group: '每日更新', level: urgent ? 'timeSensitive' : 'active' });
+  try {
+    const response = await fetch(`${base}/${encodeURIComponent(title)}/${encodeURIComponent(body.slice(0, 1200))}?${query}`, { signal: AbortSignal.timeout(15_000) });
+    if (!response.ok) log(`Bark 通知失败：HTTP ${response.status}`);
+  } catch (error) {
+    log(`Bark 通知失败：${error.message}`);
+  }
+}
+
+const HOST_NAMES = { router: '软路由', aliyun: '阿里云' };
+const hostName = host => HOST_NAMES[host] || host;
+
+// 从每日更新的输出里摘要：各步 ✓/✗、今日首板只数、大模型费用、!!! 警告
+function summarize(output) {
+  const tail = output.slice(output.lastIndexOf('========== 每日更新完成'));
+  const steps = tail.includes('每日更新完成') ? tail.split('\n').filter(line => /^\s+[✓✗]/.test(line)).map(line => line.trim()) : [];
+  const failed = steps.filter(line => line.startsWith('✗')).map(line => line.slice(1).trim());
+  const firstBoards = output.match(/今日首板（[^）]*）：(\d+) 只/)?.[1];
+  let low = 0;
+  let high = 0;
+  for (const match of output.matchAll(/约 ([\d.]+) 元（空闲）\s*\/\s*([\d.]+) 元（高峰）/g)) {
+    low += Number(match[1]);
+    high += Number(match[2]);
+  }
+  const warnings = [...new Set(output.split('\n').filter(line => line.includes('!!!') && !line.includes('往上翻看')).map(line => line.replace(/^.*?!!!\s*/, '').slice(0, 80)))];
+  return { steps, failed, firstBoards, cost: high ? `${low.toFixed(2)}–${high.toFixed(2)} 元` : '0 元', warnings };
+}
+
 // 返回 { etag } 表示拿到了标记；返回 null 表示不用跑
 async function claim(key, tradeDate) {
   const deadline = Date.now() + options.maxWaitHours * 3600e3;
@@ -105,6 +138,7 @@ async function claim(key, tradeDate) {
       }
       if (Date.now() > deadline) {
         log(`!!! 等了 ${options.maxWaitHours} 小时 ${value.host} 还在跑，备机放弃`);
+        await notify(`每日更新 ${tradeDate} 异常`, `${hostName(options.host)}等了 ${options.maxWaitHours} 小时，${hostName(value.host)}还没跑完（心跳 ${value.heartbeatAt}），备机放弃，请检查`, { urgent: true });
         return null;
       }
       log(`${value.host} 正在跑 ${tradeDate}（心跳 ${value.heartbeatAt}），${options.pollSeconds} 秒后再看`);
@@ -118,6 +152,12 @@ async function claim(key, tradeDate) {
     const etag = await putStatus(key, record, status?.etag || null);
     if (etag) {
       log(`拿到 ${tradeDate} 的运行标记（${reason}）`);
+      if (options.role === 'fallback') {
+        const why = !value ? `${hostName('router')}今天没有开始跑（可能断电、断网或没开机）`
+          : value.state === 'done' ? `${hostName(value.host)}跑完但有步骤失败（退出码 ${value.exitCode}）`
+            : `${hostName(value.host)}的心跳停在 ${new Date(Date.parse(value.heartbeatAt) + 8 * 3600e3).toISOString().slice(11, 16)}（可能断电、断网或卡死）`;
+        await notify(`每日更新 ${tradeDate} 由${hostName(options.host)}接手`, `${why}，${hostName(options.host)}开始兜底`, { urgent: true });
+      }
       return { etag, record };
     }
     log('标记被别人抢先改了，重新看');
@@ -207,6 +247,8 @@ async function main() {
   }); }, options.heartbeatSeconds * 1000);
 
   let exitCode = 1;
+  let output = ''; // 每日更新的输出，照常写日志，同时留一份给通知摘要（最多 8 MB）
+  const started = Date.now();
   try {
     try {
       if (!options.testCommand) await syncDown();
@@ -215,8 +257,14 @@ async function main() {
     }
     exitCode = await new Promise(resolve => {
       const [command, ...args] = options.testCommand ? ['sh', '-c', options.testCommand] : [process.execPath, path.join(ROOT, 'daily-update.js'), '--yes'];
-      child = spawn(command, args, { cwd: ROOT, stdio: 'inherit', detached: process.platform !== 'win32' });
-      child.on('exit', code => resolve(code ?? 1));
+      child = spawn(command, args, { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'], detached: process.platform !== 'win32' });
+      const keep = (stream, target) => stream.on('data', chunk => {
+        target.write(chunk);
+        if (output.length < 8 * 1048576) output += chunk.toString();
+      });
+      keep(child.stdout, process.stdout);
+      keep(child.stderr, process.stderr);
+      child.on('close', code => resolve(code ?? 1));
       child.on('error', () => resolve(1));
     });
     if (lost) return 1;
@@ -229,13 +277,27 @@ async function main() {
     clearInterval(beat);
     await beating; // 等最后一次心跳写完，免得 done 用旧 ETag
   }
-  if (lost) return 1;
+  if (lost) {
+    await notify(`每日更新 ${tradeDate} 被接手`, `${hostName(options.host)}跑到一半，运行标记被另一台接手，本机已停止`, { urgent: true });
+    return 1;
+  }
   const done = await putStatus(key, { ...record, state: 'done', heartbeatAt: now(), finishedAt: now(), exitCode }, etag);
   log(done ? `${tradeDate} 跑完，退出码 ${exitCode}，标记已改为 done` : '!!! 写 done 时标记已被别人改了');
+  const summary = summarize(output);
+  const minutes = Math.round((Date.now() - started) / 60e3);
+  const head = [`${hostName(options.host)}跑完，用时 ${minutes} 分钟`, summary.firstBoards && `今日首板 ${summary.firstBoards} 只`, `大模型约 ${summary.cost}`].filter(Boolean).join('，');
+  if (exitCode === 0 && !summary.failed.length) {
+    await notify(`每日更新 ${tradeDate} ✓`, [head, ...summary.warnings.slice(0, 3).map(line => `!!! ${line}`)].join('\n'));
+  } else {
+    const lines = [head, summary.failed.length ? `失败：${summary.failed.join('、')}` : `退出码 ${exitCode}`, ...summary.warnings.slice(0, 4).map(line => `!!! ${line}`)];
+    if (options.role === 'primary') lines.push('阿里云 22:30 会重跑');
+    await notify(`每日更新 ${tradeDate} ✗`, lines.join('\n'), { urgent: true });
+  }
   return exitCode;
 }
 
-main().then(code => process.exit(code), error => {
+main().then(code => process.exit(code), async error => {
   console.error(`!!! 协调失败: ${error.stack || error.message}`);
+  await notify('每日更新协调出错', `${hostName(options.host)}：${error.message}`.slice(0, 300), { urgent: true });
   process.exit(1);
 });
