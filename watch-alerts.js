@@ -2,7 +2,7 @@
 'use strict';
 
 // 盘中盯自选（2026-11-19）：在软路由上交易日 9:14 启动，15:01 自己退出（cron 见 deploy/router-setup.sh）。
-//   - 名单：同花顺自选（t.10jqka.com.cn 的 getSelfStockWithMarket，登录 cookie 在 reports/ths-state.json），每 5 分钟刷新，只留 A 股
+//   - 名单：同花顺自选（t.10jqka.com.cn 的 getSelfStockWithMarket，登录 cookie 在 reports/ths-state.json），每分钟刷新（用户盘中会改自选），只留 A 股
 //   - 行情：新浪 hq.sinajs.cn，一次请求查完整个名单，每 3 秒一次（免费行情本身就是 3 秒一跳）
 //   - 提醒（Bark，分组「盯盘」），每只股票都发：
 //       冲高：涨幅 ≥ --rise（默认 6%），一天一次；回落到 --rise - 2 以下后再冲上去会再提醒
@@ -16,7 +16,7 @@ require('dotenv').config({ quiet: true });
 const fs = require('fs');
 const path = require('path');
 
-const options = { rise: 6, sealDrop: 0.5, poll: 3, listMinutes: 5, until: '15:01', dryRun: false, extra: [] };
+const options = { rise: 6, sealDrop: 0.5, poll: 3, listMinutes: 1, until: '15:01', dryRun: false, extra: [] };
 for (let index = 2; require.main === module && index < process.argv.length; index++) {
   const arg = process.argv[index];
   if (arg === '--dry-run') options.dryRun = true;
