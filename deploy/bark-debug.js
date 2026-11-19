@@ -91,8 +91,8 @@ th{color:var(--muted);font-weight:normal}.ok{color:var(--ok)}.bad{color:var(--ba
 <p class="hint">用时是服务器把请求交给 Bark、Bark 交给苹果推送后回应的时间；手机一般在回应前后就弹出来。</p></div>
 </main><script>
 const presets=[["冲高","","中嘉博创 冲高6.6%"],["封板","","华菱精工 封板2.1亿"],["封单","","武汉凡谷 封单降到40%"],["炸板","","中嘉博创 炸板"],
-["每日更新 ✓","每日更新 11-19 ✓","软路由跑完，用时 35 分钟，今日首板 17 只，大模型约 0.12–0.24 元"],
-["软路由没开始","每日更新 11-19 软路由没开始","21:15 还没有运行标记，阿里云 22:30 会兜底"],
+["每日更新 🟢","🟢每日更新","软路由跑完，用时 35 分钟"],
+["软路由未开始","🔴每日更新","软路由未开始"],["阿里云接手","🔴每日更新","阿里云接手"],
 ["长消息","","这是一条比较长的消息，用来试 AirPods 朗读：超过一定长度时 Siri 会先问要不要朗读，而不是直接读出来，可以对比一下短消息的效果和等待时间。"]];
 const form=document.getElementById('form'),result=document.getElementById('result'),len=document.getElementById('len');
 const box=document.getElementById('presets');

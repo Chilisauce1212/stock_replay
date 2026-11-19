@@ -123,15 +123,19 @@ async function putStatus(key, value, etag, { retry = true } = {}) {
 const fresh = status => status && Date.now() - Date.parse(status.value.heartbeatAt || status.value.startedAt) < options.staleMinutes * 60e3;
 
 // Bark 推送到用户 iPhone（2026-11-19）：.env 的 BARK_URL=https://api.day.app/<密钥>；没配就不发，发送失败只记日志。
-// 失败、兜底接手用 timeSensitive（专注模式下也提醒），成功用普通通知；测试命令（--test-command）不发
-async function notify(title, body, { urgent = false } = {}) {
+// 用户靠 AirPods 听（2026-11-19 改短）：标题只有「🟢每日更新」「🔴每日更新」，正文一句话，例如「软路由跑完，用时 35 分钟」「软路由未开始」；
+// 长了 Siri 会先问要不要朗读。细节（失败的步骤、警告、费用、原因）只写日志。
+// 出问题（🔴）用 timeSensitive（专注模式下也提醒），成功（🟢）用普通通知；测试命令（--test-command）不发
+async function notify(body, { ok = false, detail = '' } = {}) {
+  log(`推送 ${ok ? '🟢' : '🔴'}${body}${detail ? `｜${detail}` : ''}`);
   const base = String(process.env.BARK_URL || '').replace(/\/+$/, '');
   if (!base || options.testCommand) return;
-  const query = new URLSearchParams({ group: '每日更新', level: urgent ? 'timeSensitive' : 'active' });
+  const title = ok ? '🟢每日更新' : '🔴每日更新';
+  const query = new URLSearchParams({ group: '每日更新', level: ok ? 'active' : 'timeSensitive' });
   // 网络不通时同样每 30 秒重试，最多约 5 分钟：Bark 一恢复就把问题推出去
   try {
     await withRetry('Bark 通知', async () => {
-      const response = await fetch(`${base}/${encodeURIComponent(title)}/${encodeURIComponent(body.slice(0, 1200))}?${query}`, { signal: AbortSignal.timeout(15_000) });
+      const response = await fetch(`${base}/${encodeURIComponent(title)}/${encodeURIComponent(body.slice(0, 200))}?${query}`, { signal: AbortSignal.timeout(15_000) });
       if (response.status >= 500 || response.status === 429) throw Object.assign(new Error(`HTTP ${response.status}`), { $metadata: { httpStatusCode: response.status } });
       if (!response.ok) log(`Bark 通知失败：HTTP ${response.status}`);
     });
@@ -180,7 +184,7 @@ async function claim(key, tradeDate) {
       }
       if (Date.now() > deadline) {
         log(`!!! 等了 ${options.maxWaitHours} 小时 ${value.host} 还在跑，备机放弃`);
-        await notify(`每日更新 ${tradeDate} 异常`, `${hostName(options.host)}等了 ${options.maxWaitHours} 小时，${hostName(value.host)}还没跑完（心跳 ${value.heartbeatAt}），备机放弃，请检查`, { urgent: true });
+        await notify(`${hostName(value.host)}${options.maxWaitHours}小时没跑完`, { detail: `心跳 ${value.heartbeatAt}，${hostName(options.host)}放弃等待` });
         return null;
       }
       log(`${value.host} 正在跑 ${tradeDate}（心跳 ${value.heartbeatAt}），${options.pollSeconds} 秒后再看`);
@@ -198,7 +202,7 @@ async function claim(key, tradeDate) {
         const why = !value ? `${hostName('router')}今天没有开始跑（可能断电、断网或没开机）`
           : value.state === 'done' ? `${hostName(value.host)}跑完但有步骤失败（退出码 ${value.exitCode}）`
             : `${hostName(value.host)}的心跳停在 ${new Date(Date.parse(value.heartbeatAt) + 8 * 3600e3).toISOString().slice(11, 16)}（可能断电、断网或卡死）`;
-        await notify(`每日更新 ${tradeDate} 由${hostName(options.host)}接手`, `${why}，${hostName(options.host)}开始兜底`, { urgent: true });
+        await notify(`${hostName(options.host)}接手`, { detail: why });
       }
       return { etag, record };
     }
@@ -216,7 +220,7 @@ async function watchdog(key, tradeDate) {
   const day = tradeDate.slice(5);
   if (!value) {
     log(`!!! ${tradeDate} 还没有运行标记，推送提醒`);
-    await notify(`每日更新 ${day} 软路由没开始`, '到 21:15 还没有运行标记（可能断电、断网或没开机），阿里云 22:30 会兜底', { urgent: true });
+    await notify('软路由未开始', { detail: `${day} 到 21:15 还没有运行标记（可能断电、断网或没开机），阿里云 22:30 会兜底` });
     return 1;
   }
   if (value.state === 'done') {
@@ -228,7 +232,7 @@ async function watchdog(key, tradeDate) {
     return 0;
   }
   log(`!!! ${value.host} 的心跳停在 ${value.heartbeatAt}，推送提醒`);
-  await notify(`每日更新 ${day} ${hostName(value.host)}卡住了`, `${at(value.startedAt)} 开始，心跳停在 ${at(value.heartbeatAt)}（可能断电、断网或卡死），阿里云 22:30 会接手`, { urgent: true });
+  await notify(`${hostName(value.host)}卡住了`, { detail: `${at(value.startedAt)} 开始，心跳停在 ${at(value.heartbeatAt)}，阿里云 22:30 会接手` });
   return 1;
 }
 
@@ -309,26 +313,25 @@ async function main() {
     await beating; // 等最后一次心跳写完，免得 done 用旧 ETag
   }
   if (lost) {
-    await notify(`每日更新 ${tradeDate} 被接手`, `${hostName(options.host)}跑到一半，运行标记被另一台接手，本机已停止`, { urgent: true });
+    await notify(`${hostName(options.host)}被接手，已停止`, { detail: '跑到一半运行标记被另一台接手' });
     return 1;
   }
   const done = await putStatus(key, { ...record, state: 'done', heartbeatAt: now(), finishedAt: now(), exitCode }, etag);
   log(done ? `${tradeDate} 跑完，退出码 ${exitCode}，标记已改为 done` : '!!! 写 done 时标记已被别人改了');
   const summary = summarize(output);
   const minutes = Math.round((Date.now() - started) / 60e3);
-  const head = [`${hostName(options.host)}跑完，用时 ${minutes} 分钟`, summary.firstBoards && `今日首板 ${summary.firstBoards} 只`, `大模型约 ${summary.cost}`].filter(Boolean).join('，');
+  const detail = [summary.firstBoards && `今日首板 ${summary.firstBoards} 只`, `大模型约 ${summary.cost}`, summary.failed.length && `失败：${summary.failed.join('、')}`, ...summary.warnings.slice(0, 4).map(line => `!!! ${line}`)].filter(Boolean).join('；');
   if (exitCode === 0 && !summary.failed.length) {
-    await notify(`每日更新 ${tradeDate} ✓`, [head, ...summary.warnings.slice(0, 3).map(line => `!!! ${line}`)].join('\n'));
+    await notify(`${hostName(options.host)}跑完，用时 ${minutes} 分钟`, { ok: true, detail });
   } else {
-    const lines = [head, summary.failed.length ? `失败：${summary.failed.join('、')}` : `退出码 ${exitCode}`, ...summary.warnings.slice(0, 4).map(line => `!!! ${line}`)];
-    if (options.role === 'primary') lines.push('阿里云 22:30 会重跑');
-    await notify(`每日更新 ${tradeDate} ✗`, lines.join('\n'), { urgent: true });
+    const what = summary.failed.length ? `${summary.failed.length} 步失败` : `退出码 ${exitCode}`;
+    await notify(`${hostName(options.host)}跑完，${what}`, { detail: `${detail}${options.role === 'primary' ? '；阿里云 22:30 会重跑' : ''}` });
   }
   return exitCode;
 }
 
 main().then(code => process.exit(code), async error => {
   console.error(`!!! 协调失败: ${error.stack || error.message}`);
-  await notify('每日更新协调出错', `${hostName(options.host)}：${error.message}`.slice(0, 300) + (options.role === 'primary' ? '\n阿里云 22:30 会兜底' : ''), { urgent: true });
+  await notify(`${hostName(options.host)}出错`, { detail: `${error.message.slice(0, 200)}${options.role === 'primary' ? '；阿里云 22:30 会兜底' : ''}` });
   process.exit(1);
 });
