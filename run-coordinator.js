@@ -13,6 +13,7 @@
 // 比本机上次同步新，先下载变了的部分；跑完（成功或失败）都上传本机变了的部分，再把标记改成 done。
 //
 // 用法: node run-coordinator.js --role primary|fallback [--host 名字] [--stale-minutes 15] [--max-wait-hours 4]
+//   检查：--watchdog 只看今天的运行标记，没人在跑（没有标记或心跳停了）就推 Bark，不接手（阿里云 21:15 用）
 //   维护：--sync-up 只把本机状态传到 R2；--sync-down 只从 R2 拉共享状态（另一台更新时才拉，--force 强制拉）
 //   测试：--test-command "sleep 30" 用这条命令代替 daily-update，配 --status-prefix run-status-test/ 不影响正式标记
 require('dotenv').config({ quiet: true });
@@ -27,7 +28,7 @@ const { latestClosedTradeDay } = require('./limit-up-list');
 const stateSync = require('./state-sync');
 
 const ROOT = __dirname;
-const options = { role: '', host: process.env.STOCK_REPLAY_HOST || os.hostname(), staleMinutes: 15, maxWaitHours: 4, syncUp: false, syncDown: false, force: false, testCommand: '', statusPrefix: 'run-status/', heartbeatSeconds: 120, pollSeconds: 300 };
+const options = { role: '', host: process.env.STOCK_REPLAY_HOST || os.hostname(), staleMinutes: 15, maxWaitHours: 4, syncUp: false, syncDown: false, watchdog: false, force: false, testCommand: '', statusPrefix: 'run-status/', heartbeatSeconds: 120, pollSeconds: 300 };
 for (let index = 2; index < process.argv.length; index++) {
   const argument = process.argv[index];
   if (argument === '--role') options.role = process.argv[++index];
@@ -37,13 +38,14 @@ for (let index = 2; index < process.argv.length; index++) {
   else if (argument === '--sync-up') options.syncUp = true;
   else if (argument === '--sync-down') options.syncDown = true;
   else if (argument === '--force') options.force = true;
+  else if (argument === '--watchdog') options.watchdog = true;
   else if (argument === '--test-command') options.testCommand = process.argv[++index];
   else if (argument === '--status-prefix') options.statusPrefix = process.argv[++index];
   else if (argument === '--heartbeat-seconds') options.heartbeatSeconds = Number(process.argv[++index]);
   else if (argument === '--poll-seconds') options.pollSeconds = Number(process.argv[++index]);
   else throw new Error(`未知参数: ${argument}`);
 }
-if (!options.syncUp && !options.syncDown && !['primary', 'fallback'].includes(options.role)) throw new Error('--role 必须是 primary 或 fallback');
+if (!options.syncUp && !options.syncDown && !options.watchdog && !['primary', 'fallback'].includes(options.role)) throw new Error('--role 必须是 primary 或 fallback');
 if (!r2Client) throw new Error('R2 未配置，主备协调要用 R2');
 
 
@@ -205,6 +207,31 @@ async function claim(key, tradeDate) {
   }
 }
 
+// 21:15 进度检查（阿里云 2026-11-19）：软路由 21:00 开跑，到这时应该已经拿到标记、在跑或跑完了。
+// 没有标记、心跳停了才推送（时效性）；正在跑、已跑完都只记日志。跑完但失败的，软路由自己会推「✗」，这里不重复。
+async function watchdog(key, tradeDate) {
+  const status = await getStatus(key);
+  const value = status?.value;
+  const at = iso => new Date(Date.parse(iso) + 8 * 3600e3).toISOString().slice(11, 16);
+  const day = tradeDate.slice(5);
+  if (!value) {
+    log(`!!! ${tradeDate} 还没有运行标记，推送提醒`);
+    await notify(`每日更新 ${day} 软路由没开始`, '到 21:15 还没有运行标记（可能断电、断网或没开机），阿里云 22:30 会兜底', { urgent: true });
+    return 1;
+  }
+  if (value.state === 'done') {
+    log(`${tradeDate} 已由 ${value.host} 在 ${value.finishedAt} 跑完，退出码 ${value.exitCode}`);
+    return 0;
+  }
+  if (fresh(status)) {
+    log(`${value.host} 正在跑 ${tradeDate}（${at(value.startedAt)} 开始，心跳 ${at(value.heartbeatAt)}）`);
+    return 0;
+  }
+  log(`!!! ${value.host} 的心跳停在 ${value.heartbeatAt}，推送提醒`);
+  await notify(`每日更新 ${day} ${hostName(value.host)}卡住了`, `${at(value.startedAt)} 开始，心跳停在 ${at(value.heartbeatAt)}（可能断电、断网或卡死），阿里云 22:30 会接手`, { urgent: true });
+  return 1;
+}
+
 // 共享状态增量同步（state-sync.js）：R2 上的是另一台更新的、且比本机上次同步新，才下载变了的部分
 async function syncDown() {
   const started = Date.now();
@@ -226,6 +253,7 @@ async function main() {
   }
   const { date: tradeDate } = await withRetry('查最近交易日', () => latestClosedTradeDay());
   const key = `${options.statusPrefix}${tradeDate}.json`;
+  if (options.watchdog) return watchdog(key, tradeDate);
   log(`${options.host}（${options.role === 'primary' ? '主' : '备'}）检查 ${tradeDate}`);
   const claimed = await claim(key, tradeDate);
   if (!claimed) return 0;

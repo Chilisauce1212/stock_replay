@@ -1,0 +1,9 @@
+# 每个交易日 21:15（北京时间）检查软路由（21:00 做主）有没有开始跑；节假日最近交易日已跑完，不会提醒
+[Unit]
+Description=stock_replay 每日更新进度检查定时器
+
+[Timer]
+OnCalendar=Mon..Fri 21:15 Asia/Shanghai
+
+[Install]
+WantedBy=timers.target

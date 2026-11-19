@@ -1,0 +1,15 @@
+# Bark 调试页（阿里云，2026-11-19）：http://<阿里云公网 IP>:1212/ ，用户名 bark，密码在 reports/bark-debug.pass
+# 不用了就：systemctl disable --now stock-replay-bark-debug，再关掉安全组的 1212
+[Unit]
+Description=stock_replay Bark 调试页
+After=network-online.target
+
+[Service]
+WorkingDirectory=/root/stock_replay
+ExecStart=/usr/bin/env node /root/stock_replay/deploy/bark-debug.js
+Restart=on-failure
+RestartSec=5
+MemoryMax=150M
+
+[Install]
+WantedBy=multi-user.target

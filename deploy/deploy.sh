@@ -1,7 +1,7 @@
 #!/bin/sh
 # 在本机（Windows 的 Git Bash）把当前提交的代码部署出去：只传 git 里的文件，不动数据、.env、问财登录状态。
 # 用法: sh deploy/deploy.sh [aliyun|router|all]（默认 all）
-#   aliyun：阿里云服务器（兜底，systemd 定时器 22:30）
+#   aliyun：阿里云服务器（兜底，systemd 定时器 22:30；21:15 查软路由进度；1212 端口 Bark 调试页）
 #   router：家里软路由（做主，Docker 容器 stock-replay 里跑，cron 21:00；首次要先跑 deploy/router-setup.sh）
 set -e
 cd "$(dirname "$0")/.."
@@ -13,7 +13,7 @@ router_ssh() { ssh $KEY -o ServerAliveInterval=15 -o HostKeyAlias=100.117.121.11
 ROUTER_DIR=/mnt/sata2-4/stock_replay
 
 if [ "$TARGET" = aliyun ] || [ "$TARGET" = all ]; then
-  git -c core.autocrlf=false archive --format=tar HEAD | gzip | $ALIYUN 'cd /root/stock_replay && tar xzf - && npm ci --no-audit --no-fund --silent && cp deploy/stock-replay-daily.service deploy/stock-replay-daily.timer /etc/systemd/system/ && systemctl daemon-reload && echo 阿里云部署完成'
+  git -c core.autocrlf=false archive --format=tar HEAD | gzip | $ALIYUN 'cd /root/stock_replay && tar xzf - && npm ci --no-audit --no-fund --silent && cp deploy/stock-replay-daily.service deploy/stock-replay-daily.timer deploy/stock-replay-watchdog.service deploy/stock-replay-watchdog.timer deploy/stock-replay-bark-debug.service /etc/systemd/system/ && systemctl daemon-reload && systemctl enable --now stock-replay-watchdog.timer && systemctl enable stock-replay-bark-debug && systemctl restart stock-replay-bark-debug && echo 阿里云部署完成'
 fi
 if [ "$TARGET" = router ] || [ "$TARGET" = all ]; then
   git -c core.autocrlf=false archive --format=tar HEAD | gzip | router_ssh "mkdir -p $ROUTER_DIR && cd $ROUTER_DIR && tar xzf - && docker exec stock-replay npm ci --no-audit --no-fund --silent --registry=https://registry.npmmirror.com && echo 软路由部署完成"

@@ -1,0 +1,12 @@
+# 21:15 看软路由有没有在跑今天的每日更新（阿里云，2026-11-19）：没有运行标记或心跳停了就推 Bark；只检查、不接手（22:30 的兜底照常）
+[Unit]
+Description=stock_replay 每日更新进度检查
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/root/stock_replay
+ExecStart=/usr/bin/env node /root/stock_replay/run-coordinator.js --watchdog
+Environment=STOCK_REPLAY_HOST=aliyun
+TimeoutStartSec=20min
