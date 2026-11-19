@@ -37,13 +37,16 @@ const today = () => beijing().toISOString().slice(0, 10);
 const clock = () => beijing().toISOString().slice(11, 16);
 const log = message => console.log(`[${beijing().toISOString().slice(11, 19)}] ${message}`);
 
-async function notify(title, body) {
-  log(`${options.dryRun ? '（不推送）' : '推送'}${title}：${body}`);
+// 用户主要用 AirPods 听（Siri 朗读通知），所以推送只有一句短话、不带标题，如「康盛股份 冲高6.5%」；
+// 太长 Siri 会先问要不要朗读、读得也慢。细节只写日志。全部用时效性（专注模式下也响）
+async function notify(spoken, detail = '') {
+  log(`${options.dryRun ? '（不推送）' : '推送'}${spoken}${detail ? `｜${detail}` : ''}`);
   const base = String(process.env.BARK_URL || '').replace(/\/+$/, '');
   if (!base || options.dryRun) return;
-  const query = new URLSearchParams({ group: '盯盘', level: 'timeSensitive' }); // 用户要求盯盘提醒全部用时效性（专注模式下也响）
+  // 点通知打开同花顺 App（amihexin:// 实测能拉起 App；跳到个股的格式还没找到，网页个股页只会开浏览器）
+  const query = new URLSearchParams({ group: '盯盘', level: 'timeSensitive', url: 'amihexin://' });
   try {
-    const response = await fetch(`${base}/${encodeURIComponent(title)}/${encodeURIComponent(body)}?${query}`, { signal: AbortSignal.timeout(10_000) });
+    const response = await fetch(`${base}/${encodeURIComponent(spoken)}?${query}`, { signal: AbortSignal.timeout(10_000) });
     if (!response.ok) log(`Bark 推送失败：HTTP ${response.status}`);
   } catch (error) {
     log(`Bark 推送失败：${error.message}`);
@@ -127,6 +130,11 @@ function limitUpPrice(symbol, prevClose, price = 0) {
 
 const hands = volume => `${Math.round(volume / 100).toLocaleString('zh-CN')} 手`;
 const wan = (volume, price) => `${Math.round((volume * price) / 1e4).toLocaleString('zh-CN')} 万`;
+// 朗读用的金额：1 亿以上「2.1亿」，以下按百万取整「5700万」
+const money = (volume, price) => {
+  const yuan = volume * price;
+  return yuan >= 1e8 ? `${(yuan / 1e8).toFixed(1).replace(/\.0$/, '')}亿` : `${Math.max(100, Math.round(yuan / 1e6) * 100)}万`;
+};
 
 // ---------- 规则 ----------
 const states = new Map();
@@ -136,27 +144,30 @@ async function check(quote) {
   states.set(quote.symbol, state);
   const pct = (quote.price / quote.prevClose - 1) * 100;
   const limit = limitUpPrice(quote.symbol, quote.prevClose, quote.price);
-  const label = `${quote.name}（${quote.symbol.slice(2)}）`;
-
-  if (!state.riseAlerted && pct >= options.rise) {
-    state.riseAlerted = true;
-    await notify(`冲高 ${label}`, `涨 ${pct.toFixed(2)}%，现价 ${quote.price.toFixed(2)}，涨停价 ${limit.toFixed(2)}（${quote.time}）`);
-  } else if (state.riseAlerted && pct < options.rise - 2) state.riseAlerted = false;
+  const name = quote.name.replace(/\s+/g, '');
+  const code = quote.symbol.slice(2);
 
   const sealedNow = Math.abs(quote.price - limit) < 0.005 && Math.abs(quote.bid1.price - limit) < 0.005 && quote.ask1.volume === 0;
+  // 直接封板的只报封板，不再先报一句冲高
+  if (!state.riseAlerted && pct >= options.rise && sealedNow) state.riseAlerted = true;
+  else if (!state.riseAlerted && pct >= options.rise) {
+    state.riseAlerted = true;
+    await notify(`${name} 冲高${pct.toFixed(1).replace(/\.0$/, '')}%`, `${code} 现价 ${quote.price.toFixed(2)}，涨停价 ${limit.toFixed(2)}（${quote.time}）`);
+  } else if (state.riseAlerted && pct < options.rise - 2) state.riseAlerted = false;
+
   if (sealedNow) {
     const seal = quote.bid1.volume;
     if (!state.sealed) {
       Object.assign(state, { sealed: true, peak: seal, dropAlerted: false });
-      await notify(`封板 ${label}`, `封单 ${hands(seal)}（${wan(seal, limit)}）（${quote.time}）`);
+      await notify(`${name} 封板${money(seal, limit)}`, `${code} 封单 ${hands(seal)}（${wan(seal, limit)}）（${quote.time}）`);
     } else if (seal > state.peak) state.peak = seal;
     else if (!state.dropAlerted && seal < state.peak * options.sealDrop) {
       state.dropAlerted = true;
-      await notify(`封单减少 ${label}`, `剩 ${hands(seal)}（${wan(seal, limit)}），最多时 ${hands(state.peak)}，已降到 ${Math.round((seal / state.peak) * 100)}%（${quote.time}）`);
+      await notify(`${name} 封单降到${Math.round((seal / state.peak) * 100)}%`, `${code} 剩 ${hands(seal)}（${wan(seal, limit)}），最多时 ${hands(state.peak)}（${quote.time}）`);
     }
   } else if (state.sealed) {
     state.sealed = false;
-    await notify(`炸板 ${label}`, `现价 ${quote.price.toFixed(2)}，涨 ${pct.toFixed(2)}%，卖一 ${hands(quote.ask1.volume)}（${quote.time}）`);
+    await notify(`${name} 炸板`, `${code} 现价 ${quote.price.toFixed(2)}，涨 ${pct.toFixed(2)}%，卖一 ${hands(quote.ask1.volume)}（${quote.time}）`);
   }
 }
 

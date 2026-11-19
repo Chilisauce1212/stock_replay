@@ -19,12 +19,13 @@ if (waitIndex > 0) options.waitMinutes = Number(process.argv[waitIndex + 1]);
 const sleep = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
 const log = message => console.log(`[${new Date(Date.now() + 8 * 3600e3).toISOString().slice(11, 19)}] ${message}`);
 
-async function bark(title, body, extra = {}) {
+// 用户用 AirPods 听通知：只推一句短话、不带标题（太长 Siri 会先问要不要朗读）；细节写日志
+async function bark(spoken, extra = {}) {
   const base = String(process.env.BARK_URL || '').replace(/\/+$/, '');
   if (!base) return log('没配 BARK_URL，不推送');
   const query = new URLSearchParams({ group: '盯盘', level: 'timeSensitive', ...extra });
   try {
-    const response = await fetch(`${base}/${encodeURIComponent(title)}/${encodeURIComponent(body)}?${query}`, { signal: AbortSignal.timeout(10_000) });
+    const response = await fetch(`${base}/${encodeURIComponent(spoken)}?${query}`, { signal: AbortSignal.timeout(10_000) });
     if (!response.ok) log(`Bark 推送失败：HTTP ${response.status}`);
   } catch (error) {
     log(`Bark 推送失败：${error.message}`);
@@ -89,7 +90,7 @@ async function login() {
     if (errorCode !== 0 || !qrid) throw new Error(`拿不到二维码：errorCode ${errorCode}`);
     const image = `${BASE}/scan/creatImg?qrid=${encodeURIComponent(qrid)}`;
     log(`二维码 ${attempt}/${options.maxCodes} 已生成，推送到手机`);
-    await bark('同花顺要扫码登录', `盯盘读自选要用同花顺网页登录（7 天有效）。点开通知看二维码，长按存到相册，用同花顺 App 扫一扫里「相册」识别（第 ${attempt} 张，过期会自动再发）`, { image, url: image });
+    await bark(attempt === 1 ? '同花顺要扫码登录' : '同花顺二维码已更新', { image, url: image }); // 点开看二维码，存相册后用同花顺 App 扫一扫从相册识别
     let state = 1;
     while (Date.now() < deadline) {
       const result = await request('/scan/getInfoNew', { method: 'POST', form: { qrid, state, source: 'pc_web', page_source: 'web_screen', request_type: 'login' } });
@@ -127,11 +128,11 @@ async function main() {
   const list = await fetchWatchlist();
   const until = Number.isFinite(newExpiry) ? new Date(newExpiry + 8 * 3600e3).toISOString().slice(5, 16).replace('T', ' ') : '会话结束';
   log(`登录成功，有效到 ${until}，自选 A 股 ${list.length} 只`);
-  await bark('同花顺登录成功', `有效到 ${until}，读到自选 A 股 ${list.length} 只`);
+  await bark(`同花顺登录成功，自选${list.length}只`);
 }
 
 main().catch(async error => {
   log(`!!! 同花顺扫码登录失败：${error.message}`);
-  await bark('同花顺扫码登录失败', error.message.slice(0, 300));
+  await bark('同花顺扫码登录失败');
   process.exit(1);
 });
