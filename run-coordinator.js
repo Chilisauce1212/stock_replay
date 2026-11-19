@@ -53,28 +53,69 @@ const sleep = milliseconds => new Promise(resolve => setTimeout(resolve, millise
 const isPrecondition = error => error?.name === 'PreconditionFailed' || error?.$metadata?.httpStatusCode === 412;
 const isMissing = error => error?.name === 'NoSuchKey' || error?.$metadata?.httpStatusCode === 404;
 
-async function getStatus(key) {
-  try {
-    const response = await r2Client.send(new GetObjectCommand({ Bucket: R2_BUCKET, Key: key }));
-    return { etag: response.ETag, value: JSON.parse(await response.Body.transformToString()) };
-  } catch (error) {
-    if (isMissing(error)) return null;
-    throw error;
+// 网络重试（2026-11-19）：那天 21:00 软路由连 R2 时网络抖了一下（TLS 断开），协调直接退出、整晚没跑，Bark 也没发出去。
+// 连接类错误（断网、DNS、TLS、超时、5xx）每 30 秒重试一次，最多 10 次（约 5 分钟）；R2 的条件写冲突、不存在这类正常结果不重试。
+const RETRY_TIMES = Number(process.env.COORDINATOR_RETRY_TIMES || 10);
+const RETRY_SECONDS = Number(process.env.COORDINATOR_RETRY_SECONDS || 30);
+function isNetworkError(error) {
+  if (isPrecondition(error) || isMissing(error)) return false;
+  const status = error?.$metadata?.httpStatusCode;
+  if (status) return status >= 500 || status === 429;
+  // 没有 HTTP 状态码：只认连接类错误（连不上、TLS 断开、DNS、超时），代码 bug 之类不重试
+  const text = [error?.name, error?.code, error?.cause?.code, error?.message, error?.cause?.message].filter(Boolean).join(' ');
+  return /fetch failed|socket|TLS|ECONN|EPIPE|ETIMEDOUT|EAI_AGAIN|ENOTFOUND|ENETUNREACH|EHOSTUNREACH|UND_ERR|Timeout|AbortError|network|timed out/i.test(text);
+}
+async function withRetry(label, task) {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await task(attempt);
+    } catch (error) {
+      if (!isNetworkError(error) || attempt >= RETRY_TIMES) throw error;
+      const reason = error.cause?.code || error.code || error.message;
+      log(`${label}失败（${String(reason).slice(0, 100)}），${RETRY_SECONDS} 秒后重试（${attempt}/${RETRY_TIMES - 1}）`);
+      await sleep(RETRY_SECONDS * 1000);
+    }
   }
 }
 
-// 条件写：etag 为 null 表示只在不存在时创建；返回新 ETag，被别人抢先返回 null
-async function putStatus(key, value, etag) {
-  try {
-    const response = await r2Client.send(new PutObjectCommand({
-      Bucket: R2_BUCKET, Key: key, Body: JSON.stringify(value, null, 1), ContentType: 'application/json',
-      ...(etag ? { IfMatch: etag } : { IfNoneMatch: '*' }),
-    }));
-    return response.ETag;
-  } catch (error) {
-    if (isPrecondition(error)) return null;
-    throw error;
-  }
+async function getStatus(key) {
+  return withRetry('读运行标记', async () => {
+    try {
+      const response = await r2Client.send(new GetObjectCommand({ Bucket: R2_BUCKET, Key: key }));
+      return { etag: response.ETag, value: JSON.parse(await response.Body.transformToString()) };
+    } catch (error) {
+      if (isMissing(error)) return null;
+      throw error;
+    }
+  });
+}
+
+// 条件写：etag 为 null 表示只在不存在时创建；返回新 ETag，被别人抢先返回 null。
+// 网络错误会重试。条件不满足时读回来看：标记仍是本机这一轮的（同一 host、同一 startedAt），说明是上一次写进去了但回应丢了，
+// ETag 已经变了；换成现在的 ETag 再写一次，免得把自己当成「被别人接手」
+async function putStatus(key, value, etag, { retry = true } = {}) {
+  const body = JSON.stringify(value, null, 1);
+  let expected = etag;
+  const write = async () => {
+    for (let round = 0; round < 3; round++) {
+      try {
+        const response = await r2Client.send(new PutObjectCommand({
+          Bucket: R2_BUCKET, Key: key, Body: body, ContentType: 'application/json',
+          ...(expected ? { IfMatch: expected } : { IfNoneMatch: '*' }),
+        }));
+        return response.ETag;
+      } catch (error) {
+        if (!isPrecondition(error)) throw error;
+        const current = await getStatus(key);
+        const ours = current && current.value.host === value.host && current.value.startedAt === value.startedAt;
+        if (!ours) return null;
+        if (JSON.stringify(current.value, null, 1) === body) return current.etag;
+        expected = current.etag;
+      }
+    }
+    return null;
+  };
+  return retry ? withRetry('写运行标记', write) : write();
 }
 
 const fresh = status => status && Date.now() - Date.parse(status.value.heartbeatAt || status.value.startedAt) < options.staleMinutes * 60e3;
@@ -85,9 +126,13 @@ async function notify(title, body, { urgent = false } = {}) {
   const base = String(process.env.BARK_URL || '').replace(/\/+$/, '');
   if (!base || options.testCommand) return;
   const query = new URLSearchParams({ group: '每日更新', level: urgent ? 'timeSensitive' : 'active' });
+  // 网络不通时同样每 30 秒重试，最多约 5 分钟：Bark 一恢复就把问题推出去
   try {
-    const response = await fetch(`${base}/${encodeURIComponent(title)}/${encodeURIComponent(body.slice(0, 1200))}?${query}`, { signal: AbortSignal.timeout(15_000) });
-    if (!response.ok) log(`Bark 通知失败：HTTP ${response.status}`);
+    await withRetry('Bark 通知', async () => {
+      const response = await fetch(`${base}/${encodeURIComponent(title)}/${encodeURIComponent(body.slice(0, 1200))}?${query}`, { signal: AbortSignal.timeout(15_000) });
+      if (response.status >= 500 || response.status === 429) throw Object.assign(new Error(`HTTP ${response.status}`), { $metadata: { httpStatusCode: response.status } });
+      if (!response.ok) log(`Bark 通知失败：HTTP ${response.status}`);
+    });
   } catch (error) {
     log(`Bark 通知失败：${error.message}`);
   }
@@ -163,13 +208,13 @@ async function claim(key, tradeDate) {
 // 共享状态增量同步（state-sync.js）：R2 上的是另一台更新的、且比本机上次同步新，才下载变了的部分
 async function syncDown() {
   const started = Date.now();
-  await stateSync.download(ROOT, options.host, { force: options.force, log });
+  await withRetry('下载共享状态', () => stateSync.download(ROOT, options.host, { force: options.force, log }));
   log(`同步检查用时 ${Math.round((Date.now() - started) / 1000)} 秒`);
 }
 
 async function syncUp() {
   const started = Date.now();
-  await stateSync.upload(ROOT, options.host, log);
+  await withRetry('上传共享状态', () => stateSync.upload(ROOT, options.host, log));
   log(`上传用时 ${Math.round((Date.now() - started) / 1000)} 秒`);
 }
 
@@ -179,7 +224,7 @@ async function main() {
     if (options.syncUp) await syncUp();
     return 0;
   }
-  const { date: tradeDate } = await latestClosedTradeDay();
+  const { date: tradeDate } = await withRetry('查最近交易日', () => latestClosedTradeDay());
   const key = `${options.statusPrefix}${tradeDate}.json`;
   log(`${options.host}（${options.role === 'primary' ? '主' : '备'}）检查 ${tradeDate}`);
   const claimed = await claim(key, tradeDate);
@@ -192,7 +237,7 @@ async function main() {
   const beat = setInterval(() => { beating = beating.then(async () => {
     if (lost) return;
     try {
-      const next = await putStatus(key, { ...record, heartbeatAt: now() }, etag);
+      const next = await putStatus(key, { ...record, heartbeatAt: now() }, etag, { retry: false }); // 心跳每 2 分钟一次，失败等下一次
       if (next) etag = next;
       else {
         lost = true;
@@ -256,6 +301,6 @@ async function main() {
 
 main().then(code => process.exit(code), async error => {
   console.error(`!!! 协调失败: ${error.stack || error.message}`);
-  await notify('每日更新协调出错', `${hostName(options.host)}：${error.message}`.slice(0, 300), { urgent: true });
+  await notify('每日更新协调出错', `${hostName(options.host)}：${error.message}`.slice(0, 300) + (options.role === 'primary' ? '\n阿里云 22:30 会兜底' : ''), { urgent: true });
   process.exit(1);
 });
