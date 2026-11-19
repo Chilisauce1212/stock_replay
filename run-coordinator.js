@@ -132,6 +132,7 @@ async function notify(body, { ok = false, detail = '' } = {}) {
   if (!base || options.testCommand) return;
   const title = ok ? '🟢每日更新' : '🔴每日更新';
   const query = new URLSearchParams({ group: '每日更新', level: ok ? 'active' : 'timeSensitive' });
+  if (ok) query.set('url', 'https://stock-replay.onrender.com/'); // 跑完的通知点开直接看复盘页面
   // 网络不通时同样每 30 秒重试，最多约 5 分钟：Bark 一恢复就把问题推出去
   try {
     await withRetry('Bark 通知', async () => {
