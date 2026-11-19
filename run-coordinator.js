@@ -125,13 +125,15 @@ const fresh = status => status && Date.now() - Date.parse(status.value.heartbeat
 // Bark 推送到用户 iPhone（2026-11-19）：.env 的 BARK_URL=https://api.day.app/<密钥>；没配就不发，发送失败只记日志。
 // 用户靠 AirPods 听（2026-11-19 改短）：标题只有「🟢每日更新」「🔴每日更新」，正文一句话，例如「软路由跑完，用时 35 分钟」「软路由未开始」；
 // 长了 Siri 会先问要不要朗读。细节（失败的步骤、警告、费用、原因）只写日志。
-// 出问题（🔴）用 timeSensitive（专注模式下也提醒），成功（🟢）用普通通知；测试命令（--test-command）不发
-async function notify(body, { ok = false, detail = '' } = {}) {
-  log(`推送 ${ok ? '🟢' : '🔴'}${body}${detail ? `｜${detail}` : ''}`);
+// 出问题（🔴）用 timeSensitive（专注模式下也提醒），成功（🟢）用普通通知；「开始跑」是中性的（neutral），标题不带状态、不带跳转；
+// 测试命令（--test-command）不发
+async function notify(body, { ok = false, neutral = false, detail = '' } = {}) {
+  const mark = neutral ? '' : ok ? '🟢' : '🔴';
+  log(`推送 ${mark}${body}${detail ? `｜${detail}` : ''}`);
   const base = String(process.env.BARK_URL || '').replace(/\/+$/, '');
   if (!base || options.testCommand) return;
-  const title = ok ? '🟢每日更新' : '🔴每日更新';
-  const query = new URLSearchParams({ group: '每日更新', level: ok ? 'active' : 'timeSensitive' });
+  const title = `${mark}每日更新`;
+  const query = new URLSearchParams({ group: '每日更新', level: ok || neutral ? 'active' : 'timeSensitive' });
   if (ok) query.set('url', 'https://stock-replay.onrender.com/'); // 跑完的通知点开直接看复盘页面
   // 网络不通时同样每 30 秒重试，最多约 5 分钟：Bark 一恢复就把问题推出去
   try {
@@ -262,6 +264,7 @@ async function main() {
   log(`${options.host}（${options.role === 'primary' ? '主' : '备'}）检查 ${tradeDate}`);
   const claimed = await claim(key, tradeDate);
   if (!claimed) return 0;
+  if (options.role === 'primary') await notify(`${hostName(options.host)}开始跑`, { neutral: true }); // 备机接手时已推「阿里云接手」
   let { etag, record } = claimed;
   let lost = false;
   let child;
