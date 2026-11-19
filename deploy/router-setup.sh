@@ -23,11 +23,17 @@ docker exec stock-replay sh -c '
 '
 # 容器重建后 apt 装的系统依赖会丢：开机/重建后由 cron 前的检查补装（见下面 ensure 行）
 LINE='0 21 * * 1-5 docker exec stock-replay sh /app/deploy/run-daily.sh'
+# 盘中盯自选：9:14 启动、15:01 自己退出（节假日看到行情日期不是今天就退出）
+WATCH='14 9 * * 1-5 docker exec stock-replay sh /app/deploy/run-watch.sh'
+# 同花顺登录（盯盘读自选用）：8:30 检查，剩不到 2 天或读不到自选就把二维码推到手机扫（扫码登录 30 天有效）
+THS_LOGIN='30 8 * * 1-5 docker exec stock-replay sh -c "node /app/ths-qr-login.js --if-needed >> /app/reports/ths-login.log 2>&1"'
 ENSURE='50 20 * * 1-5 docker exec stock-replay sh -c "ldd /app/.pw-browsers/chromium_headless_shell-*/chrome-*/headless_shell 2>/dev/null | grep -q \"not found\" && PLAYWRIGHT_BROWSERS_PATH=/app/.pw-browsers npx playwright install-deps chromium-headless-shell >/dev/null 2>&1; true"'
 touch /etc/crontabs/root
 grep -v 'stock-replay' /etc/crontabs/root > /tmp/crontab.new || true
 echo "$ENSURE" >> /tmp/crontab.new
 echo "$LINE" >> /tmp/crontab.new
+echo "$WATCH" >> /tmp/crontab.new
+echo "$THS_LOGIN" >> /tmp/crontab.new
 cp /tmp/crontab.new /etc/crontabs/root && rm /tmp/crontab.new
 /etc/init.d/cron enable >/dev/null 2>&1 || true
 /etc/init.d/cron restart

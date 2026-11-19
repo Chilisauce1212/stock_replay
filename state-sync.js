@@ -20,7 +20,7 @@ const MANIFEST_KEY = `${PREFIX}manifest.json`;
 const BLOB_PREFIX = `${PREFIX}blobs/`;
 const DIRS = ['reports', 'daily-review', 'test-cases'];
 // 日志、问财登录状态（各机器自己的凭证）、同步自己的记录、临时文件不同步
-const EXCLUDE = [/^reports\/daily-update-.*\.log$/, /^reports\/wencai-state\.json$/, /^reports\/\.state-(sync|manifest)\.json$/, /\.tmp$/, /\.sync-tmp$/];
+const EXCLUDE = [/^reports\/(daily-update|watch)-.*\.log$/, /^reports\/ths-login\.log$/, /^reports\/(wencai|ths)-state\.json$/, /^reports\/\.state-(sync|manifest)\.json$/, /\.tmp$/, /\.sync-tmp$/];
 const CHUNK_MIN_BYTES = 8 * 1048576;
 const CHUNK_ENTRIES = 2000;
 const CONCURRENCY = 6;
