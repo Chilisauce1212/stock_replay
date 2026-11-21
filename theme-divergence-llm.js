@@ -2,7 +2,7 @@
 'use strict';
 
 // 题材内部分化：让模型判断（prompts/theme-divergence.md，2026-11-12 用户要求）。
-// 题材日历里，同一事件题材当天首板 ≥ 3 只、又有二板及以上的票时，把首板和高位票各自的催化 event、依据标题交给模型，
+// 题材日历里，同一事件题材当天首板 ≥ 3 只、二板及以上正好 1 只时（2026-11-21 起，以前是有就行），把首板和高位票各自的催化 event、依据标题交给模型，
 // 问首板是不是同题材下的一次新发酵，给出区分关键词。结果写 reports/theme-divergence.json，news-calendar.js 读它标「分化?」。
 // 每个交易日调用一次（只送当天的候选题材），关思考。输入来自新闻日历月份文件（reports/新闻日历/）和 reports/theme-events.json，
 // 所以要在 news-calendar.js 生成过之后跑；跑完再跑一次 news-calendar.js 才会显示。
@@ -14,13 +14,12 @@ const fs = require('fs');
 const path = require('path');
 const { callModel, parseReply, hashOf, OFF_PEAK_PRICE, PEAK_PRICE } = require('./news-llm');
 const { makeThemeMerger } = require('./theme-events');
-const { GENERIC_THEMES } = require('./theme-divergence');
+const { GENERIC_THEMES, isCandidate } = require('./theme-divergence');
 
 const ROOT = __dirname;
 const PROMPT_FILE = path.join(ROOT, 'prompts', 'theme-divergence.md');
 const OUT_FILE = path.join(ROOT, 'reports', 'theme-divergence.json');
 const CALENDAR_DIR = path.join(ROOT, 'reports', '新闻日历');
-const MIN_FIRST = 3;
 const MAX_FIRST_LISTED = 12; // 首板太多时只列前 12 只，够看出共同催化
 const MAX_TITLES = 3;
 const CONFIRM_ABOVE = 30;
@@ -61,7 +60,7 @@ function evidenceIndex() {
   return evidence;
 }
 
-// 每个交易日的候选题材：首板 ≥ 3 只且有二板及以上，不含按公司事项归的通用题材
+// 每个交易日的候选题材：首板 ≥ 3 只、二板及以上正好 1 只（theme-divergence.js isCandidate），不含按公司事项归的通用题材
 function buildPlans(options) {
   const evidence = evidenceIndex();
   const plans = [];
@@ -77,7 +76,7 @@ function buildPlans(options) {
         const members = day.stocks.filter(stock => stock.et?.includes(theme.n));
         const first = members.filter(stock => stock.s === 1);
         const high = members.filter(stock => stock.s >= 2);
-        if (first.length < MIN_FIRST || !high.length) continue;
+        if (!isCandidate(first.length, high.length)) continue;
         const describe = stock => {
           const key = `${stock.c}|${stock.fd || day.d}`;
           const event = (month.events[key] || []).find(item => item.t === theme.n);

@@ -9,6 +9,10 @@
 const COMMON_SHARE = 0.5;
 const MIN_SUPPORT = 3;
 const MIN_FIRST = 3; // 当天首板少于 3 只时「共同关键词」太偶然，不判断（2026-11-11 用户定）
+// 二板及以上只能有 1 只（2026-11-21 用户定）：2026 年回看，二板及以上有 2 只以上时分化后首板几乎没走出来
+// （三板及以上 ≥2 只的 24 次里首板成为最高板 0 次），所以只在「首板一群 + 高位票就 1 只」时判断分化
+const MAX_HIGH = 1;
+const isCandidate = (firstCount, highCount) => firstCount >= MIN_FIRST && highCount >= 1 && highCount <= MAX_HIGH;
 const STOP = new Set(['涨停', '板块', '概念', '多股', '个股', '公司', '股份', '受益', '发布', '相关', '行业', '产业', '市场', '加速', '推动', '提速',
   '利好', '走强', '走高', '大涨', '拉升', '异动', '活跃', '催化', '订单', '业绩', '增长', '项目', '持续', '有望', '迎来', '全面', '重磅', '最新',
   '机构', '看好', '布局', '业务', '领域', '方向', '龙头', '集体', '爆发', '涨价', '中国', '国内', '全球', '首次', '今年', '上半', '半年', '年报',
@@ -48,8 +52,9 @@ const RECAP_TITLE = /复盘|收评|午评|早评|盘前|盘后|龙虎榜|人气|
 // 返回 null 或 { fe: 首板里最多的事件描述, fc, f: 首板只数, t: [[共同新标题, 挂了几只首板]], w: 这些标题里高位票没出现过的两字词（页面高亮用）, h: [{ n, s, e }] 高位票 }
 function divergence(themeName, first, high) {
   if (GENERIC_THEMES.has(themeName)) return null;
+  if (!isCandidate(first.length, high.length)) return null;
   high = high.filter(item => item.titles.length); // 高位票没有新闻时判断不了，不算
-  if (first.length < MIN_FIRST || !high.length) return null;
+  if (!high.length) return null;
   const need = Math.max(MIN_SUPPORT, Math.ceil(first.length * COMMON_SHARE));
   const highTitles = new Set(high.flatMap(item => item.titles));
   // 还要被模型当作这个题材的依据引用过（至少一只首板），保证是和这个题材有关的催化，不是「直线涨停！多只股票异动」这种盘面标题
@@ -75,4 +80,4 @@ function divergence(themeName, first, high) {
   };
 }
 
-module.exports = { keywords, divergence, GENERIC_THEMES };
+module.exports = { keywords, divergence, isCandidate, GENERIC_THEMES, MIN_FIRST, MAX_HIGH };

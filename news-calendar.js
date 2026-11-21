@@ -23,7 +23,7 @@ const path = require('path');
 const { RULES, makeTagger, buildDays } = require('./stock-pick');
 const { fetchPool, updateLimitUpList } = require('./limit-up-list');
 const { Worker, healthyHosts } = require('./tdx_tick');
-const { divergence } = require('./theme-divergence');
+const { divergence, isCandidate } = require('./theme-divergence');
 const { makeThemeMerger } = require('./theme-events');
 
 const ROOT = __dirname;
@@ -324,7 +324,8 @@ function buildMonths(byDay, days, stocksOf, times, newsCache, llm, evidence, eve
         const firstSide = members.filter(stock => stock.s === 1).map(side);
         const highSide = members.filter(stock => stock.s >= 2).map(side);
         const byKeyword = divergence(name, firstSide, highSide);
-        const byModel = modelDivergence[date]?.themes?.[name]?.split ? modelDivergence[date].themes[name] : null;
+        // 首板 ≥ 3、二板及以上正好 1 只才算候选（2026-11-21 用户定）；以前判过、不符合这个前提的模型结果也不再标
+        const byModel = isCandidate(firstSide.length, highSide.length) && modelDivergence[date]?.themes?.[name]?.split ? modelDivergence[date].themes[name] : null;
         let fx = null;
         if (byKeyword || byModel) {
           const events = new Map();
