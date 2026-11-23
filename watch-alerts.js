@@ -140,6 +140,9 @@ const money = (volume, price) => {
 const states = new Map();
 async function check(quote) {
   if (!(quote.prevClose > 0) || !(quote.price > 0)) return; // 停牌或竞价还没价
+  // 14:57 起是收盘集合竞价，新浪的买一/卖一变成撮合信息，不再是涨停价上的挂单，按挂单判断会误报炸板
+  // （2026-11-23 长华集团 14:57:02 现价仍是涨停价、卖一 0 手，却报了炸板）。竞价期间不判断，状态原样保留
+  if (quote.time >= '14:57:00') return;
   const state = states.get(quote.symbol) || { riseAlerted: false, sealed: false, peak: 0, dropAlerted: false };
   states.set(quote.symbol, state);
   const pct = (quote.price / quote.prevClose - 1) * 100;
