@@ -4,7 +4,7 @@
 // 抓新闻链接的原文正文，给大模型判断新闻用：股票名称、事件原因经常只出现在正文里。
 // 同花顺新闻页（news./t./mp.10jqka.com.cn）和微信文章要执行脚本才有正文，所以用无头 Chrome 渲染后取文字；
 // 其中同花顺号文章（mp.10jqka.com.cn）先直接取页面调用的正文接口，失败再用浏览器。
-// 正文按链接缓存在 reports/news-body-cache.json，抓过的不再抓（失败的也记下，--retry-failed 重抓）。
+// 正文按链接缓存在 reports/news-body-cache.json，抓过的不再抓（失败的也记下：3 天内、累计失败不满 3 次的自动重抓，--retry-failed 全部重抓）。
 // 用法: npm run news-body -- [--report 四连板题材演绎] [--workers 6] [--retry-failed]
 
 const fs = require('fs');
@@ -120,17 +120,30 @@ async function fetchOnce(context, url, title) {
   }
 }
 
+// 失败的链接自动重抓（2026-11-23 加）：以前失败一次就记进缓存、以后再也不抓，网络抖一下那篇正文就永远缺了。
+// 现在最近 3 天内失败、累计不满 3 次的，下次遇到会再抓；本身就没有正文的页面最多也只多试 2 次。
+const AUTO_RETRY_TIMES = 3;
+const AUTO_RETRY_DAYS = 3;
+const shouldAutoRetry = saved => saved.error && (saved.attempts || 1) < AUTO_RETRY_TIMES
+  && Date.now() - Date.parse(saved.fetchedAt || 0) < AUTO_RETRY_DAYS * 86400e3;
+
 // items: [{ url, title }]。抓缓存里没有的链接，返回更新后的缓存。
 async function fetchBodies(items, { workers = 6, retryFailed = false, onProgress } = {}) {
   const cache = readBodyCache();
   const seen = new Set();
+  let retrying = 0;
   const todo = items.filter(item => {
     if (!/^https?:\/\//.test(item.url) || seen.has(item.url)) return false;
     seen.add(item.url);
     const saved = cache[item.url];
-    return !saved || (retryFailed && saved.error) || (saved.text && looksLikeShell(saved.text)); // 以前存下的外壳也重抓
+    if (saved?.error && (retryFailed || shouldAutoRetry(saved))) {
+      retrying++;
+      return true;
+    }
+    return !saved || (saved.text && looksLikeShell(saved.text)); // 以前存下的外壳也重抓
   });
   if (!todo.length) return cache;
+  if (retrying) console.log(`重抓上次失败的正文 ${retrying} 篇`);
   // 新闻站点都在国内，走系统代理（如 7897）经常超时，直连约 0.5 秒。
   // 本机用系统装的 Chrome；服务器上没有 Chrome，退回 Playwright 自带的 Chromium（npx playwright install chromium）
   // 浏览器用到时才启动（全是接口能取的链接时不启动）
@@ -166,7 +179,8 @@ async function fetchBodies(items, { workers = 6, retryFailed = false, onProgress
         text ||= await fetchOne(await getContext(), item.url, item.title);
         cache[item.url] = { text, fetchedAt: new Date().toISOString() };
       } catch (error) {
-        cache[item.url] = { text: '', error: String(error.message || error).slice(0, 200), fetchedAt: new Date().toISOString() };
+        const attempts = (cache[item.url]?.error ? cache[item.url].attempts || 1 : 0) + 1; // 累计失败次数，给自动重抓判断
+        cache[item.url] = { text: '', error: String(error.message || error).slice(0, 200), attempts, fetchedAt: new Date().toISOString() };
       }
       done++;
       if (done % 20 === 0 || done === todo.length) {
