@@ -1,4 +1,4 @@
-require('dotenv').config();
+require('dotenv').config({ quiet: true });
 
 const { S3Client, GetObjectCommand, HeadObjectCommand, ListObjectsV2Command, PutObjectCommand, CopyObjectCommand, DeleteObjectsCommand } = require('@aws-sdk/client-s3');
 const { NodeHttpHandler } = require('@smithy/node-http-handler');
@@ -12,25 +12,42 @@ const R2_ENDPOINT = process.env.R2_ENDPOINT || (process.env.R2_ACCOUNT_ID
 const FORCE_LOCAL = process.env.FORCE_LOCAL === 'true';
 // 覆盖 R2 对象前先复制一份到 backups/<时间>/<原路径>，误写时可以找回；daily-update 会删掉 30 天前的备份。
 const BACKUP_PREFIX = 'backups/';
-const r2Client = !FORCE_LOCAL && R2_ENDPOINT && process.env.R2_ACCESS_KEY_ID && process.env.R2_SECRET_ACCESS_KEY
-  ? new S3Client({
-    endpoint: R2_ENDPOINT,
-    region: 'auto',
-    // 超时（2026-11-16）：经代理的请求偶尔挂住不返回，news-calendar --upload 卡了半小时；设了超时 SDK 会断开并重试（默认 3 次）。
-    // requestTimeout 是连接空闲多久算超时，几 MB 的月份文件正常十几秒传完，不会误伤
-    requestHandler: new NodeHttpHandler({
-      connectionTimeout: 15_000,
-      requestTimeout: 90_000,
-      ...((process.env.HTTPS_PROXY || process.env.https_proxy || process.env.HTTP_PROXY || process.env.http_proxy)
-        ? { httpsAgent: new HttpsProxyAgent(process.env.HTTPS_PROXY || process.env.https_proxy || process.env.HTTP_PROXY || process.env.http_proxy) }
-        : {}),
-    }),
-    credentials: {
-      accessKeyId: process.env.R2_ACCESS_KEY_ID,
-      secretAccessKey: process.env.R2_SECRET_ACCESS_KEY,
-    },
-  })
-  : null;
+// R2 专用代理 R2_PROXY（2026-11-23 加，软路由 .env 设为 OpenClash 的 http://192.168.101.1:7890）：软路由直连 R2 下载 5 MB 要 34–197 秒、
+// 上传 72 秒，走代理 7–16 秒、4 秒。只影响 R2，抓新闻、通达信、问财不走它。没设 R2_PROXY 时沿用 HTTPS_PROXY 等通用变量
+const R2_PROXY = process.env.R2_PROXY || process.env.HTTPS_PROXY || process.env.https_proxy || process.env.HTTP_PROXY || process.env.http_proxy || '';
+const makeClient = proxy => new S3Client({
+  endpoint: R2_ENDPOINT,
+  region: 'auto',
+  // 超时（2026-11-16）：经代理的请求偶尔挂住不返回，news-calendar --upload 卡了半小时；设了超时 SDK 会断开并重试（默认 3 次）。
+  // requestTimeout 是连接空闲多久算超时，几 MB 的月份文件正常十几秒传完，不会误伤
+  requestHandler: new NodeHttpHandler({
+    connectionTimeout: 15_000,
+    requestTimeout: 90_000,
+    ...(proxy ? { httpsAgent: new HttpsProxyAgent(proxy) } : {}),
+  }),
+  credentials: {
+    accessKeyId: process.env.R2_ACCESS_KEY_ID,
+    secretAccessKey: process.env.R2_SECRET_ACCESS_KEY,
+  },
+});
+const r2Client = !FORCE_LOCAL && R2_ENDPOINT && process.env.R2_ACCESS_KEY_ID && process.env.R2_SECRET_ACCESS_KEY ? makeClient(R2_PROXY) : null;
+// 代理本身连不上（OpenClash 停了、端口变了）时退回直连，本进程之后都直连；R2 自己报的错照常抛出
+if (r2Client && R2_PROXY) {
+  const viaProxy = r2Client.send.bind(r2Client);
+  let direct = null;
+  const proxyDown = error => /ECONNREFUSED|EHOSTUNREACH|ENETUNREACH|ECONNRESET|socket hang up|Proxy|407/i.test(`${error.code || ''} ${error.message || ''}`) && !error.$metadata?.httpStatusCode;
+  r2Client.send = async (command, ...rest) => {
+    if (direct) return direct.send(command, ...rest);
+    try {
+      return await viaProxy(command, ...rest);
+    } catch (error) {
+      if (!proxyDown(error)) throw error;
+      console.error(`!!! R2 代理 ${R2_PROXY} 连不上（${error.code || error.message}），改为直连`);
+      direct = makeClient('');
+      return direct.send(command, ...rest);
+    }
+  };
+}
 
 function assertConfigured() {
   if (!r2Client) throw new Error('R2 未配置，请设置 R2_ENDPOINT、R2_ACCESS_KEY_ID、R2_SECRET_ACCESS_KEY 和 R2_BUCKET');
