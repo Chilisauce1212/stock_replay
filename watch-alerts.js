@@ -45,11 +45,17 @@ async function notify(spoken, detail = '') {
   if (!base || options.dryRun) return;
   // 点通知打开同花顺 App（amihexin:// 实测能拉起 App；跳到个股的格式还没找到，网页个股页只会开浏览器）
   const query = new URLSearchParams({ group: '盯盘', level: 'timeSensitive', url: 'amihexin://' });
-  try {
-    const response = await fetch(`${base}/${encodeURIComponent(spoken)}?${query}`, { signal: AbortSignal.timeout(10_000) });
-    if (!response.ok) log(`Bark 推送失败：HTTP ${response.status}`);
-  } catch (error) {
-    log(`Bark 推送失败：${error.message}`);
+  // 网络错误或 Bark 服务端错误隔 2 秒重试，共 3 次（2026-11-23 加：以前失败一次这条提醒就丢了）
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const response = await fetch(`${base}/${encodeURIComponent(spoken)}?${query}`, { signal: AbortSignal.timeout(10_000) });
+      if (response.ok) return;
+      log(`Bark 推送失败：HTTP ${response.status}`);
+      if (response.status < 500 && response.status !== 429) return; // 4xx（如密钥不对）重试也没用
+    } catch (error) {
+      log(`Bark 推送失败：${error.message}${attempt < 3 ? '，2 秒后重试' : ''}`);
+    }
+    if (attempt < 3) await new Promise(resolve => setTimeout(resolve, 2000));
   }
 }
 

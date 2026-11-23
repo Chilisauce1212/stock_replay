@@ -19,6 +19,7 @@ const fs = require('fs');
 const path = require('path');
 const { spawn, spawnSync } = require('child_process');
 const { chromium } = require('playwright');
+const { fetchPoolPage } = require('./limit-up-list');
 
 const DEFAULT_INPUT = path.join(__dirname, 'daily-review', '四连板及以上.json');
 const OUTPUT_FILE = path.join(__dirname, 'reports', '首板涨停原因.json');
@@ -122,11 +123,7 @@ async function fetchPool(date) {
       page: String(page), limit: '200', field: '199112,10,9001,330323,330324,330325,9002,330329,133971,133970,1968584,3475914,9003,9004',
       filter: 'HS,GEM2STAR', order_field: '330324', order_type: '0', date: date.replaceAll('-', ''),
     }).toString();
-    const response = await fetch(url, {
-      headers: { 'User-Agent': 'Mozilla/5.0', Referer: 'https://data.10jqka.com.cn/datacenterph/limitup/limtupInfo.html' },
-      signal: AbortSignal.timeout(20_000),
-    });
-    const payload = await response.json();
+    const payload = await fetchPoolPage(url); // 超时、断网重试 3 次（limit-up-list.js）
     if (payload.status_code !== 0) return null;
     for (const item of payload.data?.info || []) reasons.set(String(item.code), String(item.reason_type || '').trim());
     const total = Number(payload.data?.page?.total || 0);
@@ -382,7 +379,11 @@ async function main(argv = process.argv.slice(2)) {
   const poolDates = [...new Set(pending.filter(record => !saved[keyOf(record)]).map(record => record.date))].sort().reverse();
   let poolCount = 0;
   for (const date of poolDates) {
-    const reasons = await fetchPool(date).catch(() => null);
+    // 重试 3 次仍是网络错误：提示出来（以前和「日期不支持」一样悄悄跳过），没拿到的下次运行还会再查
+    const reasons = await fetchPool(date).catch(error => {
+      console.log(`!!! ${date} 涨停原因没拿到：${error.message}`);
+      return null;
+    });
     // 日期从新到旧，第一个不支持的日期之前的都更早，也不支持。
     if (!reasons) break;
     for (const record of pending.filter(item => item.date === date)) {

@@ -22,6 +22,25 @@ function previousDay(day) {
 }
 
 // 同花顺涨停池：查一个交易日的全部涨停股，非交易日返回空列表。
+// 涨停池接口取一页（2026-11-23 加重试）：超时、断网、返回的不是 JSON 都隔 2/4 秒重试，共 3 次；
+// 接口明确返回错误（status_code 不是 0，如日期不合法）不重试，交给调用方
+async function fetchPoolPage(url) {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      const response = await fetch(url, {
+        headers: { 'User-Agent': 'Mozilla/5.0', Referer: 'https://data.10jqka.com.cn/datacenterph/limitup/limtupInfo.html' },
+        signal: AbortSignal.timeout(20_000),
+      });
+      if (response.status >= 500 || response.status === 429) throw new Error(`HTTP ${response.status}`);
+      return await response.json();
+    } catch (error) {
+      if (attempt >= 3) throw new Error(`涨停池接口重试 3 次仍失败：${error.message}`);
+      console.log(`（涨停池接口 ${error.message.slice(0, 60)}，${attempt * 2} 秒后重试）`);
+      await new Promise(resolve => setTimeout(resolve, attempt * 2000));
+    }
+  }
+}
+
 async function fetchPool(date) {
   const rows = [];
   for (let page = 1; page <= 20; page++) {
@@ -30,11 +49,7 @@ async function fetchPool(date) {
       page: String(page), limit: '200', field: '199112,10,9001,330323,330324,330325,9002,330329,133971,133970,1968584,3475914,9003,9004',
       filter: 'HS,GEM2STAR', order_field: '330324', order_type: '0', date: date.replaceAll('-', ''),
     }).toString();
-    const response = await fetch(url, {
-      headers: { 'User-Agent': 'Mozilla/5.0', Referer: 'https://data.10jqka.com.cn/datacenterph/limitup/limtupInfo.html' },
-      signal: AbortSignal.timeout(20_000),
-    });
-    const payload = await response.json();
+    const payload = await fetchPoolPage(url);
     if (payload.status_code !== 0) throw new Error(`${date} 涨停池接口: ${payload.status_msg}`);
     for (const item of payload.data?.info || []) {
       const firstLimitTime = Number(item.first_limit_up_time) > 0
@@ -118,4 +133,4 @@ function createSealedChecker() {
   };
 }
 
-module.exports = { LIMIT_UP_FILE, fetchPool, latestClosedTradeDay, readLimitUpMonths, updateLimitUpList, createSealedChecker };
+module.exports = { LIMIT_UP_FILE, fetchPool, fetchPoolPage, latestClosedTradeDay, readLimitUpMonths, updateLimitUpList, createSealedChecker };

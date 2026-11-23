@@ -199,8 +199,9 @@ async function runTodayFirstBoard({ yes = false } = {}) {
   try {
     timeStep('自由流通市值', () => execFileSync(process.execPath, [path.join(__dirname, 'free-float.js'), '--today', ...(r2Client ? ['--upload'] : [])], { stdio: 'inherit' }));
   } catch {
-    console.error('今日首板名单已写好，但自由流通市值没补全（原因见上），处理后运行 npm run free-float -- --today --upload');
-    process.exitCode = 1;
+    // 只记警告、不算失败（2026-11-23 改）：收盘后不久问财常常还没有当天个别票的数据，后面一进二回测那步还会再查一次；
+    // 以前这里退出码 1，软路由就被判失败，阿里云 22:30 整套重跑一遍。问财登录过期这种，换机器重跑也没用
+    console.error('!!! 今日首板自由流通市值没补全（原因见上），一进二回测那步会再查一次；还缺就运行 npm run free-float -- --today --upload');
   }
   try {
     await finishTodayFile({ yes });

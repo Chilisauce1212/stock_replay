@@ -126,7 +126,11 @@ async function main() {
       const raw = tasks[next++];
       const { code, signalIndex: D } = raw;
       const task = { code, name: raw.name, signal: days[D] };
-      try {
+      // 网络错误（超时、断线）换下一台服务器重试，最多 4 次（2026-11-23 加：以前一次超时就算失败；这里只往后追加，失败的票以后不会再查，等于永久漏掉）。
+      // 结果都在最后一个网络请求之后才记，重来一遍是安全的
+      const judge = async () => {
+        delete task.tradeDay;
+        delete task.suspended;
         if (!worker.conn) await worker._connect();
         const trades = async day => (await worker.fetchDay(task.code, day.replaceAll('-', ''))).filter(tick => tick.vol > 0 && tick.time >= '09:25');
         // 个股这一天有没有成交：在涨停名单里的肯定有；否则问一次通达信
@@ -147,7 +151,7 @@ async function main() {
           if (!ticks.length) { ticks = null; T++; }
         }
         if (!ticks) while (T < days.length && !(await traded(T))) T++;
-        if (T >= days.length || days[T] < start || days[T] > end) { done++; continue; } // 还在停牌，或二板日不在范围内
+        if (T >= days.length || days[T] < start || days[T] > end) return; // 还在停牌，或二板日不在范围内
         task.tradeDay = days[T];
         if (T > D + 1) task.suspended = true;
         if (!ticks) ticks = await trades(task.tradeDay);
@@ -175,20 +179,35 @@ async function main() {
           buy = ticks.slice(broken + 1).find(atLimit) || null;
         }
         if (buy && !oneWord) {
+          const early = buy.time <= LATEST_TOUCH;
+          const notFirstBoardCase = early && await notFirstBoard(); // 最后一个网络请求，下面只记结果
           touched++;
-          if (buy.time <= LATEST_TOUCH) {
-            if (await notFirstBoard()) notFirst.push(task);
+          if (early) {
+            if (notFirstBoardCase) notFirst.push(task);
             else {
               if (task.suspended) suspendedCases++;
               results.push({ ...task, firstTouch: buy.time, openAtLimit });
             }
           }
         }
-      } catch (error) {
-        failures.push({ ...task, error: error.message });
-        if (/no server|ECONN|socket|timeout/i.test(error.message)) {
-          worker.close();
-          worker.conn = null;
+      };
+      for (let attempt = 1; ; attempt++) {
+        try {
+          await judge();
+          break;
+        } catch (error) {
+          const network = /no server|ECONN|socket|timeout|closed/i.test(error.message);
+          if (network) {
+            worker.close();
+            worker.conn = null;
+            worker.idx++;
+          }
+          if (network && attempt < 4) {
+            await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
+            continue;
+          }
+          failures.push({ ...task, network, error: error.message });
+          break;
         }
       }
       done++;
@@ -223,6 +242,9 @@ async function main() {
     console.log(`失败 ${failures.length} 只（停牌、行情缺失或网络），前几条：`);
     failures.slice(0, 8).forEach(item => console.log(`  ${item.signal} ${item.code} ${item.name}: ${item.error}`));
   }
+  const networkFailures = failures.filter(item => item.network);
+  // 这里只往后追加，网络失败的票以后不会自动再查：要提醒人工用 --replace 重查这段日期
+  if (networkFailures.length) console.log(`!!! 一进二逐笔判断有 ${networkFailures.length} 只重试 4 次仍是网络错误（${networkFailures.slice(0, 3).map(item => `${item.signal} ${item.name}`).join('、')}），可能漏样本，用 --replace 重查`);
 }
 
 main().catch(error => {

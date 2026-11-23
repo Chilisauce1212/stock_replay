@@ -96,6 +96,7 @@ async function main() {
   const tradedCache = new Map();
   let suspendChecks = 0;
 
+  const TASK_ATTEMPTS = 4;
   const hosts = await healthyHosts();
   const workers = Array.from({ length: options.workers }, (_, index) => new Worker(hosts, index, 0.02));
   const results = [];
@@ -106,7 +107,10 @@ async function main() {
     while (next < tasks.length) {
       const raw = tasks[next++];
       let task = raw;
-      try {
+      // 网络错误（超时、断线）换下一台服务器重试，最多 4 次（2026-11-23 加：以前一次超时就算失败，那天 230 条）。
+      // 整个判断只读数据、最后才写结果，重来一遍是安全的
+      const judge = async () => {
+        task = raw;
         if (!worker.conn) await worker._connect();
         const { code } = raw;
         // 个股这一天有没有交易：在涨停名单里的肯定有；否则问一次通达信（停牌日没有成交）
@@ -129,18 +133,18 @@ async function main() {
         };
         const D = raw.signalIndex;
         const F = sealed(D - 1, code) ? D - 1 : await prevOwn(D);
-        if (F < 0 || !sealed(F, code)) continue; // D 是首板
-        if (sealed(F - 1, code)) continue; // F 前一天也封了：D 是三板以上
+        if (F < 0 || !sealed(F, code)) return; // D 是首板
+        if (sealed(F - 1, code)) return; // F 前一天也封了：D 是三板以上
         if (sealedBefore(code, F - 1)) { // F 前一天没封，但可能停牌：看个股上一个交易日
           const beforeF = await prevOwn(F);
-          if (beforeF >= 0 && sealed(beforeF, code)) continue;
+          if (beforeF >= 0 && sealed(beforeF, code)) return;
         }
         const T = await nextOwn(D);
-        if (T < 0 || days[T] < start || days[T] > end) continue;
+        if (T < 0 || days[T] < start || days[T] > end) return;
         let boards = 2;
         for (let k = T; k >= 0 && sealed(k, code); k = await nextOwn(k)) boards++;
         // 连板一直延续到名单最新一天的，最终板数还不确定，但已经满足 ≥ minBoards
-        if (boards < options.minBoards) continue;
+        if (boards < options.minBoards) return;
         task = { code, name: raw.name, first: days[F], signal: days[D], tradeDay: days[T], boards };
         if (D - F > 1 || T - D > 1) task.suspended = true; // 中间有停牌（板数按个股交易日）
         const trades = async day => (await worker.fetchDay(task.code, day.replaceAll('-', ''))).filter(tick => tick.vol > 0 && tick.time >= '09:25');
@@ -151,7 +155,7 @@ async function main() {
         if (!signalTicks.length) throw new Error('二板日没有逐笔成交');
         if (!signalTicks.every(tick => Math.abs(tick.price - secondLimit) < 0.005)) {
           rejected.push({ ...task, reason: '二板不是一字板' });
-          continue;
+          return;
         }
         const limit = round2(signalTicks.at(-1).price * (1 + LIMIT_RATIO));
         const ticks = await trades(task.tradeDay);
@@ -164,11 +168,24 @@ async function main() {
         else if (!oneWord) buy = ticks.slice(ticks.findIndex(tick => !atLimit(tick)) + 1).find(atLimit) || null;
         if (buy && !oneWord && buy.time <= LATEST_TOUCH) results.push({ ...task, firstTouch: buy.time, openAtLimit });
         else rejected.push({ ...task, reason: oneWord ? '一字板' : !buy ? '没在涨停价买到' : `${buy.time} 才买到` });
-      } catch (error) {
-        failures.push({ ...task, error: error.message });
-        if (/no server|ECONN|socket|timeout/i.test(error.message)) {
-          worker.close();
-          worker.conn = null;
+      };
+      for (let attempt = 1; ; attempt++) {
+        try {
+          await judge();
+          break;
+        } catch (error) {
+          const network = /no server|ECONN|socket|timeout|closed/i.test(error.message);
+          if (network) {
+            worker.close();
+            worker.conn = null;
+            worker.idx++;
+          }
+          if (network && attempt < TASK_ATTEMPTS) {
+            await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
+            continue;
+          }
+          failures.push({ ...task, signal: task.signal || days[raw.signalIndex], error: error.message });
+          break;
         }
       }
     }
@@ -176,6 +193,11 @@ async function main() {
   workers.forEach(worker => worker.close());
 
   const old = fs.existsSync(OUT_FILE) ? new Map(JSON.parse(fs.readFileSync(OUT_FILE, 'utf8')).map(item => [`${item.code}|${item.date}`, item])) : new Map();
+  // 这次判断失败的（重试后仍是网络错误），原文件里已有的记录照样保留，不能因为一次超时就从样本里消失（2026-11-23 加）
+  const decided = new Set(results.concat(rejected).map(item => `${item.code}|${item.signal}`));
+  const kept = [...old.values()].filter(item => !decided.has(`${item.code}|${item.date}`) && failures.some(failure => failure.code === item.code));
+  for (const item of kept) results.push({ code: item.code, name: item.stockName, signal: item.date, first: item.firstBoardDate, boards: item.boardCount });
+  if (kept.length) console.log(`判断失败但原来就有的记录保留 ${kept.length} 条`);
   results.sort((left, right) => left.signal.localeCompare(right.signal) || left.code.localeCompare(right.code));
   const records = results.map((item, index) => ({
     ...old.get(`${item.code}|${item.signal}`),
