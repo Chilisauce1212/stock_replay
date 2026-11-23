@@ -18,11 +18,14 @@ const R2_PROXY = process.env.R2_PROXY || process.env.HTTPS_PROXY || process.env.
 const makeClient = proxy => new S3Client({
   endpoint: R2_ENDPOINT,
   region: 'auto',
-  // 超时（2026-11-16）：经代理的请求偶尔挂住不返回，news-calendar --upload 卡了半小时；设了超时 SDK 会断开并重试（默认 3 次）。
-  // requestTimeout 是连接空闲多久算超时，几 MB 的月份文件正常十几秒传完，不会误伤
+  maxAttempts: 4, // 超时、断线、5xx 由 SDK 重试，共 4 次
+  // 超时（2026-11-16）：经代理的请求偶尔挂住不返回，news-calendar --upload 卡了半小时。
+  // 2026-11-23 发现：只设 requestTimeout 时 SDK 只打一行 WARN、不断开（软路由一次下载挂了 781 秒），
+  // 必须加 throwOnRequestTimeout 才会报错、由 SDK 重试（默认共 3 次）。requestTimeout 是连接多久没有数据算卡住，30 秒足够
   requestHandler: new NodeHttpHandler({
     connectionTimeout: 15_000,
-    requestTimeout: 90_000,
+    requestTimeout: 30_000,
+    throwOnRequestTimeout: true,
     ...(proxy ? { httpsAgent: new HttpsProxyAgent(proxy) } : {}),
   }),
   credentials: {
@@ -106,10 +109,19 @@ async function readObjectText(key) {
   if (!head) throw Object.assign(new Error(`R2 没有 ${key}`), { name: 'NoSuchKey' });
   const cached = readCache(key, head.etag);
   if (cached !== null) return cached;
-  const response = await r2Client.send(new GetObjectCommand({ Bucket: R2_BUCKET, Key: key }));
-  const text = Buffer.from(await response.Body.transformToByteArray()).toString('utf8');
-  writeCache(key, cleanEtag(response.ETag), text);
-  return text;
+  // SDK 的重试只管到拿到响应头；正文读到一半卡住（超时断开）不会重试，这里自己再重试，共 3 次
+  for (let attempt = 1; ; attempt++) {
+    try {
+      const response = await r2Client.send(new GetObjectCommand({ Bucket: R2_BUCKET, Key: key }));
+      const text = Buffer.from(await response.Body.transformToByteArray()).toString('utf8');
+      writeCache(key, cleanEtag(response.ETag), text);
+      return text;
+    } catch (error) {
+      if (isMissing(error) || attempt >= 3) throw error;
+      console.error(`R2 读 ${key} 失败（${error.name || error.code}: ${String(error.message).slice(0, 60)}），${attempt * 3} 秒后重试`);
+      await new Promise(resolve => setTimeout(resolve, attempt * 3000));
+    }
+  }
 }
 
 async function readJson(key) {

@@ -168,11 +168,19 @@ async function upload(root, host, log = console.log) {
   return { uploadedAt, blocks: sent.size, bytes };
 }
 
+// 单个块读到一半卡住、校验失败时重试，共 3 次（2026-11-23 加：以前一个块出错整个下载从头再来）
 async function getBlob(hash) {
-  const response = await r2Client.send(new GetObjectCommand({ Bucket: R2_BUCKET, Key: blobKey(hash) }));
-  const body = zlib.gunzipSync(Buffer.from(await response.Body.transformToByteArray()));
-  if (sha256(body) !== hash) throw new Error(`块 ${hash} 校验失败`);
-  return body;
+  for (let attempt = 1; ; attempt++) {
+    try {
+      const response = await r2Client.send(new GetObjectCommand({ Bucket: R2_BUCKET, Key: blobKey(hash) }));
+      const body = zlib.gunzipSync(Buffer.from(await response.Body.transformToByteArray()));
+      if (sha256(body) !== hash) throw new Error(`块 ${hash} 校验失败`);
+      return body;
+    } catch (error) {
+      if (isMissing(error) || attempt >= 3) throw error;
+      await new Promise(resolve => setTimeout(resolve, attempt * 3000));
+    }
+  }
 }
 
 // 下载：R2 上的状态是另一台传的、且比本机上次同步新才下载；只下本机没有的块（force 不看这些条件）
