@@ -17,6 +17,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { classifyNews, cachedNews, NEWS_V2_FROM } = require('./news-theme-table');
 const { fetchBodies } = require('./news-body');
+const { recordPhase } = require('./step-timing');
 
 const REPORTS_DIR = path.join(__dirname, 'reports');
 const PROMPT_FILE = path.join(__dirname, 'prompts', 'news-classification.md');
@@ -432,11 +433,16 @@ async function main(argv = process.argv.slice(2)) {
   if (options.body) {
     const items = rows.flatMap(row => newsOf(newsCache, row).map(item => ({ url: item.url, title: item.title })));
     const started = Date.now();
+    let fetched = 0; // 实际要抓的篇数（有缓存的不算）
     bodies = await fetchBodies(items, {
       workers: 6,
-      onProgress: (done, total) => process.stdout.write(`\r抓新闻原文 ${done}/${total}，用时 ${Math.round((Date.now() - started) / 1000)} 秒`),
+      onProgress: (done, total) => {
+        fetched = total;
+        process.stdout.write(`\r抓新闻原文 ${done}/${total}，用时 ${Math.round((Date.now() - started) / 1000)} 秒`);
+      },
     });
     process.stdout.write('\n');
+    recordPhase('抓新闻原文', Date.now() - started, { items: fetched, unit: '篇' });
   }
   const inputs = new Map(rows.map(row => [row.key, buildInput(row, newsOf(newsCache, row), reasons[row.key]?.reason || '', bodies)]));
 
@@ -535,6 +541,7 @@ ${row.key} ${row['名称']} 失败：${error.message}`);
     }
   }
   await Promise.all(Array.from({ length: Math.min(options.workers, todo.length) }, worker));
+  if (todo.length) recordPhase('调用模型', Date.now() - started, { items: todo.length, unit: '只' });
   fs.mkdirSync(REPORTS_DIR, { recursive: true });
   fs.writeFileSync(file, `${JSON.stringify(saved, null, 1)}
 `, 'utf8');

@@ -12,6 +12,7 @@ const fs = require('fs');
 const path = require('path');
 const { spawn, execFileSync } = require('child_process');
 const { r2Client, isMissing, readJson, writeJson } = require('./r2-storage');
+const { timeStep } = require('./step-timing');
 
 const ROOT = __dirname;
 const REVIEW_DIR = path.join(ROOT, 'daily-review');
@@ -28,9 +29,10 @@ function writeLocal(file, data) {
   fs.renameSync(`${file}.tmp`, file);
 }
 
-function runNode(script, args) {
-  console.log(`\n>>> node ${script} ${args.join(' ')}`);
-  execFileSync(process.execPath, [path.join(ROOT, script), ...args], { stdio: 'inherit', cwd: ROOT });
+// label：分步计时里的名字（见 step-timing.js），不给就用脚本名；items/unit 给汇总算每只多少秒
+function runNode(script, args, { label = script.replace(/\.js$/, ''), items, unit } = {}) {
+  console.log(`\n>>> [${new Date().toTimeString().slice(0, 8)}] node ${script} ${args.join(' ')}`);
+  timeStep(label, () => execFileSync(process.execPath, [path.join(ROOT, script), ...args], { stdio: 'inherit', cwd: ROOT }), { items, unit });
 }
 
 async function readRemote(key) {
@@ -111,9 +113,10 @@ async function runNews(name, { yes }) {
   const baseUrl = `http://localhost:${process.env.PORT || 3000}`;
   const stopServer = await ensureServer(baseUrl);
   try {
-    runNode('first-board-reason.js', [input, '--max-queries', '0']);
+    const counted = { items: candidates.length, unit: '只' };
+    runNode('first-board-reason.js', [input, '--max-queries', '0'], { label: '涨停原因', ...counted });
     try {
-      runNode('news-theme-table.js', ['--input', input, '--out', path.join(REPORTS_DIR, `${NEWS_REPORT}.xlsx`), '--base-url', baseUrl, '--workers', '4']);
+      runNode('news-theme-table.js', ['--input', input, '--out', path.join(REPORTS_DIR, `${NEWS_REPORT}.xlsx`), '--base-url', baseUrl, '--workers', '4'], { label: '新闻列表和K线', ...counted });
     } catch {
       // 个别股票新闻或 K 线失败时退出码为 1，已拿到的照样往下用
       console.log('部分股票新闻或 K 线获取失败，继续用已拿到的');
@@ -121,7 +124,7 @@ async function runNews(name, { yes }) {
   } finally {
     stopServer();
   }
-  runNode('news-llm.js', ['--report', NEWS_REPORT, '--workers', '4', ...(yes ? ['--yes'] : [])]);
+  runNode('news-llm.js', ['--report', NEWS_REPORT, '--workers', '4', ...(yes ? ['--yes'] : [])], { label: '大模型判断', items: candidates.length, unit: '只' });
 }
 
 async function finishReviewFile(start, end, { yes = false } = {}) {
@@ -129,7 +132,7 @@ async function finishReviewFile(start, end, { yes = false } = {}) {
   const failures = [];
   const step = async (label, action) => {
     try {
-      await action();
+      await timeStep(label, action);
     } catch (error) {
       failures.push(`${label}：${error.message}`);
       console.error(`\n!!! ${label}失败：${error.message}`);
@@ -152,8 +155,8 @@ async function finishReviewFile(start, end, { yes = false } = {}) {
 
 // 今日首板：新闻判断 → 写进今日首板文件。「更新到今天」就要有今天的新闻分析
 async function finishTodayFile({ yes = false } = {}) {
-  await runNews('今日首板.json', { yes });
-  runNode('review-judge.js', ['今日首板', ...(r2Client ? ['--upload'] : [])]);
+  await timeStep('新闻判断', () => runNews('今日首板.json', { yes }));
+  runNode('review-judge.js', ['今日首板', ...(r2Client ? ['--upload'] : [])], { label: '写入判断结果' });
 }
 
 module.exports = { finishReviewFile, finishTodayFile, ensureServer };

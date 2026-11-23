@@ -6,6 +6,7 @@ const { execFileSync } = require('child_process');
 const { r2Client, readJson, writeJson } = require('./r2-storage');
 const { latestClosedTradeDay, updateLimitUpList } = require('./limit-up-list');
 const { finishReviewFile, finishTodayFile } = require('./review-pipeline');
+const { timeStep } = require('./step-timing');
 
 const DAILY_REVIEW_DIR = path.join(__dirname, 'daily-review');
 const TEST_CASE_DIR = path.join(__dirname, 'test-cases');
@@ -153,7 +154,7 @@ async function run(startArgument, endArgument, { followUp = true, yes = false } 
   // 改由 yijiner-cases.js 用全市场涨停名单 + 逐笔成交判断，它在本地文件上追加，所以先把已有记录写到本地。
   if (records.length) saveLocalJson(records, filename);
   console.log('\n>>> 任务开始：yijiner-cases.js 按逐笔成交判断二板日 10:30 前是否在涨停价成交过');
-  execFileSync(process.execPath, [path.join(__dirname, 'yijiner-cases.js'), '--start', startText, '--end', endText], { stdio: 'inherit' });
+  timeStep('逐笔判断新增样本', () => execFileSync(process.execPath, [path.join(__dirname, 'yijiner-cases.js'), '--start', startText, '--end', endText], { stdio: 'inherit' }));
   records = JSON.parse(fs.readFileSync(filename, 'utf8'));
   await saveJson(records, filename);
   console.log(`\n>>> 回测追加完成: ${filename}`);
@@ -166,7 +167,7 @@ async function run(startArgument, endArgument, { followUp = true, yes = false } 
 // 从 T(X) 15:00 到 T(X+1) 15:00 之前运行（含周末、节假日）都生成 T(X) 的首板；数据来自全市场涨停名单（同花顺涨停池）。
 async function runTodayFirstBoard({ yes = false } = {}) {
   const { date } = await latestClosedTradeDay();
-  const months = await updateLimitUpList(date);
+  const months = await timeStep('涨停名单', () => updateLimitUpList(date));
   const byDay = new Map();
   for (const item of Object.values(months).flat()) {
     if (!byDay.has(item.date)) byDay.set(item.date, new Map());
@@ -189,14 +190,14 @@ async function runTodayFirstBoard({ yes = false } = {}) {
   console.log(`>>> 今日首板（${date}）：${records.length} 只，已覆盖 ${r2Client ? 'R2 daily-review/今日首板.json 和本地' : '本地'} ${path.relative(__dirname, filename)}`);
   // 页面的「连板股票」按日期读，今日首板这天也要有；失败不影响名单和后面的自由流通市值
   try {
-    await syncChainStocks(records);
+    await timeStep('连板股票', () => syncChainStocks(records));
   } catch (error) {
     console.error(`今日首板名单已写好，但连板股票没更新：${error.message}。处理后运行 npm run chain-stocks -- ${date}`);
     process.exitCode = 1;
   }
   // 上面整体覆盖了文件，接着补上自由流通市值（问财）；失败时名单已经写好，只报错，退出码为 1
   try {
-    execFileSync(process.execPath, [path.join(__dirname, 'free-float.js'), '--today', ...(r2Client ? ['--upload'] : [])], { stdio: 'inherit' });
+    timeStep('自由流通市值', () => execFileSync(process.execPath, [path.join(__dirname, 'free-float.js'), '--today', ...(r2Client ? ['--upload'] : [])], { stdio: 'inherit' }));
   } catch {
     console.error('今日首板名单已写好，但自由流通市值没补全（原因见上），处理后运行 npm run free-float -- --today --upload');
     process.exitCode = 1;

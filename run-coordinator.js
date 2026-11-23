@@ -150,6 +150,48 @@ async function notify(body, { ok = false, neutral = false, detail = '' } = {}) {
 const HOST_NAMES = { router: '软路由', aliyun: '阿里云' };
 const hostName = host => HOST_NAMES[host] || host;
 
+// 预估用时（2026-11-23 用户要求：开始处理时给出首板数量和预估时间）。用时主要随首板只数涨（新闻原文、大模型按只数），
+// 按本机历史「首板只数 → 总分钟」做直线拟合；本机成功记录不到 3 条、或只数都一样时，用默认值。
+// 默认值来自软路由：11-20 首板 22 只 32 分钟，11-23 首板 102 只约 75 分钟（新闻原文 1168 篇 32 分钟、模型 12 分钟）。
+const HISTORY_FILE = path.join(ROOT, 'reports', 'timing', '每日更新历史.jsonl');
+const DEFAULT_FIXED_MINUTES = 20;
+const DEFAULT_MINUTES_PER_BOARD = 0.55;
+
+function readHistory() {
+  try {
+    return fs.readFileSync(HISTORY_FILE, 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line));
+  } catch {
+    return [];
+  }
+}
+
+function estimateMinutes(firstBoards) {
+  const rows = readHistory().filter(row => row.host === options.host && row.exitCode === 0 && row.firstBoards > 0 && row.minutes > 0).slice(-30);
+  let fixed = DEFAULT_FIXED_MINUTES;
+  let slope = DEFAULT_MINUTES_PER_BOARD;
+  if (rows.length >= 3) {
+    const meanX = rows.reduce((sum, row) => sum + row.firstBoards, 0) / rows.length;
+    const meanY = rows.reduce((sum, row) => sum + row.minutes, 0) / rows.length;
+    const sxx = rows.reduce((sum, row) => sum + (row.firstBoards - meanX) ** 2, 0);
+    if (sxx > 0) {
+      slope = Math.max(0, rows.reduce((sum, row) => sum + (row.firstBoards - meanX) * (row.minutes - meanY), 0) / sxx);
+      fixed = Math.max(5, meanY - slope * meanX);
+    }
+  }
+  return Math.round(fixed + slope * firstBoards);
+}
+
+function appendHistory(entry) {
+  try {
+    fs.mkdirSync(path.dirname(HISTORY_FILE), { recursive: true });
+    fs.appendFileSync(HISTORY_FILE, `${JSON.stringify(entry)}\n`);
+  } catch (error) {
+    log(`用时历史写入失败：${error.message}`);
+  }
+}
+
+const shanghaiClock = time => new Date(time + 8 * 3600e3).toISOString().slice(11, 16);
+
 // 从每日更新的输出里摘要：各步 ✓/✗、今日首板只数、大模型费用、!!! 警告
 function summarize(output) {
   const tail = output.slice(output.lastIndexOf('========== 每日更新完成'));
@@ -264,7 +306,23 @@ async function main() {
   log(`${options.host}（${options.role === 'primary' ? '主' : '备'}）检查 ${tradeDate}`);
   const claimed = await claim(key, tradeDate);
   if (!claimed) return 0;
-  if (options.role === 'primary') await notify(`${hostName(options.host)}开始跑`, { neutral: true }); // 备机接手时已推「阿里云接手」
+  // 「开始跑」等拿到今日首板只数再推（一般开跑后十几秒），带上预估跑完的时间；10 分钟还没拿到就照常推「开始跑」。
+  // 备机接手时已推过「阿里云接手」，这里同样推一次只数和预估
+  let startNotice = Promise.resolve();
+  let announced = false;
+  const announce = firstBoards => {
+    if (announced) return;
+    announced = true;
+    clearTimeout(announceTimer);
+    if (!firstBoards) {
+      startNotice = notify(`${hostName(options.host)}开始跑`, { neutral: true, detail: '10 分钟还没拿到今日首板只数' });
+      return;
+    }
+    const minutes = estimateMinutes(firstBoards);
+    log(`今日首板 ${firstBoards} 只，预估 ${minutes} 分钟`);
+    startNotice = notify(`${hostName(options.host)}开始跑，首板 ${firstBoards} 只，预计 ${shanghaiClock(started + minutes * 60e3)} 跑完`, { neutral: true, detail: `约 ${minutes} 分钟` });
+  };
+  const announceTimer = setTimeout(() => announce(0), 10 * 60e3);
   let { etag, record } = claimed;
   let lost = false;
   let child;
@@ -300,6 +358,10 @@ async function main() {
       const keep = (stream, target) => stream.on('data', chunk => {
         target.write(chunk);
         if (output.length < 8 * 1048576) output += chunk.toString();
+        if (!announced) {
+          const match = output.match(/今日首板（[^）]*）：(\d+) 只/);
+          if (match) announce(Number(match[1]));
+        }
       });
       keep(child.stdout, process.stdout);
       keep(child.stderr, process.stderr);
@@ -314,7 +376,10 @@ async function main() {
     }
   } finally {
     clearInterval(beat);
+    clearTimeout(announceTimer);
+    announced = true; // 没跑到首板这步就结束的，不再补推「开始跑」，结束的推送会说明情况
     await beating; // 等最后一次心跳写完，免得 done 用旧 ETag
+    await startNotice; // 「开始跑」先推完，再推结果
   }
   if (lost) {
     await notify(`${hostName(options.host)}被接手，已停止`, { detail: '跑到一半运行标记被另一台接手' });
@@ -324,6 +389,7 @@ async function main() {
   log(done ? `${tradeDate} 跑完，退出码 ${exitCode}，标记已改为 done` : '!!! 写 done 时标记已被别人改了');
   const summary = summarize(output);
   const minutes = Math.round((Date.now() - started) / 60e3);
+  if (!options.testCommand) appendHistory({ date: tradeDate, host: options.host, role: options.role, firstBoards: Number(summary.firstBoards) || 0, minutes, exitCode, finishedAt: now() });
   const detail = [summary.firstBoards && `今日首板 ${summary.firstBoards} 只`, `大模型约 ${summary.cost}`, summary.failed.length && `失败：${summary.failed.join('、')}`, ...summary.warnings.slice(0, 4).map(line => `!!! ${line}`)].filter(Boolean).join('；');
   if (exitCode === 0 && !summary.failed.length) {
     await notify(`${hostName(options.host)}跑完，用时 ${minutes} 分钟`, { ok: true, detail });

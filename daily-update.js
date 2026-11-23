@@ -34,14 +34,20 @@ if (options.local) process.env.FORCE_LOCAL = 'true';
 require('dotenv').config({ quiet: true });
 const { r2Client, listJsonKeys, pruneBackups, writeJson } = require('./r2-storage');
 const { latestClosedTradeDay } = require('./limit-up-list');
+const { timeStep, printSummary } = require('./step-timing');
 
 const ROOT = __dirname;
 const CASE_FILE = /^一进二回测_(\d{8})_(\d{8})\.json$/;
 
-function runTurnover(args) {
-  console.log(`\n========== node turnover_json.js ${args.join(' ')} ==========`);
+// 每一大步：带时间的标题 + 计时（见 step-timing.js），子进程里的分步记录挂在 label 下面
+function runNode(label, script, args) {
+  console.log(`\n========== [${new Date().toTimeString().slice(0, 8)}] node ${script} ${args.join(' ')} ==========`);
+  timeStep(label, () => execFileSync(process.execPath, [path.join(ROOT, script), ...args], { stdio: 'inherit', cwd: ROOT }));
+}
+
+function runTurnover(label, args) {
   try {
-    execFileSync(process.execPath, [path.join(ROOT, 'turnover_json.js'), ...args], { stdio: 'inherit', cwd: ROOT });
+    runNode(label, 'turnover_json.js', args);
     return true;
   } catch {
     return false;
@@ -70,23 +76,25 @@ async function main() {
     return;
   }
   const { date } = await latestClosedTradeDay();
+  // 分步计时记录：reports/timing/每日更新-YYYYMMDD.jsonl，同一天重跑追加，按 STEP_TIMING_RUN 区分
+  process.env.STEP_TIMING_FILE = path.join(ROOT, 'reports', 'timing', `每日更新-${date.replace(/-/g, '')}.jsonl`);
+  process.env.STEP_TIMING_RUN = new Date().toISOString();
   console.log(`更新到交易日 ${date}，${r2Client ? '读写 R2（本地同步一份）' : '只用本地文件'}`);
 
   const results = [];
-  results.push(['今日首板', runTurnover(['--today', ...(options.yes ? ['--yes'] : [])])]);
+  results.push(['今日首板', runTurnover('今日首板', ['--today', ...(options.yes ? ['--yes'] : [])])]);
   const year = Number(date.slice(0, 4));
   const years = date.slice(5, 7) === '01' ? [year - 1, year] : [year];
   for (const item of years) {
     const [start, end] = await rangeOfYear(String(item));
-    results.push([`一进二回测_${start}_${end}`, runTurnover([start, end, ...(options.yes ? ['--yes'] : [])])]);
+    results.push([`一进二回测_${start}_${end}`, runTurnover(`一进二回测 ${item}`, [start, end, ...(options.yes ? ['--yes'] : [])])]);
   }
   // 二进三回测（2026-11-13 用户要求加入流程）：重新生成当年样本（已有记录的 pnl 保留）→ 补算盈亏 → 上传；1 月同时处理上一年
   for (const item of years) {
     const file = erjinsanFileOfYear(String(item));
     try {
-      console.log(`\n========== node erjinsan-cases.js ${item}（${file}）==========`);
-      execFileSync(process.execPath, [path.join(ROOT, 'erjinsan-cases.js'), '--start', `${item}0101`, '--end', `${item}1231`, '--min-boards', '2', '--out', file], { stdio: 'inherit', cwd: ROOT });
-      execFileSync(process.execPath, [path.join(ROOT, 'pnl.js'), file], { stdio: 'inherit', cwd: ROOT });
+      runNode(`二进三回测 ${item}`, 'erjinsan-cases.js', ['--start', `${item}0101`, '--end', `${item}1231`, '--min-boards', '2', '--out', file]);
+      runNode(`二进三盈亏 ${item}`, 'pnl.js', [file]);
       if (r2Client) {
         const records = JSON.parse(fs.readFileSync(path.join(ROOT, 'daily-review', `${file}.json`), 'utf8'));
         await writeJson(`daily-review/${file}.json`, records);
@@ -100,15 +108,13 @@ async function main() {
   }
   try {
     // 可转债名单（复盘页「有转债只能空仓」用），全量重取，3 次请求
-    console.log('\n========== node convertible-bonds.js ==========');
-    execFileSync(process.execPath, [path.join(ROOT, 'convertible-bonds.js'), ...(r2Client ? ['--upload'] : [])], { stdio: 'inherit', cwd: ROOT });
+    runNode('可转债名单', 'convertible-bonds.js', r2Client ? ['--upload'] : []);
     results.push(['可转债名单', true]);
   } catch {
     results.push(['可转债名单', false]);
   }
   try {
-    console.log('\n========== node limit-up-cycle.js ==========');
-    execFileSync(process.execPath, [path.join(ROOT, 'limit-up-cycle.js'), ...(r2Client ? ['--upload'] : [])], { stdio: 'inherit', cwd: ROOT });
+    runNode('连板情绪周期', 'limit-up-cycle.js', r2Client ? ['--upload'] : []);
     results.push(['连板情绪周期', true]);
   } catch {
     results.push(['连板情绪周期', false]);
@@ -116,31 +122,28 @@ async function main() {
   // 涨停原因佐证（theme-evidence.js）2026-11-06 起不再每天跑：题材改为只按新闻归，不参考涨停原因
   try {
     // 先补当天首板的 5 个交易日新闻再调用模型；题材名沿用前面几天的词表
-    console.log('\n========== node theme-events.js ==========');
-    execFileSync(process.execPath, [path.join(ROOT, 'theme-events.js'), '--start', date, '--end', date], { stdio: 'inherit', cwd: ROOT });
+    runNode('新闻事件归题材', 'theme-events.js', ['--start', date, '--end', date]);
     results.push(['新闻事件归题材', true]);
   } catch {
     results.push(['新闻事件归题材', false]);
   }
   try {
     // 先生成一次日历（分化判断的输入来自日历月份文件），再让模型判断当天的题材分化，最后重新生成并上传
-    console.log('\n========== node news-calendar.js ==========');
-    execFileSync(process.execPath, [path.join(ROOT, 'news-calendar.js'), '--fill-ticks'], { stdio: 'inherit', cwd: ROOT });
+    runNode('新闻日历（补分笔）', 'news-calendar.js', ['--fill-ticks']);
     try {
-      console.log('\n========== node theme-divergence-llm.js ==========');
-      execFileSync(process.execPath, [path.join(ROOT, 'theme-divergence-llm.js'), '--start', date, '--end', date], { stdio: 'inherit', cwd: ROOT });
+      runNode('题材分化判断', 'theme-divergence-llm.js', ['--start', date, '--end', date]);
       results.push(['题材分化判断', true]);
     } catch {
       results.push(['题材分化判断', false]);
     }
-    execFileSync(process.execPath, [path.join(ROOT, 'news-calendar.js'), ...(r2Client ? ['--upload'] : [])], { stdio: 'inherit', cwd: ROOT });
+    runNode('新闻日历（生成上传）', 'news-calendar.js', r2Client ? ['--upload'] : []);
     results.push(['新闻日历', true]);
   } catch {
     results.push(['新闻日历', false]);
   }
   if (r2Client) {
     try {
-      results.push([`清理 30 天前的 R2 备份（${await pruneBackups(30)} 个）`, true]);
+      results.push([`清理 30 天前的 R2 备份（${await timeStep('清理 R2 备份', () => pruneBackups(30))} 个）`, true]);
     } catch (error) {
       console.error(`清理 R2 备份失败: ${error.message}`);
       results.push(['清理 R2 备份', false]);
@@ -149,6 +152,7 @@ async function main() {
 
   console.log(`\n========== 每日更新完成（${date}）==========`);
   for (const [label, ok] of results) console.log(`  ${ok ? '✓' : '✗'} ${label}`);
+  printSummary();
   if (results.some(([, ok]) => !ok)) {
     console.log('有步骤失败，往上翻看 !!! 开头的错误；修好后重跑同一命令即可，已完成的会跳过');
     process.exitCode = 1;
