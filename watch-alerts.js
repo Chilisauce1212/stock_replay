@@ -141,8 +141,9 @@ const states = new Map();
 async function check(quote) {
   if (!(quote.prevClose > 0) || !(quote.price > 0)) return; // 停牌或竞价还没价
   // 14:57 起是收盘集合竞价，新浪的买一/卖一变成撮合信息，不再是涨停价上的挂单，按挂单判断会误报炸板
-  // （2026-11-23 长华集团 14:57:02 现价仍是涨停价、卖一 0 手，却报了炸板）。竞价期间不判断，状态原样保留
-  if (quote.time >= '14:57:00') return;
+  // （2026-11-23 长华集团 14:57:02 现价仍是涨停价、卖一 0 手，却报了炸板）。竞价期间只按价格判断：
+  // 价格离开涨停价报炸板，回到涨停价报回封；封单、冲高不判断。15:00 的收盘价也走这里
+  if (quote.time >= '14:57:00') return checkClosingAuction(quote);
   const state = states.get(quote.symbol) || { riseAlerted: false, sealed: false, peak: 0, dropAlerted: false };
   states.set(quote.symbol, state);
   const pct = (quote.price / quote.prevClose - 1) * 100;
@@ -171,6 +172,34 @@ async function check(quote) {
   } else if (state.sealed) {
     state.sealed = false;
     await notify(`${name} 炸板`, `${code} 现价 ${quote.price.toFixed(2)}，涨 ${pct.toFixed(2)}%，卖一 ${hands(quote.ask1.volume)}（${quote.time}）`);
+  }
+}
+
+const auctionLogged = new Map();
+async function checkClosingAuction(quote) {
+  const state = states.get(quote.symbol);
+  const limit = limitUpPrice(quote.symbol, quote.prevClose, quote.price);
+  const atLimit = Math.abs(quote.price - limit) < 0.005;
+  const name = quote.name.replace(/\s+/g, '');
+  const code = quote.symbol.slice(2);
+  // 竞价期间新浪各字段的样子还没核实过，封过板的票每次价格/买一卖一变化记一行原始数据，方便以后核对
+  if (state?.sealed || state?.auctionBroken) {
+    const raw = `价 ${quote.price} 买一 ${quote.bid1.price}×${quote.bid1.volume} 卖一 ${quote.ask1.price}×${quote.ask1.volume}`;
+    if (auctionLogged.get(quote.symbol) !== raw) {
+      auctionLogged.set(quote.symbol, raw);
+      log(`尾盘竞价 ${name} ${raw}（${quote.time}）`);
+    }
+  }
+  if (!state) return;
+  const pct = (quote.price / quote.prevClose - 1) * 100;
+  if (state.sealed && !atLimit) {
+    Object.assign(state, { sealed: false, auctionBroken: true });
+    await notify(`${name} 尾盘炸板`, `${code} 尾盘竞价价格 ${quote.price.toFixed(2)}，涨 ${pct.toFixed(2)}%（${quote.time}）`);
+  } else if (!state.sealed && atLimit && (state.auctionBroken || state.riseAlerted)) {
+    // 尾盘炸过又回来报回封；盘中冲高过、没封住的票竞价拉到涨停价报尾盘封板
+    const again = state.auctionBroken;
+    Object.assign(state, { sealed: true, auctionBroken: false });
+    await notify(`${name} 尾盘${again ? '回封' : '封板'}`, `${code} 尾盘竞价价格到涨停价 ${limit.toFixed(2)}（${quote.time}）`);
   }
 }
 
