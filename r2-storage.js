@@ -36,18 +36,68 @@ function assertConfigured() {
   if (!r2Client) throw new Error('R2 未配置，请设置 R2_ENDPOINT、R2_ACCESS_KEY_ID、R2_SECRET_ACCESS_KEY 和 R2_BUCKET');
 }
 
+// 读写的本地缓存（2026-11-23 加）：软路由到 R2 下载约 1 MB/s，一次每日更新里同一个回测文件（约 5 MB）要下载七八次。
+// 读之前先 HEAD 取 ETag（0.4 秒），和 .r2-cache/ 里存的一样就直接用本地这份；自己写进去的内容也存一份。
+// 缓存放在项目根目录 .r2-cache/（不在 reports/ 里，主备同步不会传它；git 也忽略）。删掉整个目录也没关系，只是下次重新下载
+const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
+const CACHE_DIR = path.join(__dirname, '.r2-cache');
+const cacheFile = key => path.join(CACHE_DIR, encodeURIComponent(key));
+const cleanEtag = etag => String(etag || '').replace(/"/g, '');
+const md5Of = text => crypto.createHash('md5').update(text).digest('hex');
+const bodyOf = value => `${JSON.stringify(value, null, 2)}\n`;
+
+function readCache(key, etag) {
+  try {
+    const meta = JSON.parse(fs.readFileSync(`${cacheFile(key)}.meta`, 'utf8'));
+    if (!etag || meta.etag !== etag) return null;
+    return fs.readFileSync(cacheFile(key), 'utf8');
+  } catch {
+    return null;
+  }
+}
+
+function writeCache(key, etag, text) {
+  if (!etag) return;
+  try {
+    fs.mkdirSync(CACHE_DIR, { recursive: true });
+    fs.writeFileSync(`${cacheFile(key)}.tmp`, text, 'utf8');
+    fs.renameSync(`${cacheFile(key)}.tmp`, cacheFile(key));
+    fs.writeFileSync(`${cacheFile(key)}.meta`, JSON.stringify({ etag, savedAt: new Date().toISOString() }));
+  } catch {
+    // 缓存写不进去不影响读写本身
+  }
+}
+
+const isMissing = error => error.name === 'NoSuchKey' || error.name === 'NotFound' || error.$metadata?.httpStatusCode === 404;
+
+// 对象的 ETag 和自定义元数据；不存在返回 null
+async function headObject(key) {
+  try {
+    const head = await r2Client.send(new HeadObjectCommand({ Bucket: R2_BUCKET, Key: key }));
+    return { etag: cleanEtag(head.ETag), metadata: head.Metadata || {} };
+  } catch (error) {
+    if (isMissing(error)) return null;
+    throw error;
+  }
+}
+
 async function readObjectText(key) {
   assertConfigured();
+  const head = await headObject(key);
+  if (!head) throw Object.assign(new Error(`R2 没有 ${key}`), { name: 'NoSuchKey' });
+  const cached = readCache(key, head.etag);
+  if (cached !== null) return cached;
   const response = await r2Client.send(new GetObjectCommand({ Bucket: R2_BUCKET, Key: key }));
-  const bytes = await response.Body.transformToByteArray();
-  return Buffer.from(bytes).toString('utf8');
+  const text = Buffer.from(await response.Body.transformToByteArray()).toString('utf8');
+  writeCache(key, cleanEtag(response.ETag), text);
+  return text;
 }
 
 async function readJson(key) {
   return JSON.parse(await readObjectText(key));
 }
-
-const isMissing = error => error.name === 'NoSuchKey' || error.$metadata?.httpStatusCode === 404;
 
 function backupStamp(date = new Date()) {
   return new Date(date.getTime() + 8 * 3600_000).toISOString().slice(0, 19).replace(/[-:]/g, '').replace('T', '-');
@@ -55,18 +105,24 @@ function backupStamp(date = new Date()) {
 
 // 写 JSON 到 R2。原对象存在时先备份；原对象和新值都是数组、且新数组更短时拒绝写入（防止拿不完整的本地文件覆盖），
 // 确实要删记录时传 allowShrink（如每天整体替换的今日首板）。
+// 2026-11-23 起：内容和 R2 上完全一样就不写（不备份、不上传）；数组条数写进对象元数据 count，检查「变短」只要 HEAD，
+// 没有 count 的旧对象才下载下来数（经缓存）。返回 true 表示写了
 async function writeJson(key, value, { allowShrink = false } = {}) {
   assertConfigured();
   if (key.startsWith(BACKUP_PREFIX)) throw new Error(`不能直接写备份目录: ${key}`);
-  let existing;
-  try {
-    existing = await readJson(key);
-  } catch (error) {
-    if (!isMissing(error)) throw error;
+  const body = bodyOf(value);
+  const head = await headObject(key);
+  if (head && head.etag === md5Of(body)) {
+    writeCache(key, head.etag, body);
+    return false;
   }
-  if (existing !== undefined) {
-    if (!allowShrink && Array.isArray(existing) && Array.isArray(value) && value.length < existing.length) {
-      throw new Error(`R2 ${key} 现有 ${existing.length} 条，新内容只有 ${value.length} 条，已拒绝写入（确认要删记录时用 allowShrink）`);
+  if (head) {
+    if (!allowShrink && Array.isArray(value)) {
+      const counted = head.metadata.count !== undefined ? Number(head.metadata.count) : NaN;
+      const length = Number.isFinite(counted) ? counted : await readJson(key).then(existing => (Array.isArray(existing) ? existing.length : -1));
+      if (value.length < length) {
+        throw new Error(`R2 ${key} 现有 ${length} 条，新内容只有 ${value.length} 条，已拒绝写入（确认要删记录时用 allowShrink）`);
+      }
     }
     await r2Client.send(new CopyObjectCommand({
       Bucket: R2_BUCKET,
@@ -74,27 +130,23 @@ async function writeJson(key, value, { allowShrink = false } = {}) {
       Key: `${BACKUP_PREFIX}${backupStamp()}/${key}`,
     }));
   }
-  await r2Client.send(new PutObjectCommand({
+  const response = await r2Client.send(new PutObjectCommand({
     Bucket: R2_BUCKET,
     Key: key,
-    Body: JSON.stringify(value, null, 2) + '\n',
+    Body: body,
     ContentType: 'application/json; charset=utf-8',
+    ...(Array.isArray(value) && { Metadata: { count: String(value.length) } }),
   }));
+  writeCache(key, cleanEtag(response.ETag), body);
+  return true;
 }
 
 // R2 上的对象和 writeJson(key, value) 要写的内容是否完全一样：只发 HEAD 取 ETag（单次上传的 ETag 是内容的 MD5），不下载正文。
 // 2026-11-23 加：news-calendar --upload 以前把 35 个月（82 MB）全部下载下来比较，软路由上要 27 分钟
 async function sameAsRemote(key, value) {
   assertConfigured();
-  const body = JSON.stringify(value, null, 2) + '\n';
-  const md5 = require('crypto').createHash('md5').update(body).digest('hex');
-  try {
-    const head = await r2Client.send(new HeadObjectCommand({ Bucket: R2_BUCKET, Key: key }));
-    return String(head.ETag || '').replace(/"/g, '') === md5;
-  } catch (error) {
-    if (isMissing(error) || error.name === 'NotFound') return false;
-    throw error;
-  }
+  const head = await headObject(key);
+  return Boolean(head && head.etag === md5Of(bodyOf(value)));
 }
 
 async function listObjects(prefix) {
