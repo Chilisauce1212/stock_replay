@@ -1,6 +1,6 @@
 require('dotenv').config();
 
-const { S3Client, GetObjectCommand, ListObjectsV2Command, PutObjectCommand, CopyObjectCommand, DeleteObjectsCommand } = require('@aws-sdk/client-s3');
+const { S3Client, GetObjectCommand, HeadObjectCommand, ListObjectsV2Command, PutObjectCommand, CopyObjectCommand, DeleteObjectsCommand } = require('@aws-sdk/client-s3');
 const { NodeHttpHandler } = require('@smithy/node-http-handler');
 const { HttpsProxyAgent } = require('https-proxy-agent');
 
@@ -82,6 +82,21 @@ async function writeJson(key, value, { allowShrink = false } = {}) {
   }));
 }
 
+// R2 上的对象和 writeJson(key, value) 要写的内容是否完全一样：只发 HEAD 取 ETag（单次上传的 ETag 是内容的 MD5），不下载正文。
+// 2026-11-23 加：news-calendar --upload 以前把 35 个月（82 MB）全部下载下来比较，软路由上要 27 分钟
+async function sameAsRemote(key, value) {
+  assertConfigured();
+  const body = JSON.stringify(value, null, 2) + '\n';
+  const md5 = require('crypto').createHash('md5').update(body).digest('hex');
+  try {
+    const head = await r2Client.send(new HeadObjectCommand({ Bucket: R2_BUCKET, Key: key }));
+    return String(head.ETag || '').replace(/"/g, '') === md5;
+  } catch (error) {
+    if (isMissing(error) || error.name === 'NotFound') return false;
+    throw error;
+  }
+}
+
 async function listObjects(prefix) {
   assertConfigured();
   const objects = [];
@@ -127,4 +142,5 @@ async function listJsonKeys(prefix) {
   return keys;
 }
 
-module.exports = { R2_BUCKET, FORCE_LOCAL, BACKUP_PREFIX, r2Client, isMissing, readJson, writeJson, listJsonKeys, pruneBackups };
+module.exports = { sameAsRemote,
+  R2_BUCKET, FORCE_LOCAL, BACKUP_PREFIX, r2Client, isMissing, readJson, writeJson, listJsonKeys, pruneBackups };

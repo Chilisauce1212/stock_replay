@@ -417,8 +417,7 @@ async function main() {
     if (previous === `${JSON.stringify(data)}\n` && !r2) continue;
     if (previous !== `${JSON.stringify(data)}\n`) writeJson(file, data);
     if (r2) {
-      const remote = await r2.readJson(`${R2_PREFIX}${month}.json`).catch(error => (r2.isMissing(error) ? null : Promise.reject(error)));
-      if (JSON.stringify(remote) === JSON.stringify(data)) continue;
+      if (await r2.sameAsRemote(`${R2_PREFIX}${month}.json`, data)) continue; // 只比 ETag，不下载（以前下载全部月份比较，27 分钟）
       await r2.writeJson(`${R2_PREFIX}${month}.json`, data);
     }
     changed++;
