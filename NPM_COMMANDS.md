@@ -859,3 +859,13 @@ npx playwright install chromium          # 第一次用要装 Playwright 自带�
 - 登录不能在 headless 里做：同花顺登录页会拒绝自动化浏览器（返回 Nginx forbidden）。所以登录在有界面的电脑上跑 `npm run wencai-login`，再把文件拷到服务器同一路径（scp 等）。文件里是登录凭证，已在 .gitignore 里，不要提交、不要外传。
 - 登录约 3 个月过期（这次导出的到 2027-02-14）。剩 14 天起每次查询打 `!!! 问财登录 N 天后过期`；过期或被踢时报「问财要求登录」，不会当成查不到。每次跑完会把最新 cookie 写回文件。
 - `WENCAI_HEADLESS=0` 改回连有界面 Chrome 的旧方式；`WENCAI_BROWSER_CHANNEL=chrome` 改用本机装的 Chrome。
+
+## 31. 盘中自选同步（软路由，2026-11-24 起）
+
+```bash
+node watch-sync.js --once     # 只读一次同花顺自选并同步，测试用
+```
+
+- 软路由 cron 交易日 9:14 跑 `deploy/run-watch-sync.sh`，15:01 自己退出，日志 `reports/watch-sync-YYYYMMDD.log`。每分钟用 `watch-alerts.js` 的 `fetchWatchlist` 读同花顺自选，POST 到阿里云 ai-bark（`.env` 的 `WATCH_SYNC_URL`、`WATCH_SYNC_TOKEN`，口令不要提交、不要打印）。读自选失败、同步连续 5 次失败时用 `notify` 推一次。
+- 盯盘规则和推送由 ai-bark 做，规则以 ai-bark 的 `src/watch.js` 为准，改门槛去改那边。`watch-alerts.js` 的盯盘部分不再运行，只是被 `watch-sync.js` 引用，不能删。
+- 退回软路由自己盯盘：把 cron 和 `deploy/router-setup.sh` 里的 `run-watch-sync.sh` 换回 `run-watch.sh`，两边不要同时跑，否则每条提醒推两遍。

@@ -1,6 +1,11 @@
 #!/usr/bin/env node
 'use strict';
 
+// 2026-11-24 起这个脚本的盯盘部分不再运行：盯盘规则和推送改由阿里云上的 ai-bark 做（规则以 ai-bark 的 src/watch.js 为准，
+// 改门槛去改那边，仓库 C:\msys64\home\chili\workspace\bark）。软路由 9:14 跑的是 watch-sync.js（deploy/run-watch-sync.sh），
+// 它只用这里导出的 fetchWatchlist（读同花顺自选）和 notify（同步出错时提醒）。下面的规则说明保留作参考；
+// 要退回软路由自己盯盘，把 cron 的 run-watch-sync.sh 换回 run-watch.sh。
+//
 // 盘中盯自选（2026-11-19）：在软路由上交易日 9:14 启动，15:01 自己退出（cron 见 deploy/router-setup.sh）。
 //   - 名单：同花顺自选（t.10jqka.com.cn 的 getSelfStockWithMarket，登录 cookie 在 reports/ths-state.json），每分钟刷新（用户盘中会改自选），只留 A 股
 //   - 行情：新浪 hq.sinajs.cn，一次请求查完整个名单，每 3 秒一次（免费行情本身就是 3 秒一跳）
@@ -44,7 +49,7 @@ async function notify(spoken, detail = '') {
   const base = String(process.env.BARK_URL || '').replace(/\/+$/, '');
   if (!base || options.dryRun) return;
   // 点通知打开同花顺 App（amihexin:// 实测能拉起 App；跳到个股的格式还没找到，网页个股页只会开浏览器）
-  const query = new URLSearchParams({ group: '盯盘', level: 'timeSensitive', url: 'amihexin://' });
+  const query = new URLSearchParams({ group: '盯盘', level: 'timeSensitive', url: 'amihexin://', sound: 'telegraph' });
   // 网络错误或 Bark 服务端错误隔 2 秒重试，共 3 次（2026-11-23 加：以前失败一次这条提醒就丢了）
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
