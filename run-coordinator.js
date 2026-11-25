@@ -194,8 +194,10 @@ const shanghaiClock = time => new Date(time + 8 * 3600e3).toISOString().slice(11
 
 // 从每日更新的输出里摘要：各步 ✓/✗、今日首板只数、大模型费用、!!! 警告
 function summarize(output) {
+  // 只认「每日更新完成」下面的步骤清单；后面「分步用时」树里的 ✗ 只表示那次尝试没成功（比如今日首板的自由流通市值，后面一进二会补），不算失败
   const tail = output.slice(output.lastIndexOf('========== 每日更新完成'));
-  const steps = tail.includes('每日更新完成') ? tail.split('\n').filter(line => /^\s+[✓✗]/.test(line)).map(line => line.trim()) : [];
+  const list = tail.includes('每日更新完成') ? tail.split('========== 分步用时')[0] : '';
+  const steps = list.split('\n').filter(line => /^\s+[✓✗]/.test(line)).map(line => line.trim());
   const failed = steps.filter(line => line.startsWith('✗')).map(line => line.slice(1).trim());
   const firstBoards = output.match(/今日首板（[^）]*）：(\d+) 只/)?.[1];
   let low = 0;
@@ -204,7 +206,11 @@ function summarize(output) {
     low += Number(match[1]);
     high += Number(match[2]);
   }
-  const warnings = [...new Set(output.split('\n').filter(line => line.includes('!!!') && !line.includes('往上翻看')).map(line => line.replace(/^.*?!!!\s*/, '').slice(0, 80)))];
+  let lines = output.split('\n');
+  // 今日首板没补全的自由流通市值，后面一进二那步补齐了（free-float 输出「还剩 0 条没查」），这条警告就不推了
+  const freeFloatWarn = lines.findIndex(line => line.includes('!!! 今日首板自由流通市值没补全'));
+  if (freeFloatWarn >= 0 && lines.slice(freeFloatWarn + 1).some(line => line.includes('还剩 0 条没查'))) lines = lines.filter((_, index) => index !== freeFloatWarn);
+  const warnings = [...new Set(lines.filter(line => line.includes('!!!') && !line.includes('往上翻看')).map(line => line.replace(/^.*?!!!\s*/, '').slice(0, 80)))];
   return { steps, failed, firstBoards, cost: high ? `${low.toFixed(2)}–${high.toFixed(2)} 元` : '0 元', warnings };
 }
 
@@ -395,7 +401,7 @@ async function main() {
     await notify(`${hostName(options.host)}跑完，用时 ${minutes} 分钟`, { ok: true, detail });
   } else {
     const what = summary.failed.length ? `${summary.failed.length} 步失败` : `退出码 ${exitCode}`;
-    await notify(`${hostName(options.host)}跑完，${what}`, { detail: `${detail}${options.role === 'primary' ? '；阿里云 22:30 会重跑' : ''}` });
+    await notify(`${hostName(options.host)}跑完，${what}`, { detail: `${detail}${options.role === 'primary' && exitCode !== 0 ? '；阿里云 22:30 会重跑' : ''}` });
   }
   return exitCode;
 }
