@@ -12,6 +12,11 @@ const sourceFiles = [
   '一进二回测_20260106_20261231.json',
 ];
 const requestConcurrency = 5;
+// --recent-days N（每日更新用，2026-11-25 加）：只重查首板日在最近 N 天内的样本，只更新 daily-review/四连板及以上.json；
+// 更早的记录原样保留（K 线只取首板后一个月，一个多月前的连板数不会再变），test-cases/ 下其他几个文件不动
+const recentIndex = process.argv.indexOf('--recent-days');
+const recentDays = recentIndex >= 0 ? Number(process.argv[recentIndex + 1]) : 0;
+if (recentIndex >= 0 && !(recentDays > 0)) throw new Error('--recent-days 后面要跟天数，如 --recent-days 40');
 
 function getMarketCode(code) {
   if (code.startsWith('6')) return '17';
@@ -103,23 +108,25 @@ async function main() {
     item,
   ])).values());
   console.log(`指定源文件 ${sourceFiles.length} 个，原始记录 ${rawCases.length} 条，去重后 ${allCases.length} 条`);
-  console.log(`本地源数据共 ${allCases.length} 条，开始全量查询`);
+  const cutoff = recentDays ? new Date(Date.now() + 8 * 3600e3 - recentDays * 86400e3).toISOString().slice(0, 10) : '';
+  const queryCases = recentDays ? allCases.filter(item => item.date >= cutoff) : allCases;
+  console.log(recentDays ? `只查首板日 ${cutoff} 起的 ${queryCases.length} 条` : `本地源数据共 ${allCases.length} 条，开始全量查询`);
 
-  const prices = new Array(allCases.length);
-  const boardCounts = new Array(allCases.length);
+  const prices = new Array(queryCases.length);
+  const boardCounts = new Array(queryCases.length);
   let nextIndex = 0;
   let completed = 0;
   let missing = 0;
   async function worker() {
-    while (nextIndex < allCases.length) {
+    while (nextIndex < queryCases.length) {
       const index = nextIndex++;
       let caseData;
       for (let attempt = 1; attempt <= 3; attempt += 1) {
         try {
-          caseData = await getCaseData(allCases[index]);
+          caseData = await getCaseData(queryCases[index]);
           break;
         } catch (error) {
-          if (attempt === 3) console.error(`${allCases[index].code} ${allCases[index].date}: ${error.message}`);
+          if (attempt === 3) console.error(`${queryCases[index].code} ${queryCases[index].date}: ${error.message}`);
           await new Promise(resolve => setTimeout(resolve, attempt * 300));
         }
       }
@@ -127,9 +134,9 @@ async function main() {
       prices[index] = caseData?.price;
       boardCounts[index] = caseData?.boardCount;
       completed += 1;
-      if (completed % 50 === 0 || completed === allCases.length) {
-        const percentage = ((completed / allCases.length) * 100).toFixed(1);
-        console.log(`处理进度: ${completed}/${allCases.length} (${percentage}%)`);
+      if (completed % 50 === 0 || completed === queryCases.length) {
+        const percentage = ((completed / queryCases.length) * 100).toFixed(1);
+        console.log(`处理进度: ${completed}/${queryCases.length} (${percentage}%)`);
       }
     }
   }
@@ -139,13 +146,15 @@ async function main() {
   const remoteFour = r2.r2Client
     ? await r2.readJson('daily-review/四连板及以上.json').catch(error => (r2.isMissing(error) ? [] : Promise.reject(error)))
     : [];
-  const outputs = [
-    ['大于30元.json', allCases.filter((_, index) => prices[index] > 30)],
-    ['小于3元.json', allCases.filter((_, index) => prices[index] < 3)],
-    ['三连板及以上.json', allCases.filter((_, index) => boardCounts[index] >= 3)],
-    ['四连板及以上.json', allCases.filter((_, index) => boardCounts[index] >= 4)],
-    ['五连板及以上.json', allCases.filter((_, index) => boardCounts[index] >= 5)],
+  const allOutputs = [
+    ['大于30元.json', queryCases.filter((_, index) => prices[index] > 30)],
+    ['小于3元.json', queryCases.filter((_, index) => prices[index] < 3)],
+    ['三连板及以上.json', queryCases.filter((_, index) => boardCounts[index] >= 3)],
+    ['四连板及以上.json', queryCases.filter((_, index) => boardCounts[index] >= 4)],
+    ['五连板及以上.json', queryCases.filter((_, index) => boardCounts[index] >= 5)],
   ];
+  const outputs = recentDays ? allOutputs.filter(([fileName]) => fileName === '四连板及以上.json') : allOutputs;
+  let fourTotal = 0;
   outputs.forEach(([fileName, cases]) => {
     // 四连板及以上放在每日复盘里：保留已算好的 pnl、judge、freeFloatCap
     const inReview = fileName === '四连板及以上.json';
@@ -156,17 +165,32 @@ async function main() {
     // （2026-11-07 一次全量查询失败 139 条，误删了 28 只真四连板，如科森科技 10 板、粤桂股份 11 板）
     if (inReview) {
       const present = new Set(merged.map(item => `${item.code}|${item.date}`));
-      allCases.forEach((item, index) => {
+      queryCases.forEach((item, index) => {
         const key = `${item.code}|${item.date}`;
         if (Number.isFinite(prices[index]) || present.has(key) || !old.has(key)) return;
         merged.push(old.get(key));
         present.add(key);
       });
+      // 增量模式：没重查的记录（首板日早于 cutoff）原样保留
+      if (recentDays) {
+        const queried = new Set(queryCases.map(item => `${item.code}|${item.date}`));
+        for (const [key, item] of old) {
+          if (queried.has(key) || present.has(key)) continue;
+          merged.push(item);
+          present.add(key);
+        }
+      }
+      fourTotal = merged.length;
       merged.sort((left, right) => left.date.localeCompare(right.date) || left.code.localeCompare(right.code));
     }
     fs.writeFileSync(file, `${JSON.stringify(merged, null, 2)}\n`, 'utf8');
   });
-  console.log(`全量重算完成：大于30元 ${outputs[0][1].length} 条，小于3元 ${outputs[1][1].length} 条，三连板及以上 ${outputs[2][1].length} 条，四连板及以上 ${outputs[3][1].length} 条，五连板及以上 ${outputs[4][1].length} 条，未匹配 ${missing} 条`);
+  if (recentDays) {
+    console.log(`增量重算完成：最近 ${recentDays} 天里四连板及以上 ${allOutputs[3][1].length} 条，daily-review/四连板及以上.json 共 ${fourTotal} 条，未匹配 ${missing} 条`);
+    if (missing) console.error(`!!! 四连板：${missing} 条行情没查到，原来在文件里的已保留，明天会再查`);
+  } else {
+    console.log(`全量重算完成：大于30元 ${allOutputs[0][1].length} 条，小于3元 ${allOutputs[1][1].length} 条，三连板及以上 ${allOutputs[2][1].length} 条，四连板及以上 ${allOutputs[3][1].length} 条，五连板及以上 ${allOutputs[4][1].length} 条，未匹配 ${missing} 条`);
+  }
 }
 
 main().catch(error => {

@@ -5,6 +5,7 @@
 //   1. 今日首板（turnover_json.js --today，含连板股票、自由流通市值、新闻判断）
 //   2. T(X) 所在年份的一进二回测：追加 → 每日复盘 / 连板股票同步 → 小于 30 元 → 盈亏 → 新闻判断 → 写入每日复盘
 //      （turnover_json.js 起始 结束，见 review-pipeline.js）；1 月份同时处理上一年的文件（12 月末的票要到 1 月才算得出盈亏）
+//   2b. 四连板及以上（extract-price-cases.js --recent-days 40 → pnl.js → review-judge.js → 上传，只重查最近 40 天的首板）
 //   3. T(X) 所在年份的二进三回测（erjinsan-cases.js --min-boards 2 → pnl.js → 上传；二板一字、三板 10:30 前打板，暂不做新闻判断）；1 月同时处理上一年
 //   4. 可转债名单（convertible-bonds.js，复盘页「有转债只能空仓」用）→ 连板情绪周期（limit-up-cycle.js，配了 R2 时 --upload）
 //   5. 新闻事件归题材（theme-events.js，关思考，T(X) 当天的首板调用一次，缺的新闻先补）
@@ -72,7 +73,7 @@ function erjinsanFileOfYear(year) {
 
 async function main() {
   if (options.help) {
-    console.log(fs.readFileSync(__filename, 'utf8').split('\n').slice(3, 15).map(line => line.replace(/^\/\/ ?/, '')).join('\n'));
+    console.log(fs.readFileSync(__filename, 'utf8').split('\n').slice(3, 16).map(line => line.replace(/^\/\/ ?/, '')).join('\n'));
     return;
   }
   const { date } = await latestClosedTradeDay();
@@ -88,6 +89,36 @@ async function main() {
   for (const item of years) {
     const [start, end] = await rangeOfYear(String(item));
     results.push([`一进二回测_${start}_${end}`, runTurnover(`一进二回测 ${item}`, [start, end, ...(options.yes ? ['--yes'] : [])])]);
+  }
+  // 四连板及以上（2026-11-25 用户要求加入流程）：只重查最近 40 天首板的连板数（更早的不会再变）→ 新记录补盈亏 → 新闻判断 → 上传。
+  // 新进来的记录从一进二样本带来新闻判断和自由流通市值；连板数重算后不到 4 板的会移出，所以上传允许变少，但一次少超过 10 条就当异常不传
+  try {
+    const fourFile = path.join(ROOT, 'daily-review', '四连板及以上.json');
+    const keysOf = file => (fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : []).map(item => `${item.code}|${item.date}`);
+    const before = new Set(keysOf(fourFile));
+    runNode('四连板及以上', 'extract-price-cases.js', ['--recent-days', '40']);
+    runNode('四连板盈亏', 'pnl.js', ['四连板及以上']);
+    runNode('四连板新闻判断', 'review-judge.js', ['四连板及以上']);
+    try {
+      // 新记录一般已从一进二带来自由流通市值，这里只补缺的（通常 0 次问财）；问财失败只记警告
+      runNode('四连板自由流通市值', 'free-float.js', r2Client ? ['--upload'] : []);
+    } catch {
+      console.error('!!! 四连板自由流通市值没补全，运行 npm run free-float -- --upload');
+    }
+    const records = JSON.parse(fs.readFileSync(fourFile, 'utf8'));
+    const after = new Set(records.map(item => `${item.code}|${item.date}`));
+    const added = records.filter(item => !before.has(`${item.code}|${item.date}`));
+    const removed = [...before].filter(key => !after.has(key));
+    console.log(`四连板及以上 ${records.length} 条；新增 ${added.length}：${added.map(item => `${item.stockName}(${item.date})`).join('、') || '无'}；移出 ${removed.length}：${removed.join('、') || '无'}`);
+    if (removed.length > 10) throw new Error(`一次移出 ${removed.length} 条，可能是行情接口出错，没上传；确认无误后运行 npm run upload`);
+    if (r2Client) {
+      await writeJson('daily-review/四连板及以上.json', records, { allowShrink: removed.length > 0 });
+      console.log(`  已更新 R2 daily-review/四连板及以上.json（${records.length} 条）`);
+    }
+    results.push(['四连板及以上', true]);
+  } catch (error) {
+    console.error(`!!! 四连板及以上失败: ${error.message}`);
+    results.push(['四连板及以上', false]);
   }
   // 二进三回测（2026-11-13 用户要求加入流程）：重新生成当年样本（已有记录的 pnl 保留）→ 补算盈亏 → 上传；1 月同时处理上一年
   for (const item of years) {
