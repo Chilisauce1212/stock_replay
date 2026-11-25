@@ -7,6 +7,7 @@
 //      （turnover_json.js 起始 结束，见 review-pipeline.js）；1 月份同时处理上一年的文件（12 月末的票要到 1 月才算得出盈亏）
 //   2b. 四连板及以上（extract-price-cases.js --recent-days 40 → pnl.js → review-judge.js → 上传，只重查最近 40 天的首板）
 //   3. T(X) 所在年份的二进三回测（erjinsan-cases.js --min-boards 2 → pnl.js → 上传；二板一字、三板 10:30 前打板，暂不做新闻判断）；1 月同时处理上一年
+//   3b. 二进三五连板及以上：从各年二进三回测里筛 ≥5 板（不再查逐笔）→ 上传
 //   4. 可转债名单（convertible-bonds.js，复盘页「有转债只能空仓」用）→ 连板情绪周期（limit-up-cycle.js，配了 R2 时 --upload）
 //   5. 新闻事件归题材（theme-events.js，关思考，T(X) 当天的首板调用一次，缺的新闻先补）
 //   6. 新闻日历（news-calendar.js，配了 R2 时 --upload）；中间让模型判断当天的题材分化（theme-divergence-llm.js，几分钱）
@@ -73,7 +74,7 @@ function erjinsanFileOfYear(year) {
 
 async function main() {
   if (options.help) {
-    console.log(fs.readFileSync(__filename, 'utf8').split('\n').slice(3, 16).map(line => line.replace(/^\/\/ ?/, '')).join('\n'));
+    console.log(fs.readFileSync(__filename, 'utf8').split('\n').slice(3, 17).map(line => line.replace(/^\/\/ ?/, '')).join('\n'));
     return;
   }
   const { date } = await latestClosedTradeDay();
@@ -136,6 +137,38 @@ async function main() {
       console.error(`!!! ${file} 失败: ${error.message}`);
       results.push([file, false]);
     }
+  }
+  // 二进三五连板及以上（2026-11-25 用户要求加入流程）：规则和二进三回测相同、只多了「最终 ≥5 板」，
+  // 所以直接从各年 二进三回测_*.json 里筛 boardCount ≥ 5（2026-11-25 核对过和 erjinsan-cases.js --min-boards 5 的 57 条完全一致），不再查逐笔；
+  // 已有记录的其他字段（judge 等）保留。一次移出超过 3 条当成异常不写（板数只会变多，正常不会移出）
+  try {
+    const reviewDir = path.join(ROOT, 'daily-review');
+    const sources = fs.readdirSync(reviewDir).filter(name => /^二进三回测_\d{8}_\d{8}\.json$/.test(name));
+    if (sources.length < 3) throw new Error(`本地只有 ${sources.length} 个二进三回测文件（应有 2024 起每年一个），没更新`);
+    const fiveFile = path.join(reviewDir, '二进三五连板及以上.json');
+    const oldFive = fs.existsSync(fiveFile) ? JSON.parse(fs.readFileSync(fiveFile, 'utf8')) : [];
+    const keyOf = item => `${item.code}|${item.date}`;
+    const oldByKey = new Map(oldFive.map(item => [keyOf(item), item]));
+    const five = sources.flatMap(name => JSON.parse(fs.readFileSync(path.join(reviewDir, name), 'utf8')))
+      .filter(item => item.boardCount >= 5)
+      .map(item => ({ ...oldByKey.get(keyOf(item)), ...item }))
+      .sort((left, right) => left.date.localeCompare(right.date) || left.code.localeCompare(right.code))
+      // id 前缀是文件里的序号（同 erjinsan-cases.js），按新顺序重编
+      .map((item, index) => ({ ...item, id: item.id.replace(/^\d+-/, `${index}-`) }));
+    const fiveKeys = new Set(five.map(keyOf));
+    const added = five.filter(item => !oldByKey.has(keyOf(item)));
+    const removed = oldFive.filter(item => !fiveKeys.has(keyOf(item)));
+    console.log(`\n二进三五连板及以上 ${five.length} 条；新增 ${added.length}：${added.map(item => `${item.stockName}(${item.date}，${item.boardCount} 板)`).join('、') || '无'}；移出 ${removed.length}：${removed.map(keyOf).join('、') || '无'}`);
+    if (removed.length > 3) throw new Error(`一次移出 ${removed.length} 条，没写入；确认无误后手动更新`);
+    fs.writeFileSync(fiveFile, `${JSON.stringify(five, null, 2)}\n`, 'utf8');
+    if (r2Client) {
+      await writeJson('daily-review/二进三五连板及以上.json', five, { allowShrink: removed.length > 0 });
+      console.log('  已更新 R2 daily-review/二进三五连板及以上.json');
+    }
+    results.push(['二进三五连板及以上', true]);
+  } catch (error) {
+    console.error(`!!! 二进三五连板及以上失败: ${error.message}`);
+    results.push(['二进三五连板及以上', false]);
   }
   try {
     // 可转债名单（复盘页「有转债只能空仓」用），全量重取，3 次请求
