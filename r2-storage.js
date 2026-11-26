@@ -38,14 +38,16 @@ const r2Client = !FORCE_LOCAL && R2_ENDPOINT && process.env.R2_ACCESS_KEY_ID && 
 if (r2Client && R2_PROXY) {
   const viaProxy = r2Client.send.bind(r2Client);
   let direct = null;
-  const proxyDown = error => /ECONNREFUSED|EHOSTUNREACH|ENETUNREACH|ECONNRESET|socket hang up|Proxy|407/i.test(`${error.code || ''} ${error.message || ''}`) && !error.$metadata?.httpStatusCode;
+  // 2026-11-26 加超时：当晚 21:22–21:35 走代理的 R2 请求 4 次都 30 秒没响应（代理节点卡住），三步失败；直连当时是好的。
+  // 所以 SDK 自己重试完仍超时的，也换直连再试（本进程之后都直连）
+  const proxyDown = error => /ECONNREFUSED|EHOSTUNREACH|ENETUNREACH|ECONNRESET|ETIMEDOUT|socket hang up|Proxy|407|requestTimeout|TimeoutError/i.test(`${error.code || ''} ${error.name || ''} ${error.message || ''}`) && !error.$metadata?.httpStatusCode;
   r2Client.send = async (command, ...rest) => {
     if (direct) return direct.send(command, ...rest);
     try {
       return await viaProxy(command, ...rest);
     } catch (error) {
       if (!proxyDown(error)) throw error;
-      console.error(`!!! R2 代理 ${R2_PROXY} 连不上（${error.code || error.message}），改为直连`);
+      console.error(`!!! R2 代理 ${R2_PROXY} 连不上或没响应（${(error.code || error.message || '').slice(0, 60)}），改为直连`);
       direct = makeClient('');
       return direct.send(command, ...rest);
     }
