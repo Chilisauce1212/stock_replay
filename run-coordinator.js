@@ -23,7 +23,7 @@ const os = require('os');
 const path = require('path');
 const { spawn } = require('child_process');
 const { GetObjectCommand, PutObjectCommand } = require('@aws-sdk/client-s3');
-const { r2Client, R2_BUCKET } = require('./r2-storage');
+const { r2Client, R2_BUCKET, releaseProxyNode } = require('./r2-storage');
 const { latestClosedTradeDay } = require('./limit-up-list');
 const stateSync = require('./state-sync');
 
@@ -406,8 +406,13 @@ async function main() {
   return exitCode;
 }
 
-main().then(code => process.exit(code), async error => {
+// 不管成功失败，都把 R2 兜底临时固定的代理节点交还自动选择（没换过节点什么都不做，见 r2-storage.js）
+main().then(async code => {
+  await releaseProxyNode();
+  process.exit(code);
+}, async error => {
   console.error(`!!! 协调失败: ${error.stack || error.message}`);
+  await releaseProxyNode().catch(() => {});
   await notify(`${hostName(options.host)}出错`, { detail: `${error.message.slice(0, 200)}${options.role === 'primary' ? '；阿里云 22:30 会兜底' : ''}` });
   process.exit(1);
 });

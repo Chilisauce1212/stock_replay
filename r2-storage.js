@@ -15,10 +15,10 @@ const BACKUP_PREFIX = 'backups/';
 // R2 专用代理 R2_PROXY（2026-11-23 加，软路由 .env 设为 OpenClash 的 http://192.168.101.1:7890）：软路由直连 R2 下载 5 MB 要 34–197 秒、
 // 上传 72 秒，走代理 7–16 秒、4 秒。只影响 R2，抓新闻、通达信、问财不走它。没设 R2_PROXY 时沿用 HTTPS_PROXY 等通用变量
 const R2_PROXY = process.env.R2_PROXY || process.env.HTTPS_PROXY || process.env.https_proxy || process.env.HTTP_PROXY || process.env.http_proxy || '';
-const makeClient = proxy => new S3Client({
+const makeClient = (proxy, attempts = 4) => new S3Client({
   endpoint: R2_ENDPOINT,
   region: 'auto',
-  maxAttempts: 4, // 超时、断线、5xx 由 SDK 重试，共 4 次
+  maxAttempts: attempts, // 超时、断线、5xx 由 SDK 重试，默认共 4 次（走代理时 2 次，失败后先换节点、再直连，见下面）
   // 超时（2026-11-16）：经代理的请求偶尔挂住不返回，news-calendar --upload 卡了半小时。
   // 2026-11-23 发现：只设 requestTimeout 时 SDK 只打一行 WARN、不断开（软路由一次下载挂了 781 秒），
   // 必须加 throwOnRequestTimeout 才会报错、由 SDK 重试（默认共 3 次）。requestTimeout 是连接多久没有数据算卡住，30 秒足够
@@ -33,21 +33,110 @@ const makeClient = proxy => new S3Client({
     secretAccessKey: process.env.R2_SECRET_ACCESS_KEY,
   },
 });
-const r2Client = !FORCE_LOCAL && R2_ENDPOINT && process.env.R2_ACCESS_KEY_ID && process.env.R2_SECRET_ACCESS_KEY ? makeClient(R2_PROXY) : null;
-// 代理本身连不上（OpenClash 停了、端口变了）时退回直连，本进程之后都直连；R2 自己报的错照常抛出
+// 走代理时 SDK 只重试 2 次（约 1 分钟），后面由下面的兜底接手，免得一个卡住的节点耗掉 2 分钟
+const r2Client = !FORCE_LOCAL && R2_ENDPOINT && process.env.R2_ACCESS_KEY_ID && process.env.R2_SECRET_ACCESS_KEY ? makeClient(R2_PROXY, R2_PROXY ? 2 : 4) : null;
+
+// 走代理的兜底（2026-11-23 连不上改直连；2026-11-26 当晚 21:22–21:35 代理节点连上了但不回数据，R2 请求全超时，三步失败）：
+//   1. 代理连不上 / 超时 → 用 mihomo 控制接口（R2_PROXY_API，如 http://192.168.101.1:9090，口令 R2_PROXY_API_SECRET）
+//      拿 R2 地址给 R2 所在策略组（从当前连接的链路找，找不到用 R2_PROXY_GROUP，默认「♻️ 自动选择 - HK」）的每个节点测速，
+//      把组临时固定到最快的另一个节点，再走代理试一次；固定记录在系统临时目录的 stock-replay-r2-proxy-node.json，跑完由 run-coordinator 调 releaseProxyNode 交还自动选择
+//   2. 换节点后还不行（或没配控制接口）→ 本进程之后都直连
+//   R2 自己报的错（有 HTTP 状态码）照常抛出
+const PROXY_API = process.env.R2_PROXY_API || '';
+const PROXY_GROUP = process.env.R2_PROXY_GROUP || '♻️ 自动选择 - HK';
+// 放系统临时目录（容器里各进程共用），不放 reports/，免得被共享状态同步到别的机器
+const NODE_MARK = require('path').join(require('os').tmpdir(), 'stock-replay-r2-proxy-node.json');
+const SWITCH_GAP_MS = 3 * 60e3;
+let lastSwitchAt = 0;
+
+async function proxyApi(method, apiPath, body, timeout = 8000) {
+  const response = await fetch(`${PROXY_API}${apiPath}`, {
+    method,
+    headers: { Authorization: `Bearer ${process.env.R2_PROXY_API_SECRET || ''}`, 'content-type': 'application/json' },
+    body: body ? JSON.stringify(body) : undefined,
+    signal: AbortSignal.timeout(timeout),
+  });
+  const text = await response.text();
+  if (!response.ok) throw new Error(`控制接口 ${method} ${apiPath} HTTP ${response.status} ${text.slice(0, 80)}`);
+  return text ? JSON.parse(text) : null;
+}
+
+// R2 流量用的是哪个策略组：看当前到 R2 的连接链路（[节点, 组, 上级组…]），取第一个有多个节点可选的组
+async function r2Group() {
+  const host = new URL(R2_ENDPOINT).hostname.split('.').slice(-4).join('.');
+  const { connections = [] } = await proxyApi('GET', '/connections');
+  const chains = connections.find(item => (item.metadata?.host || '').endsWith(host))?.chains || [];
+  for (const name of chains) {
+    const group = await proxyApi('GET', `/proxies/${encodeURIComponent(name)}`).catch(() => null);
+    if (['URLTest', 'Fallback', 'Selector', 'LoadBalance'].includes(group?.type) && (group.all || []).length > 1) return group;
+  }
+  return proxyApi('GET', `/proxies/${encodeURIComponent(PROXY_GROUP)}`);
+}
+
+// 换节点：成功返回 true。3 分钟内（本进程或别的进程）刚换过就不再换，直接返回 true 让调用方再试一次
+async function switchProxyNode() {
+  if (!PROXY_API) return false;
+  const mark = (() => { try { return JSON.parse(require('fs').readFileSync(NODE_MARK, 'utf8')); } catch { return null; } })();
+  if (Date.now() - Math.max(lastSwitchAt, Date.parse(mark?.at || 0) || 0) < SWITCH_GAP_MS) return lastSwitchAt > 0 || Boolean(mark);
+  lastSwitchAt = Date.now();
+  try {
+    const group = await r2Group();
+    const current = group.now;
+    const tests = await Promise.all((group.all || []).map(async name => {
+      const result = await proxyApi('GET', `/proxies/${encodeURIComponent(name)}/delay?timeout=6000&url=${encodeURIComponent(R2_ENDPOINT)}`, null, 9000).catch(() => null);
+      return { name, delay: result?.delay || 0 };
+    }));
+    const best = tests.filter(item => item.delay > 0 && item.name !== current).sort((left, right) => left.delay - right.delay)[0];
+    if (!best) {
+      console.error(`!!! R2 代理：「${group.name}」里除 ${current} 外没有能连上 R2 的节点`);
+      return false;
+    }
+    await proxyApi('PUT', `/proxies/${encodeURIComponent(group.name)}`, { name: best.name });
+    require('fs').mkdirSync(require('path').dirname(NODE_MARK), { recursive: true });
+    require('fs').writeFileSync(NODE_MARK, JSON.stringify({ group: group.name, node: best.name, from: current, at: new Date().toISOString(), fixedBefore: group.fixed || '' }));
+    console.error(`!!! R2 代理节点 ${current} 卡住，「${group.name}」临时固定到 ${best.name}（R2 测速 ${best.delay} ms），跑完交还自动选择`);
+    return true;
+  } catch (error) {
+    console.error(`!!! R2 代理换节点失败：${error.message}`);
+    return false;
+  }
+}
+
+// 交还自动选择（run-coordinator 跑完调用；没换过节点什么都不做）。原来就是手动固定的组不动
+async function releaseProxyNode() {
+  if (!PROXY_API) return;
+  let mark;
+  try { mark = JSON.parse(require('fs').readFileSync(NODE_MARK, 'utf8')); } catch { return; }
+  try {
+    if (!mark.fixedBefore) await proxyApi('DELETE', `/proxies/${encodeURIComponent(mark.group)}`);
+    require('fs').unlinkSync(NODE_MARK);
+    console.log(`R2 代理：「${mark.group}」已交还自动选择（之前临时固定在 ${mark.node}）`);
+  } catch (error) {
+    console.error(`!!! R2 代理：交还「${mark.group}」的自动选择失败：${error.message}，到 OpenClash 面板里手动取消固定`);
+  }
+}
+
 if (r2Client && R2_PROXY) {
   const viaProxy = r2Client.send.bind(r2Client);
   let direct = null;
-  // 2026-11-26 加超时：当晚 21:22–21:35 走代理的 R2 请求 4 次都 30 秒没响应（代理节点卡住），三步失败；直连当时是好的。
-  // 所以 SDK 自己重试完仍超时的，也换直连再试（本进程之后都直连）
-  const proxyDown = error => /ECONNREFUSED|EHOSTUNREACH|ENETUNREACH|ECONNRESET|ETIMEDOUT|socket hang up|Proxy|407|requestTimeout|TimeoutError/i.test(`${error.code || ''} ${error.name || ''} ${error.message || ''}`) && !error.$metadata?.httpStatusCode;
+  const proxyDown = error => /ECONNREFUSED|EHOSTUNREACH|ENETUNREACH|ECONNRESET|ETIMEDOUT|socket hang up|Proxy|407|requestTimeout|TimeoutError|did not establish/i.test(`${error.code || ''} ${error.name || ''} ${error.message || ''}`) && !error.$metadata?.httpStatusCode;
+  const brief = error => (error.code || error.message || '').slice(0, 60);
   r2Client.send = async (command, ...rest) => {
     if (direct) return direct.send(command, ...rest);
     try {
       return await viaProxy(command, ...rest);
     } catch (error) {
       if (!proxyDown(error)) throw error;
-      console.error(`!!! R2 代理 ${R2_PROXY} 连不上或没响应（${(error.code || error.message || '').slice(0, 60)}），改为直连`);
+      console.error(`!!! R2 代理 ${R2_PROXY} 连不上或没响应（${brief(error)}）`);
+      if (await switchProxyNode()) {
+        try {
+          return await viaProxy(command, ...rest);
+        } catch (retryError) {
+          if (!proxyDown(retryError)) throw retryError;
+          console.error(`!!! R2 换节点后还是不行（${brief(retryError)}）`);
+        }
+      }
+      console.error('!!! R2 改为直连（本进程之后都直连）');
       direct = makeClient('');
       return direct.send(command, ...rest);
     }
@@ -225,5 +314,6 @@ async function listJsonKeys(prefix) {
   return keys;
 }
 
-module.exports = { sameAsRemote,
+module.exports = {
+  releaseProxyNode, sameAsRemote,
   R2_BUCKET, FORCE_LOCAL, BACKUP_PREFIX, r2Client, isMissing, readJson, writeJson, listJsonKeys, pruneBackups };
