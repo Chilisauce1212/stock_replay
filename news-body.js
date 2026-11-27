@@ -19,19 +19,61 @@ const NEWS_CACHE_FILE = path.join(REPORTS_DIR, 'news-cache.json');
 const STORED_LENGTH = 3000;
 const MOBILE_UA = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148';
 
+// 抓取过程中新抓的正文先逐条追加到这个日志（每行 [url, 内容]），抓完再整体写回缓存并删掉日志。
+// 2026-11-27 起：以前每抓 20 篇就把整个缓存（当时 253 MB）JSON.stringify 一遍重写，首板 286 只那天
+// 抓 2596 篇、重写上百次，软路由容器内存涨到 3 GB 上限被系统杀掉。中途被杀时，下次读缓存会把日志合并回来。
+const BODY_JOURNAL_FILE = `${BODY_CACHE_FILE}.journal`;
+
 function readBodyCache() {
+  let cache = {};
   try {
-    return JSON.parse(fs.readFileSync(BODY_CACHE_FILE, 'utf8'));
+    cache = JSON.parse(fs.readFileSync(BODY_CACHE_FILE, 'utf8'));
   } catch {
-    return {};
+    cache = {};
   }
+  if (fs.existsSync(BODY_JOURNAL_FILE)) {
+    for (const line of fs.readFileSync(BODY_JOURNAL_FILE, 'utf8').split('\n')) {
+      if (!line.trim()) continue;
+      try {
+        const [url, value] = JSON.parse(line);
+        if (url) cache[url] = value;
+      } catch {
+        // 被杀时最后一行可能只写了一半，跳过
+      }
+    }
+  }
+  return cache;
 }
 
+function appendBodyJournal(entries) {
+  if (!entries.length) return;
+  fs.mkdirSync(REPORTS_DIR, { recursive: true });
+  fs.appendFileSync(BODY_JOURNAL_FILE, entries.map(entry => `${JSON.stringify(entry)}\n`).join(''), 'utf8');
+}
+
+// 逐条写，不拼成一个几百 MB 的大字符串；格式和 JSON.stringify(cache) 一样（一行、无缩进）
 function writeBodyCache(cache) {
   fs.mkdirSync(REPORTS_DIR, { recursive: true });
   const temporary = `${BODY_CACHE_FILE}.tmp`;
-  fs.writeFileSync(temporary, `${JSON.stringify(cache)}\n`, 'utf8');
+  const fd = fs.openSync(temporary, 'w');
+  try {
+    let chunk = '{';
+    let first = true;
+    for (const key of Object.keys(cache)) {
+      if (cache[key] === undefined) continue;
+      chunk += `${first ? '' : ','}${JSON.stringify(key)}:${JSON.stringify(cache[key])}`;
+      first = false;
+      if (chunk.length > 1 << 20) {
+        fs.writeSync(fd, chunk, null, 'utf8');
+        chunk = '';
+      }
+    }
+    fs.writeSync(fd, `${chunk}}\n`, null, 'utf8');
+  } finally {
+    fs.closeSync(fd);
+  }
   fs.renameSync(temporary, BODY_CACHE_FILE);
+  fs.rmSync(BODY_JOURNAL_FILE, { force: true });
 }
 
 // 在页面里取正文：优先从标题出现的位置往后截（避开导航栏），找不到标题就取链接文字最少的大块。
@@ -165,6 +207,7 @@ async function fetchBodies(items, { workers = 6, retryFailed = false, onProgress
   const viaApi = { ok: 0, fallback: 0 };
   let next = 0;
   let done = 0;
+  let pending = []; // 还没追加进日志的 url
   async function worker() {
     while (next < todo.length) {
       const item = todo[next++];
@@ -183,8 +226,10 @@ async function fetchBodies(items, { workers = 6, retryFailed = false, onProgress
         cache[item.url] = { text: '', error: String(error.message || error).slice(0, 200), attempts, fetchedAt: new Date().toISOString() };
       }
       done++;
+      pending.push(item.url);
       if (done % 20 === 0 || done === todo.length) {
-        writeBodyCache(cache);
+        appendBodyJournal(pending.map(url => [url, cache[url]]));
+        pending = [];
         onProgress?.(done, todo.length);
       }
     }
