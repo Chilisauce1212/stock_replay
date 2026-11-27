@@ -920,6 +920,11 @@
               <output id="volumePileProfitThresholdValue" for="volumePileProfitThreshold">20%</output>
               <input id="volumePileProfitThreshold" type="range" min="5" max="50" step="1" value="20" oninput="updateVolumePileSettings()">
             </div>
+            <div class="volume-pile-field">
+              <label for="volumePileBigRise" title="区间内最低收盘K中间价到最高收盘K中间价涨幅达到这个值，直接算获利兑现，不看中枢">兑现区间低点到高点</label>
+              <output id="volumePileBigRiseValue" for="volumePileBigRise">≥25%</output>
+              <input id="volumePileBigRise" type="range" min="10" max="60" step="1" value="25" oninput="updateVolumePileSettings()">
+            </div>
             <button type="button" onclick="copyVolumePileSettings()">复制当前参数</button>
             <div class="volume-pile-help">量堆与前一量堆之间（首个量堆则从当前已显示历史开头）的非放量段作对比，分别取区间成交量最高的 50% 交易日求均值；低于设定倍数的量堆会被过滤。全局中位量是已显示历史成交量的第 50 百分位，用于过滤普通量，不是底噪线。底噪线（全局分位数基线）可单独开关。若放量区间前紧邻连续涨停板（至少一根），以这段连续涨停板的第一根作为区间首根 K 线；锚点不计入有效量和中枢。获利兑现看两个涨幅任一达到阈值：区间内收盘价最高 K 线左侧（含）收盘价最低 K 线中间价到加权中枢的涨幅，或区间最后一根 K 线中间价对加权中枢的涨幅。首板当天不参与量堆识别。信息栏开头的「近20日量能」「近60日放量」按首板前一日计算：常态量为倒数第 6～125 根成交量的中位数，量能倍数 = 近 20 日均量 ÷ 常态量，放量天数 = 近 60 日中成交量 ≥ 2 倍常态量的天数。</div>
           </div>
@@ -1045,6 +1050,7 @@
     { key: 'minimumWidth', id: 'volumePileMinWidth', output: 'volumePileMinWidthValue', format: value => String(value) },
     { key: 'strongPeakMultiple', id: 'volumePileStrongPeak', output: 'volumePileStrongPeakValue', format: value => `${Number(value).toFixed(1)}×` },
     { key: 'profitThresholdPct', id: 'volumePileProfitThreshold', output: 'volumePileProfitThresholdValue', format: value => `${value}%` },
+    { key: 'bigRiseThresholdPct', id: 'volumePileBigRise', output: 'volumePileBigRiseValue', format: value => `≥${value}%` },
   ];
   let volumePileSettings = { ...VOLUME_PILE_DEFAULTS };
   let volumePileAnalysis = { piles: [], byDate: new Map(), anchorByDate: new Map(), auditByDate: new Map() };
@@ -1348,7 +1354,7 @@
     const contrastText = Number.isFinite(pile.contrastRatio)
       ? `放/缩 top50均值比 ${pile.contrastRatio.toFixed(2)}× / 要求 ${pile.contrastThresholdMultiple.toFixed(1)}×`
       : '前置缩量段暂无可比成交量';
-    info.textContent = `${volumeActivityText()} | ${label}${pile.shortCluster ? '（短簇强峰）' : ''} ${pile.startDate}～${pile.endDate}（${pile.durationDays}个有效量日） | ${contrastText} | ${anchorText} | 兑现＝低点到高点中间价 > ${pile.bigRiseThresholdPct ?? 30}%${pile.bigRiseMet ? '（已满足）' : ''}，或 低点到高点 ≥ ${pile.profitThresholdPct}% 且（低点到中枢 或 高点对中枢）≥ ${pile.profitThresholdPct}%：左侧最低收盘K ${pile.lowestCloseDate || '--'}（中间价 ${lowestMidText}）→ 最高收盘K ${pile.highestCloseDate || '--'}（${highPriceLabel}）涨 ${pctText(pile.lowestToHighestPct)}；低点到中枢 ${lowestRise}；高点对中枢 ${pctText(highToCenter)} | 末根 ${pile.lastBarDate || '--'}（中间价 ${lastMidText}）对中枢 ${lastRise}（仅参考） | 加权中枢 ${pile.centerPrice.toFixed(2)}`;
+    info.textContent = `${volumeActivityText()} | ${label}${pile.shortCluster ? '（短簇强峰）' : ''} ${pile.startDate}～${pile.endDate}（${pile.durationDays}个有效量日） | ${contrastText} | ${anchorText} | 兑现＝低点到高点中间价 ≥ ${pile.bigRiseThresholdPct ?? 25}%${pile.bigRiseMet ? '（已满足）' : ''}，或 低点到高点 ≥ ${pile.profitThresholdPct}% 且（低点到中枢 或 高点对中枢）≥ ${pile.profitThresholdPct}%：左侧最低收盘K ${pile.lowestCloseDate || '--'}（中间价 ${lowestMidText}）→ 最高收盘K ${pile.highestCloseDate || '--'}（${highPriceLabel}）涨 ${pctText(pile.lowestToHighestPct)}；低点到中枢 ${lowestRise}；高点对中枢 ${pctText(highToCenter)} | 末根 ${pile.lastBarDate || '--'}（中间价 ${lastMidText}）对中枢 ${lastRise}（仅参考） | 加权中枢 ${pile.centerPrice.toFixed(2)}`;
     info.title = `区间首K中间价 ${firstMidText}；最大量日 ${pile.peakDate} 中间价 ${peakMidText}；峰值/首根涨幅 ${peakVsFirst}（仅供参考）。${contrastText}${Number.isFinite(pile.pileTopHalfAverageVolume) && Number.isFinite(pile.contractionTopHalfAverageVolume)
       ? `（放量段 Top ${pile.pileTopHalfDayCount}/${pile.pileVolumeValidDays}日均值 ${pile.pileTopHalfAverageVolume.toFixed(0)}；前置缩量段 Top ${pile.contractionTopHalfDayCount}/${pile.contractionVolumeValidDays}日均值 ${pile.contractionTopHalfAverageVolume.toFixed(0)}；参考 ${pile.contrastReferenceStartDate}～${pile.contrastReferenceEndDate}）`
       : ''}`;

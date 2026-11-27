@@ -17,8 +17,8 @@
     minimumWidth: 3,
     strongPeakMultiple: 3.5,
     profitThresholdPct: 20,
-    // 低点中间价到高点中间价涨幅超过这个值，直接算兑现（2026-11-22 用户定）
-    bigRiseThresholdPct: 30,
+    // 低点中间价到高点中间价涨幅 ≥ 这个值，直接算兑现（2026-11-22 用户定 >30%，11-27 改成默认 ≥25%、页面可调）
+    bigRiseThresholdPct: 25,
   });
 
   function normalizeDate(value) {
@@ -342,13 +342,13 @@
       // 会把下跌中堆起的量堆误判成兑现（新凤鸣 2026-02-11～05-07：高点对中枢 19.4%，低点到高点只有 1.7%）。末根对中枢只留作参考。
       const threshold = settings.profitThresholdPct;
       const meets = value => Number.isFinite(value) && value >= threshold;
-      // 2026-11-22 用户加：低点中间价到高点中间价涨幅 > bigRiseThresholdPct（默认 30%）直接算兑现，不看中枢。
+      // 2026-11-22 用户加：低点中间价到高点中间价涨幅 ≥ bigRiseThresholdPct（默认 25%，11-27 前是 >30%）直接算兑现，不看中枢。
       // 固定用中间价对中间价，不受 highPriceBasis 影响
       const lowToHighMidPct = Number.isFinite(highestBarMid) && Number.isFinite(lowestCloseMid) && lowestCloseMid > 0
         ? (highestBarMid / lowestCloseMid - 1) * 100
         : NaN;
-      const bigRiseThreshold = Number.isFinite(Number(settings.bigRiseThresholdPct)) ? Number(settings.bigRiseThresholdPct) : 30;
-      const bigRise = Number.isFinite(lowToHighMidPct) && lowToHighMidPct > bigRiseThreshold;
+      const bigRiseThreshold = Number.isFinite(Number(settings.bigRiseThresholdPct)) ? Number(settings.bigRiseThresholdPct) : DEFAULT_SETTINGS.bigRiseThresholdPct;
+      const bigRise = Number.isFinite(lowToHighMidPct) && lowToHighMidPct >= bigRiseThreshold;
       const profitTaking = bigRise || (meets(lowestToHighestPct) && (meets(lowestToCenterPct) || meets(highestToCenterPct)));
       const pile = {
         startDate: points[startIndex].date,
