@@ -187,6 +187,7 @@
     .volume-risk-toggle input { margin: 0; }
     #volumeRiskVal { color: #b0b8c4; white-space: nowrap; }
     #volumeRiskVal .is-risk { color: #ff6b6b; font-weight: 600; }
+    #volumeRiskVal .volume-risk-rule { color: #e879f9; }
     .volume-pile-toolbar > button {
       padding: 3px 7px;
       font-size: 10px;
@@ -934,7 +935,7 @@
               <input id="volumePileBigRise" type="range" min="10" max="60" step="1" value="25" oninput="updateVolumePileSettings()">
             </div>
             <button type="button" onclick="copyVolumePileSettings()">复制当前参数</button>
-            <div class="volume-pile-help">量堆与前一量堆之间（首个量堆则从当前已显示历史开头）的非放量段作对比，分别取区间成交量最高的 50% 交易日求均值；低于设定倍数的量堆会被过滤。全局中位量是已显示历史成交量的第 50 百分位，用于过滤普通量，不是底噪线。底噪线（全局分位数基线）可单独开关。若放量区间前紧邻连续涨停板（至少一根），以这段连续涨停板的第一根作为区间首根 K 线；锚点不计入有效量和中枢。获利兑现看两个涨幅任一达到阈值：区间内收盘价最高 K 线左侧（含）收盘价最低 K 线中间价到加权中枢的涨幅，或区间最后一根 K 线中间价对加权中枢的涨幅。首板当天不参与量堆识别。信息栏开头的「近20日量能」「近60日放量」按首板前一日计算：常态量为倒数第 6～125 根成交量的中位数，量能倍数 = 近 20 日均量 ÷ 常态量，放量天数 = 近 60 日中成交量 ≥ 2 倍常态量的天数。</div>
+            <div class="volume-pile-help">量堆与前一量堆之间（首个量堆则从当前已显示历史开头）的非放量段作对比，分别取区间成交量最高的 50% 交易日求均值；低于设定倍数的量堆会被过滤。全局中位量是已显示历史成交量的第 50 百分位，用于过滤普通量，不是底噪线。底噪线（全局分位数基线）可单独开关。若放量区间前紧邻连续涨停板（至少一根），以这段连续涨停板的第一根作为区间首根 K 线；锚点不计入有效量和中枢。获利兑现看两个涨幅任一达到阈值：区间内收盘价最高 K 线左侧（含）收盘价最低 K 线中间价到加权中枢的涨幅，或区间最后一根 K 线中间价对加权中枢的涨幅。首板当天不参与量堆识别。信息栏开头的「近20日量能」「近60日放量」按首板前一日计算：常态量为倒数第 6～125 根成交量的中位数，量能倍数 = 近 20 日均量 ÷ 常态量，放量天数 = 近 60 日中成交量 ≥ 2 倍常态量的天数。「量能提示」触发条件：二板之后（从三板起）当天量 ≥ 此前最大量 × 门槛，此前最大量取图表已加载的全部 K 线（含首板、二板，不随拖动缩放变）；门槛平时为 0.8，一二板中较大的量已到首板前最大量 0.6–1.0 倍时提高到 1.0，超过首板前最大量时仍为 0.8。紫色点线是买入/空仓那天为止的最大量 × 门槛；买入或空仓后只标第一根触发的 K 线。依据：2024–2026 一进二样本，触发的日子次日继续涨停约 34%、之后 5 天最低中位约 −11%，没触发的约 43%、−7%；这是风险变大的提示，不是必卖。</div>
           </div>
         </details>
         <button id="copyVolumePilesButton" type="button" onclick="copyVolumePileData()">复制量堆数据</button>
@@ -1894,6 +1895,15 @@
     return { global, early, priorMaxIndex: prior.maxIndex };
   }
 
+  // 面板里说明这只票当前用的触发条件
+  function volumeRiskRuleText(context) {
+    const share = Number.isFinite(context.earlyShare) ? `${context.earlyLabel}量是首板前最大量的 ${context.earlyShare.toFixed(2)} 倍` : '';
+    const why = !share ? ''
+      : context.factor === VOLUME_RISK_RAISED ? `（${share}，在 ${VOLUME_RISK_RAISE_FROM}–1.0 之间，门槛提高）`
+        : `（${share}）`;
+    return `触发：三板起当天量 ≥ 此前最大量 × ${context.factor.toFixed(1)}${why}`;
+  }
+
   function updateVolumeRiskInfo(date) {
     const node = document.getElementById('volumeRiskVal');
     if (!node) return;
@@ -1911,7 +1921,7 @@
         : `${label} ${value.toFixed(2)}`;
     };
     const maxDate = ratios.priorMaxIndex >= 0 ? `（最大 ${context.dates[ratios.priorMaxIndex]}）` : '';
-    node.innerHTML = `${part('量/图表最大', ratios.global, context.factor)}${maxDate}（门槛 ${context.factor.toFixed(1)}） · ${part(`量/${context.earlyLabel}`, ratios.early, Infinity)}`;
+    node.innerHTML = `${part('量/图表最大', ratios.global, context.factor)}${maxDate} · ${part(`量/${context.earlyLabel}`, ratios.early, Infinity)} · <span class="volume-risk-rule">${volumeRiskRuleText(context)}</span>`;
   }
 
   function updateVolumeRisk() {
