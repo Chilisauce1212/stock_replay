@@ -876,7 +876,7 @@
           <option value="2.6">量×2.6（90%）</option>
         </select>
         <span id="volumeFourBoardNote" class="volume-four-board-note" hidden></span>
-        <label class="volume-risk-toggle" title="量能兑现提示（2026-11-28 按 2024–2026 一进二样本里二板封住后、三板起的持有日检验）：当天量 ÷ 当前显示范围内此前最大量 ≥ 0.8 时，次日继续涨停的比例更低、之后 5 天回撤更深。量能区的紫色点线＝显示范围最大量（到买入/空仓那天为止）×0.8。点买入或空仓后，从三板起第一根达到的标出来。「量/一二板」只作参考（单独看作用弱，超过 3.5 倍才明显差），不画线、不参与标注。显示范围随缩放变化，不受四连板缩放影响">
+        <label class="volume-risk-toggle" title="量能兑现提示（2026-11-28 按 2024–2026 一进二样本里二板封住后、三板起的持有日检验）：当天量 ÷ 图表已加载 K 线（约 350 根）里此前的最大量 ≥ 0.8 时，次日继续涨停的比例更低、之后 5 天回撤更深。量能区的紫色点线＝已加载 K 线最大量（到买入/空仓那天为止）×0.8。点买入或空仓后，从三板起第一根达到的标出来。「量/一二板」只作参考（单独看作用弱，超过 3.5 倍才明显差），不画线、不参与标注。不随拖动、缩放变，也不受四连板缩放影响">
           <input id="volumeRiskEnabled" type="checkbox" checked onchange="toggleVolumeRisk()">量能提示
         </label>
         <span id="volumeRiskVal"></span>
@@ -1089,7 +1089,7 @@
   let preloadedReviewCases = null;
   let loadedReviewFile = '';
   let candleMarkers = [];
-  // 量能兑现提示（2026-11-28）：一进二样本里二板封住后、三板起的持有日，当天量到显示范围最大量 0.8 倍以上（11-28 去掉了「一二板量 2.5 倍」：单独看作用弱，加上它结果几乎不变），
+  // 量能兑现提示（2026-11-28）：一进二样本里二板封住后、三板起的持有日，当天量到图表已加载 K 线最大量 0.8 倍以上（11-28 去掉了「一二板量 2.5 倍」：单独看作用弱，加上它结果几乎不变），
   // 次日继续涨停约 34%（不到的约 44%），之后 5 天最低中位约 −11%（不到的约 −6%），2024–2026 各年方向一致
   const VOLUME_RISK_GLOBAL = 0.8;
   const VOLUME_RISK_STORAGE_KEY = 'kline-volume-risk:v1';
@@ -1097,8 +1097,6 @@
   try { volumeRiskEnabled = localStorage.getItem(VOLUME_RISK_STORAGE_KEY) !== 'off'; } catch { volumeRiskEnabled = true; }
   let volumeRiskLines = [];
   let volumeRiskMarkers = [];
-  let volumeRiskFrame = 0;
-  let volumeRiskLeft = -1;
   { const box = document.getElementById('volumeRiskEnabled'); if (box) box.checked = volumeRiskEnabled; }
   let markerController = null;
   let testCases = [];
@@ -1843,21 +1841,14 @@
     });
   }
 
-  // 当前显示范围的左边界（已显示数据的下标）：用图表的可见逻辑范围，取不到就按默认显示根数
-  function volumeRiskLeftIndex(length) {
-    const range = chart?.timeScale().getVisibleLogicalRange();
-    const fallback = Math.max(0, length - DEFAULT_VISIBLE_CANDLE_COUNT);
-    if (!range || !Number.isFinite(range.from)) return fallback;
-    return Math.min(Math.max(0, Math.ceil(range.from)), Math.max(0, length - 1));
-  }
-
-  // 一二板＝用例日期（首板）和下一根；买入/空仓那天之前的显示范围最大量画成参考线
+  // 一二板＝用例日期（首板）和下一根；买入/空仓那天之前、已加载 K 线里的最大量画成参考线
   function volumeRiskContext() {
     const data = fullData.slice(0, currentIndex);
     if (!data.length) return null;
     const dates = data.map(item => chartDate(item.date));
     const volumes = data.map(item => Number(item.volume) || 0);
-    const left = volumeRiskLeftIndex(data.length);
+    // 11-28 用户要求不随拖动、缩放变：固定用图表已加载的全部 K 线（约 350 根），不用当前可见范围
+    const left = 0;
     const signalIndex = activeCase?.date ? dates.indexOf(activeCase.date) : -1;
     const early = signalIndex >= 0
       ? Math.max(volumes[signalIndex], signalIndex + 1 < volumes.length ? volumes[signalIndex + 1] : 0)
@@ -1871,7 +1862,7 @@
     return { dates, volumes, left, signalIndex, early, earlyLabel, decisionEndDate, referenceEnd };
   }
 
-  // 显示范围内、这根之前的最大量（不含当天）
+  // 已加载 K 线里、这根之前的最大量（不含当天）
   function volumeRiskPriorMax(context, index) {
     let max = 0;
     let maxIndex = -1;
@@ -1912,7 +1903,7 @@
         : `${label} ${value.toFixed(2)}`;
     };
     const maxDate = ratios.priorMaxIndex >= 0 ? `（最大 ${context.dates[ratios.priorMaxIndex]}）` : '';
-    node.innerHTML = `${part('量/显示最大', ratios.global, VOLUME_RISK_GLOBAL)}${maxDate} · ${part(`量/${context.earlyLabel}`, ratios.early, Infinity)}`;
+    node.innerHTML = `${part('量/图表最大', ratios.global, VOLUME_RISK_GLOBAL)}${maxDate} · ${part(`量/${context.earlyLabel}`, ratios.early, Infinity)}`;
   }
 
   function updateVolumeRisk() {
@@ -1926,7 +1917,6 @@
     volumeRiskLines = [];
     volumeRiskMarkers = [];
     const context = volumeRiskEnabled && volumeSeries ? volumeRiskContext() : null;
-    volumeRiskLeft = context ? context.left : -1;
     if (context) {
       let referenceMax = 0;
       for (let k = context.left; k <= context.referenceEnd; k++) referenceMax = Math.max(referenceMax, context.volumes[k]);
@@ -1951,17 +1941,6 @@
     }
     if (candlestickSeries) renderCandleMarkers();
     updateVolumeRiskInfo('');
-  }
-
-  // 缩放、拖动后显示范围的左边界变了才重算
-  function scheduleVolumeRisk() {
-    if (volumeRiskFrame) return;
-    volumeRiskFrame = requestAnimationFrame(() => {
-      volumeRiskFrame = 0;
-      if (!volumeRiskEnabled) return;
-      const length = Math.min(currentIndex, fullData.length);
-      if (length && volumeRiskLeftIndex(length) !== volumeRiskLeft) updateVolumeRisk();
-    });
   }
 
   function toggleVolumeRisk() {
@@ -3672,7 +3651,6 @@
       new ResizeObserver(resizeChart).observe(container);
     }
     chart.timeScale().subscribeVisibleLogicalRangeChange(scheduleVolumePileBands);
-    chart.timeScale().subscribeVisibleLogicalRangeChange(scheduleVolumeRisk);
 
     // 1. K 线主图层
     candlestickSeries = chart.addSeries(LightweightCharts.CandlestickSeries, {
