@@ -876,7 +876,7 @@
           <option value="2.6">量×2.6（90%）</option>
         </select>
         <span id="volumeFourBoardNote" class="volume-four-board-note" hidden></span>
-        <label class="volume-risk-toggle" title="量能兑现提示（2026-11-28 按 2024–2026 一进二样本里二板封住后、三板起的持有日检验）：当天量 ÷ 图表已加载 K 线（约 350 根）里此前的最大量 ≥ 0.8 时，次日继续涨停的比例更低、之后 5 天回撤更深。量能区的紫色点线＝已加载 K 线最大量（到买入/空仓那天为止）×0.8。点买入或空仓后，从三板起第一根达到的标出来。「量/一二板」只作参考（单独看作用弱，超过 3.5 倍才明显差），不画线、不参与标注。不随拖动、缩放变，也不受四连板缩放影响">
+        <label class="volume-risk-toggle" title="量能兑现提示（2026-11-28 按 2024–2026 一进二样本里二板封住后、三板起的持有日检验）：当天量 ÷ 图表已加载 K 线（约 350 根）里此前的最大量 ≥ 0.8 时，次日继续涨停的比例更低、之后 5 天回撤更深。一二板较大量已到首板前最大量 0.6–1.0 倍的票，门槛提到 1.0（超过此前最大量才算）；一二板超过首板前最大量的仍用 0.8。量能区的紫色点线＝已加载 K 线最大量（到买入/空仓那天为止）× 门槛。点买入或空仓后，从三板起第一根达到的标出来。「量/一二板」只作参考（单独看作用弱，超过 3.5 倍才明显差），不画线、不参与标注。不随拖动、缩放变，也不受四连板缩放影响">
           <input id="volumeRiskEnabled" type="checkbox" checked onchange="toggleVolumeRisk()">量能提示
         </label>
         <span id="volumeRiskVal"></span>
@@ -1092,6 +1092,10 @@
   // 量能兑现提示（2026-11-28）：一进二样本里二板封住后、三板起的持有日，当天量到图表已加载 K 线最大量 0.8 倍以上（11-28 去掉了「一二板量 2.5 倍」：单独看作用弱，加上它结果几乎不变），
   // 次日继续涨停约 34%（不到的约 44%），之后 5 天最低中位约 −11%（不到的约 −6%），2024–2026 各年方向一致
   const VOLUME_RISK_GLOBAL = 0.8;
+  // 一二板较大量已到首板前最大量的 0.6–1.0 倍时，门槛提到 1.0（超过此前最大量才算）：这组里 0.8–1.0 倍还不算差、1.0–1.1 倍已明显变差（11-28 用户提出、按一进二样本定）。
+  // 一二板超过首板前最大量时仍用 0.8，此前最大量本来就含一二板
+  const VOLUME_RISK_RAISED = 1.0;
+  const VOLUME_RISK_RAISE_FROM = 0.6;
   const VOLUME_RISK_STORAGE_KEY = 'kline-volume-risk:v1';
   let volumeRiskEnabled = true;
   try { volumeRiskEnabled = localStorage.getItem(VOLUME_RISK_STORAGE_KEY) !== 'off'; } catch { volumeRiskEnabled = true; }
@@ -1859,7 +1863,11 @@
     if (decisionEndDate) {
       while (referenceEnd > 0 && dates[referenceEnd] > decisionEndDate) referenceEnd--;
     }
-    return { dates, volumes, left, signalIndex, early, earlyLabel, decisionEndDate, referenceEnd };
+    let preSignalMax = 0;
+    for (let k = left; k < signalIndex; k++) preSignalMax = Math.max(preSignalMax, volumes[k]);
+    const earlyShare = preSignalMax > 0 && early > 0 ? early / preSignalMax : NaN;
+    const factor = earlyShare >= VOLUME_RISK_RAISE_FROM && earlyShare <= 1 ? VOLUME_RISK_RAISED : VOLUME_RISK_GLOBAL;
+    return { dates, volumes, left, signalIndex, early, earlyLabel, earlyShare, factor, decisionEndDate, referenceEnd };
   }
 
   // 已加载 K 线里、这根之前的最大量（不含当天）
@@ -1903,7 +1911,7 @@
         : `${label} ${value.toFixed(2)}`;
     };
     const maxDate = ratios.priorMaxIndex >= 0 ? `（最大 ${context.dates[ratios.priorMaxIndex]}）` : '';
-    node.innerHTML = `${part('量/图表最大', ratios.global, VOLUME_RISK_GLOBAL)}${maxDate} · ${part(`量/${context.earlyLabel}`, ratios.early, Infinity)}`;
+    node.innerHTML = `${part('量/图表最大', ratios.global, context.factor)}${maxDate}（门槛 ${context.factor.toFixed(1)}） · ${part(`量/${context.earlyLabel}`, ratios.early, Infinity)}`;
   }
 
   function updateVolumeRisk() {
@@ -1922,9 +1930,9 @@
       for (let k = context.left; k <= context.referenceEnd; k++) referenceMax = Math.max(referenceMax, context.volumes[k]);
       // 超出量能区刻度上限的线不画，否则会画进 K 线区
       const shownTop = displayedMaxVolume > 0 ? displayedMaxVolume : Infinity;
-      if (referenceMax > 0 && referenceMax * VOLUME_RISK_GLOBAL <= shownTop) {
+      if (referenceMax > 0 && referenceMax * context.factor <= shownTop) {
         volumeRiskLines.push(volumeSeries.createPriceLine({
-          price: referenceMax * VOLUME_RISK_GLOBAL, color: '#e879f9', lineWidth: 1, lineStyle: 1, axisLabelVisible: true, title: '',
+          price: referenceMax * context.factor, color: '#e879f9', lineWidth: 1, lineStyle: 1, axisLabelVisible: true, title: '',
         }));
       }
       // 买入/空仓之后揭晓的 K 线里，只标第一根达到的；从三板（首板后第 2 根）起找，二板买入后才是决定卖不卖的时候
@@ -1932,7 +1940,7 @@
         const firstIndex = Math.max(context.referenceEnd + 1, context.left + 1, context.signalIndex >= 0 ? context.signalIndex + 2 : 0);
         for (let index = firstIndex; index < context.volumes.length; index++) {
           const ratios = volumeRiskRatios(context, index);
-          if (!(ratios.global >= VOLUME_RISK_GLOBAL)) continue;
+          if (!(ratios.global >= context.factor)) continue;
           const text = `最大量×${ratios.global.toFixed(2)}`;
           volumeRiskMarkers.push({ time: context.dates[index], position: 'aboveBar', color: '#e879f9', shape: 'circle', text });
           break;
