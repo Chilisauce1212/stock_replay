@@ -841,10 +841,6 @@
         <span id="codeVal" style="color: #f0b90b;">股票代码: --</span>
         <span id="amountVal" style="color: #b0b8c4;">成交金额: --</span>
         <span id="freeFloatVal" style="color: #b0b8c4;" title="首板日的自由流通市值（问财）">自由流通: --</span>
-        <label class="volume-risk-toggle" title="量能兑现提示（2026-11-28 按四连板及以上样本定）：当天量 ÷ 当前显示范围内此前最大量 ≥ 0.8，或当天量 ÷ 一二板较大量 ≥ 2.5，之后 5 天回撤明显变深、空间变小。量能区画两条点线：紫色＝显示范围最大量（到买入/空仓那天为止）×0.8，青色＝一二板较大量×2.5。点买入或空仓后，后面 K 线里第一根满足其中一条的标出来。显示范围随缩放变化，不受四连板缩放影响">
-          <input id="volumeRiskEnabled" type="checkbox" checked onchange="toggleVolumeRisk()">量能提示
-        </label>
-        <span id="volumeRiskVal"></span>
         <span id="buyRules" class="buy-rules" hidden>
           <label title="信号日自由流通市值超过上限时只能空仓；留空不限。没有自由流通市值数据的票不受限">流通上限:<input id="freeFloatLimit" type="number" min="0" step="10" placeholder="不限" inputmode="decimal" onchange="updateBuyRules()">亿</label>
           <label title="信号日已上市、还没摘牌的可转债（东方财富可转债名单）"><input id="skipConvertible" type="checkbox" checked onchange="updateBuyRules()">有转债只能空仓</label>
@@ -880,6 +876,10 @@
           <option value="2.6">量×2.6（90%）</option>
         </select>
         <span id="volumeFourBoardNote" class="volume-four-board-note" hidden></span>
+        <label class="volume-risk-toggle" title="量能兑现提示（2026-11-28 按四连板及以上样本定）：当天量 ÷ 当前显示范围内此前最大量 ≥ 0.8，或当天量 ÷ 一二板较大量 ≥ 2.5，之后 5 天回撤明显变深、空间变小。量能区画两条点线：紫色＝显示范围最大量（到买入/空仓那天为止）×0.8，青色＝一二板较大量×2.5。点买入或空仓后，后面 K 线里第一根满足其中一条的标出来。显示范围随缩放变化，不受四连板缩放影响">
+          <input id="volumeRiskEnabled" type="checkbox" checked onchange="toggleVolumeRisk()">量能提示
+        </label>
+        <span id="volumeRiskVal"></span>
         <details id="volumePileSettings">
           <summary>调整参数</summary>
           <div class="volume-pile-panel">
