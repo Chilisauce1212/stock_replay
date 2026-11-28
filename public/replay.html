@@ -876,7 +876,7 @@
           <option value="2.6">量×2.6（90%）</option>
         </select>
         <span id="volumeFourBoardNote" class="volume-four-board-note" hidden></span>
-        <label class="volume-risk-toggle" title="量能兑现提示（2026-11-28 按四连板及以上样本定）：当天量 ÷ 当前显示范围内此前最大量 ≥ 0.8，或当天量 ÷ 一二板较大量 ≥ 2.5，之后 5 天回撤明显变深、空间变小。量能区画两条点线：紫色＝显示范围最大量（到买入/空仓那天为止）×0.8，青色＝一二板较大量×2.5。点买入或空仓后，后面 K 线里第一根满足其中一条的标出来。显示范围随缩放变化，不受四连板缩放影响">
+        <label class="volume-risk-toggle" title="量能兑现提示（2026-11-28 按 2024–2026 一进二样本里二板封住后、三板起的持有日检验）：当天量 ÷ 当前显示范围内此前最大量 ≥ 0.8，或当天量 ÷ 一二板较大量 ≥ 2.5，次日继续涨停的比例更低、之后 5 天回撤更深。量能区画两条点线：紫色＝显示范围最大量（到买入/空仓那天为止）×0.8，青色＝一二板较大量×2.5。点买入或空仓后，从三板起第一根满足其中一条的标出来。显示范围随缩放变化，不受四连板缩放影响">
           <input id="volumeRiskEnabled" type="checkbox" checked onchange="toggleVolumeRisk()">量能提示
         </label>
         <span id="volumeRiskVal"></span>
@@ -1089,7 +1089,8 @@
   let preloadedReviewCases = null;
   let loadedReviewFile = '';
   let candleMarkers = [];
-  // 量能兑现提示（2026-11-28）：四连板及以上样本里，第 4 板起当天量到显示范围最大量 0.8 倍以上、或到一二板量 2.5 倍以上，之后 5 天回撤明显变深
+  // 量能兑现提示（2026-11-28）：一进二样本里二板封住后、三板起的持有日，当天量到显示范围最大量 0.8 倍以上、或到一二板量 2.5 倍以上，
+  // 次日继续涨停约 34%（不到的约 44%），之后 5 天最低中位约 −11%（不到的约 −6%），2024–2026 各年方向一致
   const VOLUME_RISK_GLOBAL = 0.8;
   const VOLUME_RISK_EARLY = 2.5;
   const VOLUME_RISK_STORAGE_KEY = 'kline-volume-risk:v1';
@@ -1942,9 +1943,10 @@
           price: context.early * VOLUME_RISK_EARLY, color: '#22d3ee', lineWidth: 1, lineStyle: 1, axisLabelVisible: true, title: '',
         }));
       }
-      // 买入/空仓之后揭晓的 K 线里，只标第一根满足任一条件的
+      // 买入/空仓之后揭晓的 K 线里，只标第一根满足任一条件的；从三板（首板后第 2 根）起找，二板买入后才是决定卖不卖的时候
       if (context.decisionEndDate) {
-        for (let index = Math.max(context.referenceEnd + 1, context.left + 1); index < context.volumes.length; index++) {
+        const firstIndex = Math.max(context.referenceEnd + 1, context.left + 1, context.signalIndex >= 0 ? context.signalIndex + 2 : 0);
+        for (let index = firstIndex; index < context.volumes.length; index++) {
           const ratios = volumeRiskRatios(context, index);
           const hitGlobal = ratios.global >= VOLUME_RISK_GLOBAL;
           const hitEarly = ratios.early >= VOLUME_RISK_EARLY;
