@@ -880,7 +880,7 @@
         <label class="volume-risk-toggle" title="量能兑现提示（2026-11-28 按 2024–2026 一进二样本里二板封住后、三板起的持有日检验）：当天量 ÷ 图表已加载 K 线（约 350 根）里此前的最大量 ≥ 0.8 时，次日继续涨停的比例更低、之后 5 天回撤更深。一二板较大量已到首板前最大量 0.6–1.0 倍的票，门槛提到 1.0（超过此前最大量才算）；一二板超过首板前最大量的仍用 0.8。量能区的紫色点线＝已加载 K 线最大量（到买入/空仓那天为止）× 门槛。点买入或空仓后，从三板起第一根达到的标出来。「量/一二板」只作参考（单独看作用弱，超过 3.5 倍才明显差），不画线、不参与标注。不随拖动、缩放变，也不受四连板缩放影响">
           <input id="volumeRiskEnabled" type="checkbox" checked onchange="toggleVolumeRisk()">量能提示
         </label>
-        <label class="volume-risk-toggle" title="打开后：首板、二板中第一个量达到首板前最大量 × 0.8 的那天当基数，改用「三板起当天量 ≥ 基数 × 倍数」触发（紫线也画在基数 × 倍数）。倍数可调，默认 1.0：一进二样本（这类票 276 只走到三板）里 0.8–1.0 倍还不差，过了 1.0 倍次日涨停 48%→32%、拿到断板中位 +2.7%→−1.5%；1.2–2 倍没有更好，2.5 倍以上天数太少。津药药业 2026-03-27 用 1.0 倍会在三板就提示，用 2.5 倍才卡在七板顶部。默认关闭，关闭时用「此前最大量 × 0.8」">
+        <label class="volume-risk-toggle" title="打开后：首板量达到首板前最大量 × 0.8 时用首板量当基数，只有二板达到时用首板、二板平均量当基数（二板有时爆量），改用「三板起当天量 ≥ 基数 × 倍数」触发（紫线也画在基数 × 倍数）。倍数可调，默认 1.0：一进二样本（这类票 276 只走到三板）里 0.8–1.0 倍还不差，过了 1.0 倍次日涨停 48%→32%、拿到断板中位 +2.7%→−1.5%；1.2–2 倍没有更好，2.5 倍以上天数太少。津药药业 2026-03-27 用 1.0 倍会在三板就提示，用 2.5 倍才卡在七板顶部。默认关闭，关闭时用「此前最大量 × 0.8」">
           <input id="volumeRiskEarly25" type="checkbox" onchange="toggleVolumeRisk()">一二板放量按基数
           ×<input id="volumeRiskBaseMultiple" type="number" min="0.5" max="5" step="0.1" value="1.0" style="width:3.6em" onchange="toggleVolumeRisk()">
         </label>
@@ -939,7 +939,7 @@
               <input id="volumePileBigRise" type="range" min="10" max="60" step="1" value="25" oninput="updateVolumePileSettings()">
             </div>
             <button type="button" onclick="copyVolumePileSettings()">复制当前参数</button>
-            <div class="volume-pile-help">量堆与前一量堆之间（首个量堆则从当前已显示历史开头）的非放量段作对比，分别取区间成交量最高的 50% 交易日求均值；低于设定倍数的量堆会被过滤。全局中位量是已显示历史成交量的第 50 百分位，用于过滤普通量，不是底噪线。底噪线（全局分位数基线）可单独开关。若放量区间前紧邻连续涨停板（至少一根），以这段连续涨停板的第一根作为区间首根 K 线；锚点不计入有效量和中枢。获利兑现看两个涨幅任一达到阈值：区间内收盘价最高 K 线左侧（含）收盘价最低 K 线中间价到加权中枢的涨幅，或区间最后一根 K 线中间价对加权中枢的涨幅。首板当天不参与量堆识别。信息栏开头的「近20日量能」「近60日放量」按首板前一日计算：常态量为倒数第 6～125 根成交量的中位数，量能倍数 = 近 20 日均量 ÷ 常态量，放量天数 = 近 60 日中成交量 ≥ 2 倍常态量的天数。「量能提示」触发条件：二板之后（从三板起）当天量 ≥ 此前最大量 × 门槛，此前最大量取图表已加载的全部 K 线（含首板、二板，不随拖动缩放变）；门槛平时为 0.8，一二板中较大的量已到首板前最大量 0.6–1.0 倍时提高到 1.0，超过首板前最大量时仍为 0.8（打开「一二板放量按基数」后：首板、二板中第一个量达到首板前最大量 × 0.8 的那天当基数，改为当天量 ≥ 基数 × 倍数，倍数可调、默认 1.0；一进二样本里这类票过了 1.0 倍次日涨停 48%→32%，1.2–2 倍没有更好，2.5 倍以上天数太少；津药药业 2026-03-27 用 2.5 倍才卡在七板顶部）。紫色点线是买入/空仓那天为止的最大量 × 门槛；买入或空仓后只标第一根触发的 K 线。依据：2024–2026 一进二样本，触发的日子次日继续涨停约 34%、之后 5 天最低中位约 −11%，没触发的约 43%、−7%；这是风险变大的提示，不是必卖。</div>
+            <div class="volume-pile-help">量堆与前一量堆之间（首个量堆则从当前已显示历史开头）的非放量段作对比，分别取区间成交量最高的 50% 交易日求均值；低于设定倍数的量堆会被过滤。全局中位量是已显示历史成交量的第 50 百分位，用于过滤普通量，不是底噪线。底噪线（全局分位数基线）可单独开关。若放量区间前紧邻连续涨停板（至少一根），以这段连续涨停板的第一根作为区间首根 K 线；锚点不计入有效量和中枢。获利兑现看两个涨幅任一达到阈值：区间内收盘价最高 K 线左侧（含）收盘价最低 K 线中间价到加权中枢的涨幅，或区间最后一根 K 线中间价对加权中枢的涨幅。首板当天不参与量堆识别。信息栏开头的「近20日量能」「近60日放量」按首板前一日计算：常态量为倒数第 6～125 根成交量的中位数，量能倍数 = 近 20 日均量 ÷ 常态量，放量天数 = 近 60 日中成交量 ≥ 2 倍常态量的天数。「量能提示」触发条件：二板之后（从三板起）当天量 ≥ 此前最大量 × 门槛，此前最大量取图表已加载的全部 K 线（含首板、二板，不随拖动缩放变）；门槛平时为 0.8，一二板中较大的量已到首板前最大量 0.6–1.0 倍时提高到 1.0，超过首板前最大量时仍为 0.8（打开「一二板放量按基数」后：首板量达到首板前最大量 × 0.8 时用首板量当基数，只有二板达到时用首板、二板平均量当基数（二板有时爆量），改为当天量 ≥ 基数 × 倍数，倍数可调、默认 1.0；一进二样本里这类票过了 1.0 倍次日涨停 48%→32%，1.2–2 倍没有更好，2.5 倍以上天数太少；津药药业 2026-03-27 用 2.5 倍才卡在七板顶部）。紫色点线是买入/空仓那天为止的最大量 × 门槛；买入或空仓后只标第一根触发的 K 线。依据：2024–2026 一进二样本，触发的日子次日继续涨停约 34%、之后 5 天最低中位约 −11%，没触发的约 43%、−7%；这是风险变大的提示，不是必卖。</div>
           </div>
         </details>
         <button id="copyVolumePilesButton" type="button" onclick="copyVolumePileData()">复制量堆数据</button>
@@ -1104,7 +1104,7 @@
   const VOLUME_RISK_STORAGE_KEY = 'kline-volume-risk:v1';
   let volumeRiskEnabled = true;
   try { volumeRiskEnabled = localStorage.getItem(VOLUME_RISK_STORAGE_KEY) !== 'off'; } catch { volumeRiskEnabled = true; }
-  // 一二板放量的票（首板、二板中第一个量 ≥ 首板前最大量 × 0.8 的那天当基数）改用「基数 × 倍数」（11-28 用户要求的开关，默认关；倍数可调，默认 1.0）
+  // 一二板放量的票（首板 ≥ 首板前最大量 × 0.8 用首板量，只有二板 ≥ 0.8 用一二板平均量当基数）改用「基数 × 倍数」（11-28 用户要求的开关，默认关；倍数可调，默认 1.0）
   const VOLUME_RISK_BASE_SHARE = 0.8;
   const VOLUME_RISK_BASE_MULTIPLE_DEFAULT = 1.0;
   const VOLUME_RISK_EARLY_STORAGE_KEY = 'kline-volume-risk-early25:v1';
@@ -1886,19 +1886,21 @@
     for (let k = left; k < signalIndex; k++) preSignalMax = Math.max(preSignalMax, volumes[k]);
     const earlyShare = preSignalMax > 0 && early > 0 ? early / preSignalMax : NaN;
     const factor = earlyShare >= VOLUME_RISK_RAISE_FROM && earlyShare <= 1 ? VOLUME_RISK_RAISED : VOLUME_RISK_GLOBAL;
-    // byEarly：开关打开时，首板、二板中第一个量 ≥ 首板前最大量 × 0.8 的那根当基数，按基数 × 倍数触发
-    let baseIndex = -1;
+    // byEarly：开关打开时，首板或二板到首板前最大量 × 0.8 时取基数，按基数 × 倍数触发
+    // 首板到 0.8 用首板量；只有二板到 0.8 时用首板、二板平均（二板有时爆量，11-28 用户要求）
+    let baseVolume = NaN;
+    let baseLabel = '';
     if (volumeRiskEarly25 && signalIndex >= 0 && preSignalMax > 0) {
-      for (const k of [signalIndex, signalIndex + 1]) {
-        if (k < volumes.length && volumes[k] >= preSignalMax * VOLUME_RISK_BASE_SHARE) {
-          baseIndex = k;
-          break;
-        }
+      const limit = preSignalMax * VOLUME_RISK_BASE_SHARE;
+      if (volumes[signalIndex] >= limit) {
+        baseVolume = volumes[signalIndex];
+        baseLabel = '首板';
+      } else if (signalIndex + 1 < volumes.length && volumes[signalIndex + 1] >= limit) {
+        baseVolume = (volumes[signalIndex] + volumes[signalIndex + 1]) / 2;
+        baseLabel = '一二板均量';
       }
     }
-    const byEarly = baseIndex >= 0;
-    const baseVolume = byEarly ? volumes[baseIndex] : NaN;
-    const baseLabel = byEarly ? (baseIndex === signalIndex ? '首板' : '二板') : '';
+    const byEarly = baseVolume > 0;
     const baseShare = byEarly ? baseVolume / preSignalMax : NaN;
     return { dates, volumes, left, signalIndex, early, earlyLabel, earlyShare, factor, byEarly, baseVolume, baseLabel, baseShare, decisionEndDate, referenceEnd };
   }
@@ -1934,7 +1936,10 @@
     const why = !share ? ''
       : context.factor === VOLUME_RISK_RAISED ? `（${share}，在 ${VOLUME_RISK_RAISE_FROM}–1.0 之间，门槛提高）`
         : `（${share}）`;
-    if (context.byEarly) return `触发：三板起当天量 ≥ ${context.baseLabel}量 × ${volumeRiskBaseMultiple.toFixed(1)}（${context.baseLabel}是首板、二板中第一个到首板前最大量 ${VOLUME_RISK_BASE_SHARE} 倍的，${context.baseShare.toFixed(2)} 倍）`;
+    if (context.byEarly) {
+      const why = context.baseLabel === '首板' ? `首板到首板前最大量 ${VOLUME_RISK_BASE_SHARE} 倍` : `只有二板到首板前最大量 ${VOLUME_RISK_BASE_SHARE} 倍，用首板、二板平均`;
+      return `触发：三板起当天量 ≥ ${context.baseLabel} × ${volumeRiskBaseMultiple.toFixed(1)}（${why}，基数是首板前最大量的 ${context.baseShare.toFixed(2)} 倍）`;
+    }
     return `触发：三板起当天量 ≥ 此前最大量 × ${context.factor.toFixed(1)}${why}`;
   }
 
