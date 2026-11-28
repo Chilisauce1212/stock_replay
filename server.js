@@ -1487,4 +1487,4 @@ app.put('/api/news-category/review', (req, res) => {
   }
 });
 
-module.exports = { computeReviewPnl };
+module.exports = { computeReviewPnl, fetchThsKlineData, processThsValues };
